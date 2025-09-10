@@ -1,0 +1,19 @@
+name: rap-prototype
+infra:
+  provider: bicep
+  path: infra/main.bicep
+services:
+  frontend:
+    project: ./frontend
+    language: js
+    host: containerapp
+    docker:
+      path: ./frontend
+      file: Dockerfile
+  backend:
+    project: ./backend
+    language: js
+    host: containerapp
+    docker:
+      path: ./backend
+      file: Dockerfile
