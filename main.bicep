@@ -8,7 +8,7 @@ param environmentName string
 @description('Azure location')
 param location string = resourceGroup().location
 
-@description('Container image (full ACR reference) for frontend (e.g. myacr.azurecr.io/rap-frontend:latest)')
+/*@description('Container image (full ACR reference) for frontend (e.g. myacr.azurecr.io/rap-frontend:latest)')
 param frontendImage string
 
 @description('Container image (full ACR reference) for backend (e.g. myacr.azurecr.io/rap-backend:latest)')
@@ -16,7 +16,7 @@ param backendImage string
 
 @description('Ingress target hostname (optional, if using custom domain later)')
 @minLength(0)
-param publicHostname string = ''
+param publicHostname string = ''*/
 
 @description('Enable diagnostics (Log Analytics linkage)')
 param enableDiagnostics bool = true
@@ -34,16 +34,19 @@ var caeName    = '${namePrefix}-cae'
 var frontendAppName = '${namePrefix}-fe'
 var backendAppName  = '${namePrefix}-be'
 
-module logAnalytics 'modules/logAnalytics.bicep' = if (enableDiagnostics) {
+var abbrs = loadJsonContent('./abbreviations.json')
+var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
+
+/*module logAnalytics 'modules/logAnalytics.bicep' = if (enableDiagnostics) {
   name: 'lawDeploy'
   params: {
     name: lawName
     location: location
     tags: tags
   }
-}
+}*/
 
-module acr 'modules/containerRegistry.bicep' = {
+/*module acr 'modules/containerRegistry.bicep' = {
   name: 'acrDeploy'
   params: {
     name: acrName
@@ -52,19 +55,32 @@ module acr 'modules/containerRegistry.bicep' = {
     adminUserEnabled: false
     tags: tags
   }
-}
+}*/
 
-module cae 'modules/containerAppsEnv.bicep' = {
-  name: 'caeDeploy'
+// Monitor application with Azure Monitor
+module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
+  name: 'monitoring'
   params: {
-    name: caeName
+    logAnalyticsName: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
+    applicationInsightsDashboardName: '${abbrs.portalDashboards}${resourceToken}'
     location: location
-    logAnalyticsWorkspaceId: enableDiagnostics ? logAnalytics.outputs.workspaceId : ''
     tags: tags
   }
 }
 
-module frontend 'app/frontend-angular.bicep' = {
+module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5' = {
+  name: 'container-apps-environment'
+  params: {
+    logAnalyticsWorkspaceResourceId: monitoring.outputs.logAnalyticsWorkspaceResourceId
+    name: '${abbrs.appManagedEnvironments}${resourceToken}'
+    location: location
+    zoneRedundant: false
+  }
+}
+
+
+/*module frontend 'app/frontend-angular.bicep' = {
   name: 'frontendApp'
   params: {
     name: frontendAppName
@@ -82,7 +98,7 @@ module frontend 'app/frontend-angular.bicep' = {
     ]
     tags: tags
   }
-}
+}*/
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
@@ -103,5 +119,5 @@ module frontend 'app/frontend-angular.bicep' = {
   }
 }*/
 
-output acrLoginServer string = acr.outputs.loginServer
-output frontendUrl string = frontend.outputs.fqdn
+//output acrLoginServer string = acr.outputs.loginServer
+//output frontendUrl string = frontend.outputs.fqdn
