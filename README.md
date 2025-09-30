@@ -11,6 +11,7 @@ azd version
 * setup the AZD environment
 
 ```
+azd config set alpha.deployment.stacks on
 azd env new test
 azd env select test
 azd env list
