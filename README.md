@@ -27,3 +27,8 @@ azd env set AZURE_TENANT_ID <tenant ID>
 azd auth login
 azd up
 ```
+
+## Clean up resources
+```
+azd down
+```
