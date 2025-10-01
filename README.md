@@ -8,10 +8,10 @@ winget upgrade microsoft.azd
 azd version
 ```
 
-* setup the AZD environment
+* setup the AZD environment. Note: Deployment stack feature requires az CLI >= 2.61.0
 
 ```
-azd config set alpha.deployment.stacks on
+azd config set alpha.deployment.stacks on 
 azd env new test
 azd env select test
 azd env list
