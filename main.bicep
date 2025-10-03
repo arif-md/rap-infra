@@ -21,6 +21,21 @@ param publicHostname string = ''*/
 @description('Enable diagnostics (Log Analytics linkage)')
 param enableDiagnostics bool = true
 
+@description('Optional override for ACR name (use existing)')
+param acrNameOverride string = ''
+
+@description('vCPU allocation for frontend container app (integer, default 1)')
+param frontendCpu int = 1
+
+@description('Memory allocation for frontend container app (valid combos with selected CPU; e.g., 2Gi for 1 vCPU)')
+@allowed([
+  '0.5Gi'
+  '1Gi'
+  '2Gi'
+  '4Gi'
+])
+param frontendMemory string = '2Gi'
+
 @description('Tags to apply to all resources')
 param tags object = {
   environment: environmentName
@@ -28,11 +43,9 @@ param tags object = {
 }
 
 var namePrefix = toLower('${environmentName}-rap')
-var lawName    = '${namePrefix}-log'
-var acrName    = toLower(replace('${environmentName}rapacr','-',''))
-var caeName    = '${namePrefix}-cae'
+var acrName    = !empty(acrNameOverride) ? acrNameOverride : toLower(replace('${environmentName}rapacr','-',''))
 var frontendAppName = '${namePrefix}-fe'
-var backendAppName  = '${namePrefix}-be'
+var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
@@ -51,7 +64,7 @@ var resourceToken = uniqueString(subscription().id, resourceGroup().id, location
   params: {
     name: acrName
     location: location
-    sku: 'Basic'
+    sku: 'Standard'
     adminUserEnabled: false
     tags: tags
   }
@@ -80,16 +93,30 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
 }
 
 
-/*module frontend 'app/frontend-angular.bicep' = {
+// Treat ACR as an external dependency (created outside the stack via hook)
+resource acrExisting 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: acrName
+}
+
+// Frontend Angular Container App
+module frontend 'app/frontend-angular.bicep' = {
   name: 'frontendApp'
   params: {
     name: frontendAppName
     location: location
-    containerAppsEnvironmentName: cae.outputs.environmentName
-    image: frontendImage
-    targetPort: 80
-    ingressExternal: true
-    ingressHostname: empty(publicHostname) ? '' : publicHostname
+    identityName: frontendIdentityName
+    // Managed environment name matches what we created above
+    containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
+    // ACR name for image pull identity binding
+    containerRegistryName: acrName
+    // Initial image placeholder; azd deploy will build & update to the real image
+    image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+    // Temporarily skip AcrPull role assignment to avoid requiring elevated permissions
+    skipAcrPullRoleAssignment: false
+    // Compute sizing (exposed as parameters)
+    cpu: frontendCpu
+    memory: frontendMemory
+    // Optional env vars (can be extended later)
     envVars: [
       {
         name: 'APP_ROLE'
@@ -98,7 +125,10 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
     ]
     tags: tags
   }
-}*/
+}
+// Useful outputs for azd and diagnostics
+output containerRegistryLoginServer string = acrExisting.properties.loginServer
+output frontendFqdn string = frontend.outputs.fqdn
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

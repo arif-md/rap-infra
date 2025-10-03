@@ -8,6 +8,9 @@
       "location": {
         "value": "${AZURE_LOCATION}"
       },
+      "acrNameOverride": {
+        "value": "${AZURE_ACR_NAME}"
+      },
       "backendAzureFunctionsExists": {
         "value": "${SERVICE_BACKEND_AZURE_FUNCTIONS_RESOURCE_EXISTS=false}"
       },

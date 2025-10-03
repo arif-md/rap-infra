@@ -13,14 +13,14 @@ param envVars array = []
 param tags object = {}
 @description('vCPU allocation (fractional values allowed, e.g. 0.25, 0.5, 1)')
 param cpu int = 1
-@description('Memory allocation (e.g. 0.5Gi, 1Gi, 2Gi)')
+@description('Memory allocation (valid combos per Container Apps sizing; e.g. 2Gi for 1 vCPU)')
 @allowed([
   '0.5Gi'
   '1Gi'
   '2Gi'
   '4Gi'
 ])
-param memory string = '0.5Gi'
+param memory string = '2Gi'
 param minReplicas int = 1
 param maxReplicas int = 3
 param acrLoginServer string

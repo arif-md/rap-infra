@@ -18,26 +18,25 @@ param image string
 @description('Environment variables: array of { name, value }')
 param envVars array = []
 
-@description('Set to true to inject App Insights connection string')
-param enableAppInsights bool = true
+@description('Skip creating AcrPull role assignment for the user-assigned identity (useful when current principal lacks permissions).')
+param skipAcrPullRoleAssignment bool = false
 
-@description('App Insights resource name (ignored if enableAppInsights=false or empty)')
-param applicationInsightsName string = ''
+// App Insights wiring can be added later via Service Connector or env vars
 
-@description('Toggle deployment (skip if false)')
-param exists bool = true
+// Application Insights injection omitted for simplicity; enable via env or Service Connector later
+
 
 @description('vCPU allocation (fractional values allowed, e.g. 0.25, 0.5, 1)')
 param cpu int = 1
 
-@description('Memory allocation (e.g. 0.5Gi, 1Gi, 2Gi)')
+@description('Memory allocation (valid combos per Container Apps sizing; e.g. 2Gi for 1 vCPU)')
 @allowed([
   '0.5Gi'
   '1Gi'
   '2Gi'
   '4Gi'
 ])
-param memory string = '0.5Gi'
+param memory string = '2Gi'
 
 param minReplicas int = 1
 param maxReplicas int = 3
@@ -52,13 +51,10 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: containerRegistryName
 }
 
-// Optional App Insights
-resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = if (enableAppInsights && !empty(applicationInsightsName)) {
-  name: applicationInsightsName
-}
+// Optional App Insights omitted
 
 // User-assigned identity (for ACR pull / future use)
-resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (exists) {
+resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
   location: location
   tags: tags
@@ -71,6 +67,9 @@ var baseEnvArray = [
     value: 'angular'
   }
 ]
+
+// Combine base env + optional App Insights + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, envVars)
 
 
 module frontend '../modules/containerApp.bicep' = {
@@ -88,15 +87,24 @@ module frontend '../modules/containerApp.bicep' = {
     cpu: cpu
     memory: memory
     minReplicas: minReplicas
-    maxReplicas: maxReplicas    
+  maxReplicas: maxReplicas    
     //ingressHostname: empty(publicHostname) ? '' : publicHostname
-    envVars: [
-      {
-        name: 'APP_ROLE'
-        value: 'frontend'
-      }
-    ]
-    tags: tags
+    envVars: combinedEnv
+    tags: union(tags, {
+      'azd-service-name': 'frontend'
+    })
+  }
+}
+
+// Grant AcrPull to the user-assigned identity on the ACR
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipAcrPullRoleAssignment) {
+  name: guid(acr.id, 'AcrPull', uai.id)
+  scope: acr
+  properties: {
+    principalId: uai.properties.principalId
+    // Specify principalType to mitigate replication delay issues when the identity is newly created
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
   }
 }
 
@@ -166,7 +174,7 @@ module frontend '../modules/containerApp.bicep' = {
   }
 }*/
 
-output name string = exists ? containerApp.name : ''
-output fqdn string = exists ? containerApp.properties.configuration.ingress.fqdn : ''
-output identityResourceId string = exists ? uai.id : ''
+output name string = name
+output fqdn string = frontend.outputs.fqdn
+output identityResourceId string = uai.id
 output imageUsed string = image
