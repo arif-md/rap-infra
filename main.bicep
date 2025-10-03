@@ -101,6 +101,9 @@ resource acrExisting 'Microsoft.ContainerRegistry/registries@2023-07-01' existin
 // Frontend Angular Container App
 module frontend 'app/frontend-angular.bicep' = {
   name: 'frontendApp'
+  dependsOn: [
+    containerAppsEnvironment
+  ]
   params: {
     name: frontendAppName
     location: location
