@@ -1,4 +1,4 @@
-# Initialize, provision resources and deploy app to Azure using AZD
+# Provision the infrastructure and deploy the services.
 ## Prerequisites
 * Install AZD client
 
@@ -6,8 +6,8 @@
 winget install microsoft.azd
 winget upgrade microsoft.azd
 azd version
-install and start Docker Desktop prior to starting VS Code
 ```
+* Install and start Docker Desktop prior to starting VS Code
 
 * setup the AZD environment. Note: Deployment stack feature requires az CLI >= 2.61.0
 
