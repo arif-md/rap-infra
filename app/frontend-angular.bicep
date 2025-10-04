@@ -83,7 +83,8 @@ module frontend '../modules/containerApp.bicep' = {
     ingressExternal: true
     enableSessionAffinity: enableSessionAffinity
     userAssignedIdentity: uai.id
-    acrLoginServer: acr.properties.loginServer
+  // Determine if the image is coming from the configured ACR
+  acrLoginServer: split(image, '/')[0] == acr.properties.loginServer ? acr.properties.loginServer : ''
     cpu: cpu
     memory: memory
     minReplicas: minReplicas

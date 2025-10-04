@@ -54,12 +54,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           affinity: enableSessionAffinity ? 'sticky' : 'none'
         }
       }
-      registries: [
+      registries: empty(acrLoginServer) ? [] : [
         {
           server: acrLoginServer
           identity: userAssignedIdentity
         }
-      ]      
+      ]
       activeRevisionsMode: 'single'
       dapr: {
         enabled: false

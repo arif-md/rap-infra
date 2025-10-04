@@ -11,6 +11,12 @@
       "acrNameOverride": {
         "value": "${AZURE_ACR_NAME}"
       },
+      "skipAcrPullRoleAssignment": {
+        "value": "${SKIP_ACR_PULL_ROLE_ASSIGNMENT=true}"
+      },
+      "frontendImage": {
+        "value": "${SERVICE_FRONTEND_IMAGE_NAME}"
+      },
       "backendAzureFunctionsExists": {
         "value": "${SERVICE_BACKEND_AZURE_FUNCTIONS_RESOURCE_EXISTS=false}"
       },

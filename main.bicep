@@ -8,21 +8,17 @@ param environmentName string
 @description('Azure location')
 param location string = resourceGroup().location
 
-/*@description('Container image (full ACR reference) for frontend (e.g. myacr.azurecr.io/rap-frontend:latest)')
-param frontendImage string
+@description('Container image (full ACR reference) for frontend (e.g. myacr.azurecr.io/rap-frontend:latest)')
+param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
-@description('Container image (full ACR reference) for backend (e.g. myacr.azurecr.io/rap-backend:latest)')
-param backendImage string
+/* Removed backendImage and publicHostname parameters for simplicity */
 
-@description('Ingress target hostname (optional, if using custom domain later)')
-@minLength(0)
-param publicHostname string = ''*/
-
-@description('Enable diagnostics (Log Analytics linkage)')
-param enableDiagnostics bool = true
 
 @description('Optional override for ACR name (use existing)')
 param acrNameOverride string = ''
+
+@description('Skip creating AcrPull role assignment for the frontend identity (useful for local runs without RBAC)')
+param skipAcrPullRoleAssignment bool = true
 
 @description('vCPU allocation for frontend container app (integer, default 1)')
 param frontendCpu int = 1
@@ -50,14 +46,7 @@ var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${reso
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
 
-/*module logAnalytics 'modules/logAnalytics.bicep' = if (enableDiagnostics) {
-  name: 'lawDeploy'
-  params: {
-    name: lawName
-    location: location
-    tags: tags
-  }
-}*/
+/* Diagnostics module can be reintroduced later if needed */
 
 /*module acr 'modules/containerRegistry.bicep' = {
   name: 'acrDeploy'
@@ -112,10 +101,10 @@ module frontend 'app/frontend-angular.bicep' = {
     containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
     // ACR name for image pull identity binding
     containerRegistryName: acrName
-    // Initial image placeholder; azd deploy will build & update to the real image
-    image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
-    // Temporarily skip AcrPull role assignment to avoid requiring elevated permissions
-    skipAcrPullRoleAssignment: false
+    // Use provided image (from env via parameters file) or default placeholder
+    image: frontendImage
+  // Allow toggling AcrPull role assignment
+  skipAcrPullRoleAssignment: skipAcrPullRoleAssignment
     // Compute sizing (exposed as parameters)
     cpu: frontendCpu
     memory: frontendMemory

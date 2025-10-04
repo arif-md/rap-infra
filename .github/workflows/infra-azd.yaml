@@ -24,6 +24,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    outputs:
+      frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
       id-token: write   # for OIDC
       contents: read
@@ -78,6 +80,18 @@ jobs:
       - name: azd up (provision + deploy)
         run: azd up --no-prompt --environment "$AZURE_ENV_NAME"
 
-      - name: Output endpoints
+      - name: Expose deployment endpoints
+        id: expose_endpoints
         run: |
-          azd env get-values | sed 's/\(CLIENT_SECRET\)=.*/\1=***REDACTED***/' || true
+          FQDN=$(azd env get-value frontendFqdn || true)
+          echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+          echo "DEPLOY_URL=$FQDN" >> $GITHUB_ENV
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Frontend: https://$FQDN"
+            else
+              echo "- Frontend: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY

@@ -21,16 +21,3 @@ hooks:
       run: ./scripts/ensure-acr.sh
       interactive: false
 
-services:
-  frontend:
-    project: .
-    host: containerapp
-    language: ts
-    docker:
-      # Explicit registry used by azd for image references
-      registry: ${AZURE_ACR_NAME}.azurecr.io
-
-resources:
-  frontend:
-    type: host.containerapp
-    port: 80
