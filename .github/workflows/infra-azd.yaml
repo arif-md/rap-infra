@@ -56,6 +56,21 @@ jobs:
         run: |
           echo "Azure CLI account:" && az account show --output table || true
 
+      - name: Acquire GitHub OIDC token
+        id: gh_oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jwt = await core.getIDToken('api://AzureADTokenExchange');
+            core.setOutput('jwt', jwt);
+
+      - name: azd auth login (OIDC)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
+
       - name: Validate Azure login
         run: |
           EXPECTED_SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
