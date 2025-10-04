@@ -47,13 +47,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Setup Azure Developer CLI (azd)
-        uses: Azure/setup-azd@v1
-        with:
-          version: latest
-
-      - name: Show azd version
-        run: azd version
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          azd version
 
       - name: Show Azure identity
         run: |
