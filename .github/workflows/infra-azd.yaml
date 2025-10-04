@@ -50,6 +50,7 @@ jobs:
       - name: Install Azure Developer CLI (azd)
         run: |
           curl -fsSL https://aka.ms/install-azd.sh | bash
+          azd upgrade --yes || true
           echo "AZD version: $(azd version)"
 
       - name: Show Azure identity
@@ -71,9 +72,22 @@ jobs:
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
             --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
 
+      - name: Verify azd authentication
+        run: |
+          if azd auth token -h >/dev/null 2>&1; then
+            if ! azd auth token -o json >/dev/null 2>&1; then
+              echo "azd is not authenticated. Check OIDC federated credential and permissions." >&2
+              exit 1
+            fi
+            echo "azd authentication verified via token retrieval."
+          else
+            echo "Skipping azd token check (command not available in this azd version)."
+          fi
+
       - name: Validate Azure login
         run: |
           EXPECTED_SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          EXPECTED_TENANT="${{ secrets.AZURE_TENANT_ID }}"
           SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           TENANT=$(az account show --query tenantId -o tsv 2>/dev/null || true)
           if [ -z "$SUB" ]; then
@@ -84,7 +98,27 @@ jobs:
             echo "Logged into unexpected subscription: $SUB (expected $EXPECTED_SUB). Check azure/login inputs and the federated credential subject." >&2
             exit 1
           fi
+          if [ -n "$EXPECTED_TENANT" ] && [ "$TENANT" != "$EXPECTED_TENANT" ]; then
+            echo "Logged into unexpected tenant: $TENANT (expected $EXPECTED_TENANT). Check azure/login inputs and the federated credential subject." >&2
+            exit 1
+          fi
           echo "Validated Azure login. Subscription: $SUB  Tenant: $TENANT"
+
+      - name: Show active principal details
+        run: |
+          {
+            echo "### Active principal details"
+            echo
+            echo "Azure CLI (az) context:"
+            az account show --output table || echo "(failed to read az account)"
+            echo
+            if azd auth show -h >/dev/null 2>&1; then
+              echo "azd auth show:"
+              azd auth show || echo "(failed to read azd auth show)"
+            else
+              echo "azd auth show not available in this azd version."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Enable azd alpha features (deployment stacks)
         run: azd config set alpha.deployment.stacks on
