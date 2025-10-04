@@ -1,0 +1,36 @@
+name: raptor
+infra:
+  provider: bicep
+  path: .
+  deploymentStacks:
+    # On azd down, delete managed resources but keep the resource group intact
+    actionOnUnmanage:
+      resources: delete
+      resourceGroups: detach
+    denySettings:
+      mode: none
+
+hooks:
+  preprovision:
+    windows:
+      shell: pwsh
+      run: ./scripts/ensure-acr.ps1
+      interactive: false
+    posix:
+      shell: sh
+      run: ./scripts/ensure-acr.sh
+      interactive: false
+
+services:
+  frontend:
+    project: .
+    host: containerapp
+    language: ts
+    docker:
+      # Explicit registry used by azd for image references
+      registry: ${AZURE_ACR_NAME}.azurecr.io
+
+resources:
+  frontend:
+    type: host.containerapp
+    port: 80

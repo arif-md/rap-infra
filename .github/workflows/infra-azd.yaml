@@ -1,0 +1,83 @@
+name: Infra - Provision and Deploy (azd)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'azure.yaml'
+      - 'main.bicep'
+      - 'main.parameters.json'
+      - 'app/**'
+      - 'modules/**'
+      - 'shared/**'
+      - 'scripts/**'
+  repository_dispatch:
+    types: [ frontend-image-pushed ]
+
+env:
+  AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+  AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # for OIDC
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "AZD version: $(azd version)"
+
+      - name: Enable azd alpha features (deployment stacks)
+        run: azd config set alpha.deployment.stacks on
+
+      - name: Prepare azd environment
+        run: |
+          azd env new $AZURE_ENV_NAME --no-prompt || true
+          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
+          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
+          azd env set AZURE_LOCATION "$AZURE_LOCATION"
+          azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
+
+      - name: Set default image when not provided
+        if: github.event_name != 'repository_dispatch'
+        run: |
+          # Avoid azd attempting to build from this infra repo by providing a placeholder image
+          azd env set SERVICE_FRONTEND_IMAGE_NAME "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+
+      - name: Ensure ACR exists (preprovision)
+        shell: bash
+        run: |
+          chmod +x ./scripts/ensure-acr.sh
+          ./scripts/ensure-acr.sh
+
+      - name: Accept image from repository_dispatch (optional)
+        if: github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
+        run: |
+          IMG='${{ github.event.client_payload.image }}'
+          if [ -n "$IMG" ]; then
+            echo "Using pre-built image: $IMG"
+            azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMG"
+          fi
+
+      - name: azd up (provision + deploy)
+        run: azd up --no-prompt --environment "$AZURE_ENV_NAME"
+
+      - name: Output endpoints
+        run: |
+          azd env get-values | sed 's/\(CLIENT_SECRET\)=.*/\1=***REDACTED***/' || true
