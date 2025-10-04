@@ -47,11 +47,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install Azure Developer CLI (azd)
-        run: |
-          curl -fsSL https://aka.ms/install-azd.sh | bash
-          azd upgrade --yes || true
-          echo "AZD version: $(azd version)"
+      - name: Setup Azure Developer CLI (azd)
+        uses: Azure/setup-azd@v1
+        with:
+          version: latest
+
+      - name: Show azd version
+        run: azd version
 
       - name: Show Azure identity
         run: |
@@ -122,6 +124,17 @@ jobs:
 
       - name: Enable azd alpha features (deployment stacks)
         run: azd config set alpha.deployment.stacks on
+
+      - name: Ensure AZURE_ENV_NAME default
+        run: |
+          if [ -z "$AZURE_ENV_NAME" ]; then
+            NAME="${GITHUB_REF_NAME:-ci}"
+            SAFE=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            echo "AZURE_ENV_NAME=$SAFE" >> $GITHUB_ENV
+            echo "Using fallback AZURE_ENV_NAME: $SAFE"
+          else
+            echo "Using provided AZURE_ENV_NAME: $AZURE_ENV_NAME"
+          fi
 
       - name: Prepare azd environment
         run: |
