@@ -50,7 +50,19 @@ jobs:
       - name: Install Azure Developer CLI (azd)
         run: |
           curl -fsSL https://aka.ms/install-azd.sh | bash
+          # Ensure the newly installed azd is on PATH for this job
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          echo "PATH updated to include: $HOME/.azure-dev/bin"
           azd version
+
+      - name: Show azd auth login help
+        run: |
+          {
+            echo "### azd auth login help"
+            echo '```'
+            azd auth login -h || true
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Show Azure identity
         run: |
@@ -64,12 +76,21 @@ jobs:
             const jwt = await core.getIDToken('api://AzureADTokenExchange');
             core.setOutput('jwt', jwt);
 
-      - name: azd auth login (OIDC)
+      - name: azd auth login (OIDC or use-az-cli)
         run: |
-          azd auth login \
-            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-            --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
+          if azd auth login -h | grep -q -- '--federated-token'; then
+            echo "Using azd OIDC federated-token flow"
+            azd auth login \
+              --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+              --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+              --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
+          elif azd auth login -h | grep -q -- '--use-az-cli'; then
+            echo "Using azd --use-az-cli to reuse azure/login session"
+            azd auth login --use-az-cli
+          else
+            echo "This azd version does not support --federated-token or --use-az-cli. Please upgrade azd or enable a supported auth method." >&2
+            exit 1
+          fi
 
       - name: Verify azd authentication
         run: |
