@@ -24,6 +24,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: test
     outputs:
       frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
@@ -32,6 +33,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify required Azure secrets
+        run: |
+          [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || { echo "Missing secret: AZURE_CLIENT_ID"; exit 1; }
+          [ -n "${{ secrets.AZURE_TENANT_ID }}" ] || { echo "Missing secret: AZURE_TENANT_ID"; exit 1; }
+          [ -n "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing secret: AZURE_SUBSCRIPTION_ID"; exit 1; }
 
       - name: Azure Login
         uses: azure/login@v2
