@@ -52,12 +52,24 @@ jobs:
           curl -fsSL https://aka.ms/install-azd.sh | bash
           echo "AZD version: $(azd version)"
 
-      - name: azd auth login (OIDC)
+      - name: Show Azure identity
         run: |
-          azd auth login \
-            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-            --federated-credential
+          echo "Azure CLI account:" && az account show --output table || true
+
+      - name: Validate Azure login
+        run: |
+          EXPECTED_SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          TENANT=$(az account show --query tenantId -o tsv 2>/dev/null || true)
+          if [ -z "$SUB" ]; then
+            echo "Azure CLI not logged in. Ensure azure/login succeeded and federated credentials are configured for this environment." >&2
+            exit 1
+          fi
+          if [ "$SUB" != "$EXPECTED_SUB" ]; then
+            echo "Logged into unexpected subscription: $SUB (expected $EXPECTED_SUB). Check azure/login inputs and the federated credential subject." >&2
+            exit 1
+          fi
+          echo "Validated Azure login. Subscription: $SUB  Tenant: $TENANT"
 
       - name: Enable azd alpha features (deployment stacks)
         run: azd config set alpha.deployment.stacks on
