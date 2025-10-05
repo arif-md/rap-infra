@@ -16,7 +16,8 @@ on:
     types: [ frontend-image-pushed ]
 
 env:
-  AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+  # Use environment-scoped variables; define these per GitHub Environment (dev/test)
+  AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}
   AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
   AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
@@ -24,7 +25,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: test
+    environment: dev
     outputs:
       frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
@@ -58,6 +59,13 @@ jobs:
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
             --federated-credential-provider github
 
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o table >/dev/null
+          azd auth token >/dev/null
+
 
 
       - name: Enable azd alpha features (deployment stacks)
@@ -66,7 +74,7 @@ jobs:
       - name: Ensure AZURE_ENV_NAME default
         run: |
           if [ -z "$AZURE_ENV_NAME" ]; then
-            NAME="${GITHUB_REF_NAME:-ci}"
+            NAME="${GITHUB_REF_NAME:-dev}"
             SAFE=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
             echo "AZURE_ENV_NAME=$SAFE" >> $GITHUB_ENV
             echo "Using fallback AZURE_ENV_NAME: $SAFE"

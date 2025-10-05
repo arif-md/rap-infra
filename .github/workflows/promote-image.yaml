@@ -1,0 +1,238 @@
+name: Infra - Promote Image to Test/Prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Full image with digest (e.g., myacr.azurecr.io/raptor/frontend-dev@sha256:...)"
+        required: true
+  repository_dispatch:
+    types: [ frontend-image-promote ]
+
+jobs:
+  promote-test:
+    runs-on: ubuntu-latest
+    environment: test
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o table >/dev/null
+          azd auth token >/dev/null
+
+      - name: Resolve inputs
+        id: inp
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SRC_IMAGE='${{ github.event.client_payload.image }}'
+          else
+            SRC_IMAGE='${{ inputs.image }}'
+          fi
+          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
+          echo "srcImage=$SRC_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Prefer environment-specific repo variables; fallback to shared ones
+          TARGET_ENV=${TARGET_ENV}
+            # Using environment-scoped variables directly (test environment)
+            ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+            RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+            LOC='${{ vars.AZURE_LOCATION }}'
+          if [ -z "$ACR_NAME" ]; then ACR_NAME='${{ vars.AZURE_ACR_NAME }}'; fi
+          if [ -z "$RG" ]; then RG='${{ vars.AZURE_RESOURCE_GROUP }}'; fi
+          if [ -z "$LOC" ]; then LOC='${{ vars.AZURE_LOCATION }}'; fi
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
+            echo "Missing AZURE_* variables for test environment. Define AZURE_ACR_NAME_TEST, AZURE_RESOURCE_GROUP_TEST, and AZURE_LOCATION_TEST or shared fallbacks." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR='${{ steps.prep.outputs.acr }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
+          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          # Extract digest from source string (after @)
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env
+        shell: bash
+        run: |
+          set -euo pipefail
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+  promote-prod:
+    runs-on: ubuntu-latest
+    needs: promote-test
+    if: ${{ vars.ENABLE_PROD_PROMOTION == 'true' }}
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o table >/dev/null
+          azd auth token >/dev/null
+
+      - name: Resolve inputs
+        id: inp
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SRC_IMAGE='${{ github.event.client_payload.image }}'
+          else
+            SRC_IMAGE='${{ inputs.image }}'
+          fi
+          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
+          echo "srcImage=$SRC_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          # Using environment-scoped variables directly (prod environment)
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          LOC='${{ vars.AZURE_LOCATION }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
+            echo "Missing AZURE_* variables for prod environment. Define AZURE_ACR_NAME, AZURE_RESOURCE_GROUP, AZURE_LOCATION in the 'prod' environment." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR='${{ steps.prep.outputs.acr }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
+          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env
+        shell: bash
+        run: |
+          set -euo pipefail
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
