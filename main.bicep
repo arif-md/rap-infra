@@ -114,6 +114,10 @@ module frontend 'app/frontend-angular.bicep' = {
         name: 'APP_ROLE'
         value: 'frontend'
       }
+      {
+        name: 'AZURE_ENV_NAME'
+        value: environmentName
+      }
     ]
     tags: tags
   }
