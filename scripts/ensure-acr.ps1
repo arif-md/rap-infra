@@ -75,3 +75,25 @@ if (-not $exists) {
 } else {
   Write-Host "[ensure-acr] ACR '$AcrName' already exists in RG '$ResourceGroup'."
 }
+
+# Resolve the service image if not already set, preferring ACR digest for this environment
+$currentImage = Get-AzdValue 'SERVICE_FRONTEND_IMAGE_NAME'
+$acrDomain = "$AcrName.azurecr.io"
+if (-not $currentImage -or -not $currentImage.StartsWith($acrDomain, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $repo = "raptor/frontend-$EnvName"
+  Write-Host "[ensure-acr] Attempting to resolve latest image from ACR: $acrDomain/$repo"
+  $digest = az acr repository show-manifests -n $AcrName --repository $repo --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>$null
+  if ($LASTEXITCODE -eq 0 -and $digest) {
+    $image = "$acrDomain/$repo@$digest"
+    Write-Host "[ensure-acr] Resolved ACR image: $image"
+    azd env set SERVICE_FRONTEND_IMAGE_NAME $image | Out-Null
+    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false | Out-Null
+  } else {
+    $fallback = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+    Write-Host "[ensure-acr] No image found in ACR repo '$repo'. Using fallback public image: $fallback"
+    azd env set SERVICE_FRONTEND_IMAGE_NAME $fallback | Out-Null
+    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true | Out-Null
+  }
+} else {
+  Write-Host "[ensure-acr] SERVICE_FRONTEND_IMAGE_NAME already set to ACR image; leaving as-is."
+}
