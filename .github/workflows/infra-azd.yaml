@@ -49,106 +49,23 @@ jobs:
 
       - name: Install Azure Developer CLI (azd)
         run: |
-          if [ -n "${{ vars.AZD_VERSION }}" ]; then
-            export AZD_VERSION="${{ vars.AZD_VERSION }}"
-            echo "Installing azd version from repo vars: $AZD_VERSION"
-          else
-            export AZD_VERSION="1.9.5"
-            echo "Installing pinned azd version: $AZD_VERSION (set repo var AZD_VERSION to override)"
-          fi
           curl -fsSL https://aka.ms/install-azd.sh | bash
           # Ensure the newly installed azd is on PATH for this job
           echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
           echo "PATH updated to include: $HOME/.azure-dev/bin"
-          echo "azd location: $(command -v azd || true)"
           azd version
-
-      - name: Show azd auth login help
-        run: |
-          echo "--- azd auth login -h (log) ---"
-          azd auth login -h || true
-          {
-            echo "### azd auth login help"
-            echo '```'
-            azd auth login -h || true
-            echo '```'
-          } >> $GITHUB_STEP_SUMMARY
 
       - name: Show Azure identity
         run: |
           echo "Azure CLI account:" && az account show --output table || true
 
-      - name: Acquire GitHub OIDC token
-        id: gh_oidc
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const jwt = await core.getIDToken('api://AzureADTokenExchange');
-            core.setOutput('jwt', jwt);
-
-      - name: azd auth login (OIDC or use-az-cli)
+      - name: azd auth login (OIDC via provider)
         run: |
-          if azd auth login -h >/tmp/azd-auth-help 2>&1; then
-            if grep -q -- '--federated-credential-provider' /tmp/azd-auth-help; then
-              echo "Using azd OIDC with federated-credential-provider=github"
-              azd auth login \
-                --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-                --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-                --federated-credential-provider github
-            elif grep -q -- '--federated-token' /tmp/azd-auth-help; then
-            echo "Using azd OIDC federated-token flow"
-            azd auth login \
-              --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-              --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-              --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
-            elif grep -q -- '--federated-credential' /tmp/azd-auth-help; then
-              echo "Using azd OIDC federated-credential flow"
-              azd auth login \
-                --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-                --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-                --federated-credential "${{ steps.gh_oidc.outputs.jwt }}"
-            elif grep -q -- '--use-az-cli' /tmp/azd-auth-help; then
-              echo "Using azd --use-az-cli to reuse azure/login session"
-              azd auth login --use-az-cli
-            else
-              echo "No supported flags found in 'azd auth login -h':" >&2
-              cat /tmp/azd-auth-help >&2 || true
-              AUTH_HELP_SHOWN=1
-            fi
-          else
-            echo "'azd auth login' not available; trying legacy 'azd login'..."
-            azd login -h >/tmp/azd-login-help 2>&1 || true
-            if grep -q -- '--use-az-cli' /tmp/azd-login-help 2>/dev/null; then
-              echo "Using legacy 'azd login --use-az-cli'"
-              azd login --use-az-cli
-            elif grep -q -- '--federated-token' /tmp/azd-login-help 2>/dev/null; then
-              echo "Using legacy 'azd login --federated-token'"
-              azd login \
-                --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-                --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-                --federated-token "${{ steps.gh_oidc.outputs.jwt }}"
-            else
-              echo "Neither 'azd auth login' nor 'azd login' support OIDC or CLI reuse in this azd version." >&2
-              echo "azd version: $(azd version || true)" >&2
-              echo "azd auth login help:" >&2
-              (cat /tmp/azd-auth-help || true) >&2
-              echo "azd login help:" >&2
-              (cat /tmp/azd-login-help || true) >&2
-              exit 1
-            fi
-          fi
-
-      - name: Verify azd authentication
-        run: |
-          if azd auth token -h >/dev/null 2>&1; then
-            if ! azd auth token -o json >/dev/null 2>&1; then
-              echo "azd is not authenticated. Check OIDC federated credential and permissions." >&2
-              exit 1
-            fi
-            echo "azd authentication verified via token retrieval."
-          else
-            echo "Skipping azd token check (command not available in this azd version)."
-          fi
+          echo "Authenticating azd using GitHub OIDC provider"
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
 
       - name: Validate Azure login
         run: |
@@ -170,21 +87,6 @@ jobs:
           fi
           echo "Validated Azure login. Subscription: $SUB  Tenant: $TENANT"
 
-      - name: Show active principal details
-        run: |
-          {
-            echo "### Active principal details"
-            echo
-            echo "Azure CLI (az) context:"
-            az account show --output table || echo "(failed to read az account)"
-            echo
-            if azd auth show -h >/dev/null 2>&1; then
-              echo "azd auth show:"
-              azd auth show || echo "(failed to read azd auth show)"
-            else
-              echo "azd auth show not available in this azd version."
-            fi
-          } >> $GITHUB_STEP_SUMMARY
 
       - name: Enable azd alpha features (deployment stacks)
         run: azd config set alpha.deployment.stacks on
