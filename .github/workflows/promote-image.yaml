@@ -46,8 +46,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az account show -o table >/dev/null
-          azd auth token >/dev/null
+          # Verify Azure CLI is authenticated for this job
+          az account show -o none
+          az account get-access-token -o none
+          # Verify azd is installed and on PATH
+          command -v azd >/dev/null 2>&1
+          azd version
 
       - name: Resolve inputs
         id: inp
@@ -163,8 +167,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az account show -o table >/dev/null
-          azd auth token >/dev/null
+          # Verify Azure CLI is authenticated for this job
+          az account show -o none
+          az account get-access-token -o none
+          # Verify azd is installed and on PATH
+          command -v azd >/dev/null 2>&1
+          azd version
 
       - name: Resolve inputs
         id: inp
