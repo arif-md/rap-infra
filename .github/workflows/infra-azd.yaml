@@ -34,12 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify required Azure secrets
-        run: |
-          [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || { echo "Missing secret: AZURE_CLIENT_ID"; exit 1; }
-          [ -n "${{ secrets.AZURE_TENANT_ID }}" ] || { echo "Missing secret: AZURE_TENANT_ID"; exit 1; }
-          [ -n "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] || { echo "Missing secret: AZURE_SUBSCRIPTION_ID"; exit 1; }
-
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -55,9 +49,6 @@ jobs:
           echo "PATH updated to include: $HOME/.azure-dev/bin"
           azd version
 
-      - name: Show Azure identity
-        run: |
-          echo "Azure CLI account:" && az account show --output table || true
 
       - name: azd auth login (OIDC via provider)
         run: |
@@ -67,25 +58,6 @@ jobs:
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
             --federated-credential-provider github
 
-      - name: Validate Azure login
-        run: |
-          EXPECTED_SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          EXPECTED_TENANT="${{ secrets.AZURE_TENANT_ID }}"
-          SUB=$(az account show --query id -o tsv 2>/dev/null || true)
-          TENANT=$(az account show --query tenantId -o tsv 2>/dev/null || true)
-          if [ -z "$SUB" ]; then
-            echo "Azure CLI not logged in. Ensure azure/login succeeded and federated credentials are configured for this environment." >&2
-            exit 1
-          fi
-          if [ "$SUB" != "$EXPECTED_SUB" ]; then
-            echo "Logged into unexpected subscription: $SUB (expected $EXPECTED_SUB). Check azure/login inputs and the federated credential subject." >&2
-            exit 1
-          fi
-          if [ -n "$EXPECTED_TENANT" ] && [ "$TENANT" != "$EXPECTED_TENANT" ]; then
-            echo "Logged into unexpected tenant: $TENANT (expected $EXPECTED_TENANT). Check azure/login inputs and the federated credential subject." >&2
-            exit 1
-          fi
-          echo "Validated Azure login. Subscription: $SUB  Tenant: $TENANT"
 
 
       - name: Enable azd alpha features (deployment stacks)
@@ -141,6 +113,11 @@ jobs:
           FQDN=$(azd env get-value frontendFqdn || true)
           echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
           echo "DEPLOY_URL=$FQDN" >> $GITHUB_ENV
+          if [ -n "$FQDN" ]; then
+            echo "Frontend URL: https://$FQDN"
+          else
+            echo "Frontend URL not available"
+          fi
           {
             echo "### Deployment endpoints"
             echo ""
