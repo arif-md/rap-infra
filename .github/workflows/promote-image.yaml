@@ -127,6 +127,12 @@ jobs:
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
+      - name: Make preprovision hooks executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/ensure-acr.sh
+
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 
@@ -243,6 +249,12 @@ jobs:
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Make preprovision hooks executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/ensure-acr.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
