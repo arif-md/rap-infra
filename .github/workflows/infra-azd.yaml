@@ -65,6 +65,8 @@ jobs:
 
       - name: Show azd auth login help
         run: |
+          echo "--- azd auth login -h (log) ---"
+          azd auth login -h || true
           {
             echo "### azd auth login help"
             echo '```'
@@ -87,7 +89,13 @@ jobs:
       - name: azd auth login (OIDC or use-az-cli)
         run: |
           if azd auth login -h >/tmp/azd-auth-help 2>&1; then
-            if grep -q -- '--federated-token' /tmp/azd-auth-help; then
+            if grep -q -- '--federated-credential-provider' /tmp/azd-auth-help; then
+              echo "Using azd OIDC with federated-credential-provider=github"
+              azd auth login \
+                --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+                --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+                --federated-credential-provider github
+            elif grep -q -- '--federated-token' /tmp/azd-auth-help; then
             echo "Using azd OIDC federated-token flow"
             azd auth login \
               --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
