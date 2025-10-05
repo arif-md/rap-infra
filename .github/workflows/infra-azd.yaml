@@ -125,8 +125,50 @@ jobs:
             fi
           fi
 
+      - name: Validate image vs ACR binding (guard)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME || true)
+          SKIP=$(azd env get-value SKIP_ACR_PULL_ROLE_ASSIGNMENT || echo true)
+          if [ -z "$IMG" ]; then
+            echo "SERVICE_FRONTEND_IMAGE_NAME is not set; nothing to validate."
+            exit 0
+          fi
+          DOMAIN="${IMG%%/*}"
+          ACR_DOMAIN="${AZURE_ACR_NAME}.azurecr.io"
+          if [ "$DOMAIN" = "$ACR_DOMAIN" ] && [ "$SKIP" = "true" ]; then
+            echo "Inconsistent configuration: Image is from ACR ($ACR_DOMAIN) but SKIP_ACR_PULL_ROLE_ASSIGNMENT=true. Set SKIP=false or use a public image." >&2
+            exit 1
+          fi
+          if [ "$DOMAIN" != "$ACR_DOMAIN" ] && [ "$SKIP" = "false" ]; then
+            echo "Inconsistent configuration: Image is NOT from ACR ($DOMAIN) but SKIP_ACR_PULL_ROLE_ASSIGNMENT=false. Set SKIP=true or use an ACR image." >&2
+            exit 1
+          fi
+          echo "Image/ACR binding validation passed."
+
       - name: azd up (provision + deploy)
         run: azd up --no-prompt --environment "$AZURE_ENV_NAME"
+
+      - name: Show effective deployed image
+        id: effective_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIGURED_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME || true)
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          DEPLOYED_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          echo "configuredImage=$CONFIGURED_IMG" >> $GITHUB_OUTPUT
+          echo "deployedImage=$DEPLOYED_IMG" >> $GITHUB_OUTPUT
+          echo "Configured image: ${CONFIGURED_IMG:-'(not set)'}"
+          echo "Deployed image:   ${DEPLOYED_IMG:-'(unavailable)'}"
+          {
+            echo "### Deployed image"
+            echo
+            echo "- Configured: ${CONFIGURED_IMG:-'(not set)'}"
+            echo "- Deployed: ${DEPLOYED_IMG:-'(unavailable)'}"
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: Expose deployment endpoints
         id: expose_endpoints
