@@ -136,6 +136,28 @@ jobs:
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 
+      - name: Expose deployment endpoints
+        id: expose_endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN=$(azd env get-value frontendFqdn || true)
+          echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+          if [ -n "$FQDN" ]; then
+            echo "Frontend URL: https://$FQDN"
+          else
+            echo "Frontend URL not available"
+          fi
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Frontend: https://$FQDN"
+            else
+              echo "- Frontend: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
   promote-prod:
     runs-on: ubuntu-latest
     needs: promote-test
@@ -258,3 +280,25 @@ jobs:
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+      - name: Expose deployment endpoints
+        id: expose_endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN=$(azd env get-value frontendFqdn || true)
+          echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+          if [ -n "$FQDN" ]; then
+            echo "Frontend URL: https://$FQDN"
+          else
+            echo "Frontend URL not available"
+          fi
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Frontend: https://$FQDN"
+            else
+              echo "- Frontend: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
