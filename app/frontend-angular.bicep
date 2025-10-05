@@ -74,6 +74,10 @@ var combinedEnv = concat(baseEnvArray, envVars)
 
 module frontend '../modules/containerApp.bicep' = {
   name: 'frontendContainer'
+  // Ensure role assignment is in place before the app tries to pull the image
+  dependsOn: [
+    acrPull
+  ]
   params: {
     name: name
     location: location

@@ -83,11 +83,26 @@ jobs:
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Set default image when not provided
+      - name: Resolve image from ACR (fallback to public)
         if: github.event_name != 'repository_dispatch'
+        shell: bash
         run: |
-          # Avoid azd attempting to build from this infra repo by providing a placeholder image
-          azd env set SERVICE_FRONTEND_IMAGE_NAME "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+          set -euo pipefail
+          REGISTRY="${AZURE_ACR_NAME}.azurecr.io"
+          REPO="raptor/frontend-${AZURE_ENV_NAME}"
+          echo "Looking for latest digest in ACR: $REGISTRY/$REPO"
+          DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+          if [ -n "$DIGEST" ]; then
+            IMAGE="$REGISTRY/$REPO@$DIGEST"
+            echo "Found image in ACR: $IMAGE"
+            azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMAGE"
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          else
+            FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+            echo "No image found in ACR for repo '$REPO'. Using fallback: $FALLBACK"
+            azd env set SERVICE_FRONTEND_IMAGE_NAME "$FALLBACK"
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
@@ -102,6 +117,12 @@ jobs:
           if [ -n "$IMG" ]; then
             echo "Using pre-built image: $IMG"
             azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMG"
+            DOMAIN="${IMG%%/*}"
+            if [ "$DOMAIN" = "${AZURE_ACR_NAME}.azurecr.io" ]; then
+              azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+            else
+              azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+            fi
           fi
 
       - name: azd up (provision + deploy)
