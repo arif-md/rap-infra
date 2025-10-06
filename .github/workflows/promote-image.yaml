@@ -113,6 +113,129 @@ jobs:
           DIGEST="${SRC_IMAGE#*@}"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
+      - name: Capture current deployed image (before promotion)
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV='${{ steps.prep.outputs.env }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_DIGEST="${CURR_IMG#*@}"
+          echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
+          echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes (diff since last test deploy)
+        id: relnotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # New (to be promoted) image digest and source registry/repo
+          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          SRC_DOMAIN="${SRC_IMAGE%%/*}"
+          SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
+          SRC_PATH="${SRC_IMAGE#*/}"
+          SRC_REPO="${SRC_PATH%@*}"
+
+          # Previously deployed digest from test (may be empty on first deploy)
+          PREV_DIGEST='${{ steps.current.outputs.digest }}'
+
+          # Helper to get a commit-like tag from ACR manifest tags
+          get_commit_from_digest() {
+            local reg="$1" repo="$2" dig="$3"
+            if [ -z "$dig" ]; then return 0; fi
+            # Try manifest show-metadata (preferred)
+            TAGS=$(az acr manifest show-metadata -n "$reg" --repository "$repo" --digest "$dig" --query "tags[]" -o tsv 2>/dev/null || true)
+            if [ -z "$TAGS" ]; then
+              # Fallback to show-manifests and filter by digest
+              TAGS=$(az acr repository show-manifests -n "$reg" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
+            fi
+            echo "$TAGS" | tr '\t' '\n' | grep -E '^[0-9a-f]{7,40}$' | head -n1 || true
+          }
+
+          NEW_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+          PREV_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+
+          # Ensure we have history to resolve SHAs
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          git fetch --prune --unshallow 2>/dev/null || true
+          git fetch --all --tags --force
+
+          to_full_sha() {
+            local short="$1"
+            if [ -z "$short" ]; then return 0; fi
+            git rev-parse "$short" 2>/dev/null || true
+          }
+
+          NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT")
+          PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT")
+
+          FRONTEND_SUBDIR="frontend"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          NOTES_FILE="release-notes.md"
+
+          {
+            echo "## Release notes: Promote frontend to test"
+            echo
+            echo "- Target environment: test"
+            echo "- New image: ${SRC_IMAGE}"
+            if [ -n "$PREV_DIGEST" ]; then
+              echo "- Previously deployed digest: ${PREV_DIGEST}"
+            else
+              echo "- Previously deployed digest: (none - first promotion)"
+            fi
+            echo
+            if [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
+              echo "### Changes (${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT})"
+              echo
+              echo "Compare: ${REPO_URL}/compare/${PREV_SHA}...${NEW_SHA}"
+              echo
+              echo "#### Commits in frontend/"
+              git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || echo "(no path-specific changes in frontend/)"
+            elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
+              echo "First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
+            else
+              echo "Could not resolve commit SHAs from image tags. Showing image digests only."
+            fi
+          } > "$NOTES_FILE"
+
+          echo "Generated release notes:"; echo "-------------------------"; cat "$NOTES_FILE"; echo "\n-------------------------"
+
+          # Set output for later steps (email) and append to job summary
+          {
+            echo 'body<<EOF'
+            cat "$NOTES_FILE"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Email approver (optional)
+        if: ${{ secrets.MAIL_SERVER && secrets.MAIL_USERNAME && secrets.MAIL_PASSWORD && secrets.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT || 587 }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Approval Needed] Promote frontend to test"
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}
+          content_type: text/plain
+          body: |
+            A deployment to the 'test' environment is pending approval.
+
+            Image: ${{ steps.inp.outputs.srcImage }}
+            Target: Azure Container Apps (test)
+
+            Review & approve:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Release notes:
+            ${{ steps.relnotes.outputs.body }}
+
       - name: Prepare azd env
         shell: bash
         run: |
