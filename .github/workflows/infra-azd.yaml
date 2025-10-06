@@ -182,6 +182,57 @@ jobs:
             echo "- Deployed: ${DEPLOYED_IMG:-'(unavailable)'}"
           } >> $GITHUB_STEP_SUMMARY
 
+      - name: Prepare promotion target
+        if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
+        id: promo
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ vars.PROMOTE_REPO || github.repository }}"
+          echo "repo=$TARGET" >> $GITHUB_OUTPUT
+          IMG='${{ steps.effective_image.outputs.configuredImage }}'
+          echo "image=$IMG" >> $GITHUB_OUTPUT
+          echo "Promotion will target repo: $TARGET" 
+          echo "Image to promote: $IMG"
+
+      - name: Log and wait before promotion dispatch
+        if: success() && steps.promo.outputs.image && steps.promo.outputs.repo
+        shell: bash
+        run: |
+          echo "Dev deployment successful. Dispatching promotion event in 3 seconds..."
+          sleep 3
+
+      - name: Dispatch promotion (same-repo)
+        if: success() && steps.promo.outputs.repo == github.repository
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ github.token }}
+          repository: ${{ steps.promo.outputs.repo }}
+          event-type: frontend-image-promote
+          client-payload: |
+            {"image": "${{ steps.promo.outputs.image }}"}
+
+      - name: Verify dispatch token for cross-repo
+        if: success() && steps.promo.outputs.repo != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.GH_PAT_REPO_DISPATCH }}" ]; then
+            echo "Missing secret GH_PAT_REPO_DISPATCH for cross-repo dispatch to ${{ steps.promo.outputs.repo }}." >&2
+            echo "Provide a PAT with repo (classic) OR a fine-grained PAT with Actions: Read+write and Contents: Read+write on the target repo." >&2
+            exit 1
+          fi
+
+      - name: Dispatch promotion (cross-repo)
+        if: success() && steps.promo.outputs.repo != github.repository
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GH_PAT_REPO_DISPATCH }}
+          repository: ${{ steps.promo.outputs.repo }}
+          event-type: frontend-image-promote
+          client-payload: |
+            {"image": "${{ steps.promo.outputs.image }}"}
+
       - name: Expose deployment endpoints
         id: expose_endpoints
         run: |
