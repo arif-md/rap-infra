@@ -18,6 +18,13 @@ jobs:
       contents: read
     env:
       TARGET_ENV: test
+      # Expose mail secrets as masked env so we can use them in 'if' (secrets context is not allowed in if)
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -213,16 +220,16 @@ jobs:
           cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Email approver (optional)
-        if: ${{ secrets.MAIL_SERVER && secrets.MAIL_USERNAME && secrets.MAIL_PASSWORD && secrets.MAIL_TO }}
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ${{ secrets.MAIL_SERVER }}
-          server_port: ${{ secrets.MAIL_PORT || 587 }}
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
           subject: "[Approval Needed] Promote frontend to test"
-          to: ${{ secrets.MAIL_TO }}
-          from: ${{ secrets.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}
+          to: ${{ env.MAIL_TO }}
+          from: ${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}
           content_type: text/plain
           body: |
             A deployment to the 'test' environment is pending approval.
@@ -302,6 +309,12 @@ jobs:
       contents: read
     env:
       TARGET_ENV: prod
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
