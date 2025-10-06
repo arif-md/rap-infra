@@ -230,7 +230,6 @@ jobs:
           subject: "[Approval Needed] Promote frontend to test"
           to: ${{ env.MAIL_TO }}
           from: ${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}
-          content_type: text/plain
           body: |
             A deployment to the 'test' environment is pending approval.
 
