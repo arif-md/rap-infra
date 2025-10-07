@@ -133,6 +133,11 @@ jobs:
           SRC_PATH="${SRC_IMAGE#*/}"
           SRC_REPO="${SRC_PATH%@*}"
 
+          # Target ACR/repo context (for previously deployed digest)
+          TGT_ENV='${{ steps.prep.outputs.env }}'
+          TGT_ACR='${{ steps.prep.outputs.acr }}'
+          TGT_REPO="raptor/frontend-${TGT_ENV}"
+
           PREV_DIGEST='${{ steps.current.outputs.digest }}'
 
           # Detect if Azure CLI is authenticated; if not, skip ACR lookups
@@ -143,23 +148,39 @@ jobs:
           get_commit_from_digest() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then return 0; fi
+            local TAGS=""
             if [ "$AZ_READY" -eq 1 ]; then
               TAGS=$(az acr manifest show-metadata -n "$reg" --subscription "$SUB" --repository "$repo" --digest "$dig" --query "tags[]" -o tsv 2>/dev/null || true)
               if [ -z "$TAGS" ]; then
                 TAGS=$(az acr repository show-manifests -n "$reg" --subscription "$SUB" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
               fi
-            else
-              TAGS=""
             fi
-            echo "$TAGS" | tr '\t' '\n' | grep -E '^[0-9a-f]{7,40}$' | head -n1 || true
+            # Extract first hex-looking commit id from tags (supports e.g. "sha-<hex>", "commit-<hex>", or raw hex)
+            for t in $TAGS; do
+              HEX=$(echo "$t" | grep -oE '[0-9a-f]{7,40}' | head -n1 || true)
+              if [ -n "$HEX" ]; then
+                echo "$HEX"
+                return 0
+              fi
+            done
+            return 0
           }
 
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ "$AZ_READY" -eq 1 ]; then
+            # New commit from source (dev) registry/repo
             NEW_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
-            PREV_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            # Previous commit: try target (test) first, then source (dev) as fallback
+            if [ -n "$TGT_ACR" ]; then
+              PREV_COMMIT_SHORT=$(get_commit_from_digest "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST")
+            fi
+            if [ -z "$PREV_COMMIT_SHORT" ]; then
+              PREV_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            fi
           fi
+
+          echo "Resolved commit tags: NEW='$NEW_COMMIT_SHORT' PREV='$PREV_COMMIT_SHORT'"
 
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
           git fetch --prune --unshallow 2>/dev/null || true
@@ -173,6 +194,8 @@ jobs:
 
           NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT")
           PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT")
+
+          echo "Resolved SHAs: NEW='$NEW_SHA' PREV='$PREV_SHA'"
 
           FRONTEND_SUBDIR="frontend"
           REPO_URL="https://github.com/${{ github.repository }}"
