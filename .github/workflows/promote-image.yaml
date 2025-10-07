@@ -138,6 +138,11 @@ jobs:
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
 
+          # Initialize Azure CLI readiness and subscription early (used by fallbacks below)
+          AZ_READY=0
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
+
           PREV_IMAGE='${{ steps.current.outputs.image }}'
           PREV_DIGEST='${{ steps.current.outputs.digest }}'
           # If previously deployed image was tag-based (e.g., promoted-12345), resolve its digest from target ACR
@@ -167,10 +172,7 @@ jobs:
 
           echo "Resolved previous image/digest: IMAGE='${PREV_IMAGE:-}' DIGEST='${PREV_DIGEST:-}'"
 
-          # Detect if Azure CLI is authenticated; if not, skip ACR lookups
-          AZ_READY=0
-          if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
-          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          # (auth readiness already initialized above)
 
           get_commit_from_digest() {
             local reg="$1" repo="$2" dig="$3"
