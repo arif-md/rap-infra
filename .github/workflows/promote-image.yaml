@@ -138,7 +138,26 @@ jobs:
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
 
+          PREV_IMAGE='${{ steps.current.outputs.image }}'
           PREV_DIGEST='${{ steps.current.outputs.digest }}'
+          # If previously deployed image was tag-based (e.g., promoted-12345), resolve its digest from target ACR
+          if [ -z "$PREV_DIGEST" ] && [ -n "$PREV_IMAGE" ]; then
+            PREV_DOMAIN="${PREV_IMAGE%%/*}"
+            PREV_REG=$(echo "$PREV_DOMAIN" | sed 's/\.azurecr\.io$//')
+            PREV_PATH="${PREV_IMAGE#*/}"
+            PREV_REPO="${PREV_PATH%@*}"
+            PREV_TAG="${PREV_PATH#*:}"
+            # Only attempt if target ACR context known and prev image points there
+            if [ -n "$TGT_ACR" ] && [ "$PREV_REG" = "$TGT_ACR" ] && [ -n "$PREV_TAG" ] && [ "$AZ_READY" -eq 1 ]; then
+              # Query the manifest digest for the specific tag
+              CANDIDATE=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$PREV_REPO" --query "[?contains(join(',', tags), '$PREV_TAG')].digest | [0]" -o tsv 2>/dev/null || true)
+              if [ -n "$CANDIDATE" ]; then
+                PREV_DIGEST="$CANDIDATE"
+              fi
+            fi
+          fi
+
+          echo "Resolved previous image/digest: IMAGE='${PREV_IMAGE:-}' DIGEST='${PREV_DIGEST:-}'"
 
           # Detect if Azure CLI is authenticated; if not, skip ACR lookups
           AZ_READY=0
