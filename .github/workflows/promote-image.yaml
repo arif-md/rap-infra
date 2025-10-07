@@ -196,8 +196,7 @@ jobs:
               if [ -z "$COMMITS" ]; then
                 COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" || true)
               fi
-              printf '%s
-' "$COMMITS" | while IFS='|' read -r H A D M; do
+              printf "%s\n" "$COMMITS" | while IFS='|' read -r H A D M; do
                 ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
                 echo "    <tr>\n      <td><a href=\"${REPO_URL}/commit/${H}\">${H}</a></td>\n      <td>${A}</td>\n      <td>${D}</td>\n      <td>${ESC_M}</td>\n    </tr>"
               done
