@@ -12,6 +12,7 @@ on:
 jobs:
   prepare-and-notify:
     name: Prepare & Notify
+    environment: preflight
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -34,6 +35,7 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
 
       - name: Install Azure Developer CLI (azd)
         run: |
@@ -94,9 +96,10 @@ jobs:
           set -euo pipefail
           ENV='${{ steps.prep.outputs.env }}'
           RG='${{ steps.prep.outputs.rg }}'
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
-          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --subscription "$SUB" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
           echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
@@ -118,14 +121,15 @@ jobs:
           # Detect if Azure CLI is authenticated; if not, skip ACR lookups
           AZ_READY=0
           if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
 
           get_commit_from_digest() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then return 0; fi
             if [ "$AZ_READY" -eq 1 ]; then
-              TAGS=$(az acr manifest show-metadata -n "$reg" --repository "$repo" --digest "$dig" --query "tags[]" -o tsv 2>/dev/null || true)
+              TAGS=$(az acr manifest show-metadata -n "$reg" --subscription "$SUB" --repository "$repo" --digest "$dig" --query "tags[]" -o tsv 2>/dev/null || true)
               if [ -z "$TAGS" ]; then
-                TAGS=$(az acr repository show-manifests -n "$reg" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
+                TAGS=$(az acr repository show-manifests -n "$reg" --subscription "$SUB" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
               fi
             else
               TAGS=""
