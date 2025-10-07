@@ -230,12 +230,8 @@ jobs:
               echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
               echo "  <tbody>"
               while IFS='|' read -r H A D M; do
-                # Escape message to safe HTML
-                ESC_M=$(python3 - <<'PY' <<< "$M"
-import html,sys
-print(html.escape(sys.stdin.read()), end='')
-PY
-)
+                # Escape message to safe HTML using Python one-liner (avoids here-doc parsing issues)
+                ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
                 echo "    <tr>\n      <td><a href=\"${REPO_URL}/commit/${H}\">${H}</a></td>\n      <td>${A}</td>\n      <td>${D}</td>\n      <td>${ESC_M}</td>\n    </tr>"
               done < <(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true)
               echo "  </tbody>"
