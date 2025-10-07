@@ -182,7 +182,9 @@ jobs:
 
           FRONTEND_SUBDIR="frontend"
           REPO_URL="https://github.com/${{ github.repository }}"
+          BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
+          HTML_FILE="release-notes.html"
 
           {
             echo "## Release notes: Promote frontend to test"
@@ -209,6 +211,42 @@ jobs:
             fi
           } > "$NOTES_FILE"
 
+          # Build an HTML version with a tabular changelog
+          {
+            echo "<h2>Release notes: Promote frontend to test</h2>"
+            echo "<p><strong>Target environment:</strong> test</p>"
+            echo "<p><strong>New image:</strong> ${SRC_IMAGE}</p>"
+            if [ -n "$PREV_DIGEST" ]; then
+              echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>"
+            else
+              echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>"
+            fi
+            echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>"
+
+            if [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
+              echo "<h3>List of changes since last successful deployment</h3>"
+              echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA}...${NEW_SHA}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
+              echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
+              echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
+              echo "  <tbody>"
+              while IFS='|' read -r H A D M; do
+                # Escape message to safe HTML
+                ESC_M=$(python3 - <<'PY' <<< "$M"
+import html,sys
+print(html.escape(sys.stdin.read()), end='')
+PY
+)
+                echo "    <tr>\n      <td><a href=\"${REPO_URL}/commit/${H}\">${H}</a></td>\n      <td>${A}</td>\n      <td>${D}</td>\n      <td>${ESC_M}</td>\n    </tr>"
+              done < <(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true)
+              echo "  </tbody>"
+              echo "</table>"
+            elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
+              echo "<p>First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}.</p>"
+            else
+              echo "<p>Could not resolve commit SHAs from image tags. Showing image digests only.</p>"
+            fi
+          } > "$HTML_FILE"
+
           echo "Generated release notes:"; echo "-------------------------"; cat "$NOTES_FILE"; echo "\n-------------------------"
 
           # Set output for later steps (email) and append to job summary
@@ -216,8 +254,13 @@ jobs:
             echo 'body<<EOF'
             cat "$NOTES_FILE"
             echo 'EOF'
+            echo 'html<<EOF'
+            cat "$HTML_FILE"
+            echo 'EOF'
           } >> "$GITHUB_OUTPUT"
           cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Email approver (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
@@ -229,18 +272,14 @@ jobs:
           password: ${{ env.MAIL_PASSWORD }}
           subject: "[Approval Needed] Promote frontend to test"
           to: ${{ env.MAIL_TO }}
-          from: ${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}
-          body: |
-            A deployment to the 'test' environment is pending approval.
-
-            Image: ${{ steps.inp.outputs.srcImage }}
-            Target: Azure Container Apps (test)
-
-            Review & approve:
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            Release notes:
-            ${{ steps.relnotes.outputs.body }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: |-
+            <p>A deployment to the '<strong>test</strong>' environment is pending approval.</p>
+            <p><strong>Image:</strong> ${{ steps.inp.outputs.srcImage }}<br>
+               <strong>Target:</strong> Azure Container Apps (test)</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
+               <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
+            ${{ steps.relnotes.outputs.html }}
 
       - name: Prepare azd env
         shell: bash
