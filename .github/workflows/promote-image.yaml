@@ -81,8 +81,25 @@ jobs:
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
           RG='${{ vars.AZURE_RESOURCE_GROUP }}'
           LOC='${{ vars.AZURE_LOCATION }}'
+          # Allow passing values from repository_dispatch payload
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            P_RG='${{ github.event.client_payload.resourceGroup }}'
+            [ -z "$P_RG" ] && P_RG='${{ github.event.client_payload.rg }}'
+            P_LOC='${{ github.event.client_payload.location }}'
+            [ -z "$P_LOC" ] && P_LOC='${{ github.event.client_payload.loc }}'
+            P_ACR='${{ github.event.client_payload.acrName }}'
+            [ -z "$P_ACR" ] && P_ACR='${{ github.event.client_payload.acr }}'
+            [ -n "$P_RG" ] && RG="$P_RG"
+            [ -n "$P_LOC" ] && LOC="$P_LOC"
+            [ -n "$P_ACR" ] && ACR_NAME="$P_ACR"
+          fi
           if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
             echo "[prepare-and-notify] AZURE_* variables are not available at repo level (likely defined on the 'test' environment). Proceeding without them."
+          fi
+          # Fallback RG naming convention if not provided (aligns with ensure-acr scripts)
+          if [ -z "$RG" ]; then
+            RG="rg-raptor-${TARGET_ENV}"
+            echo "[prepare-and-notify] Using fallback resource group: $RG"
           fi
           [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
           [ -n "$RG" ] && echo "rg=$RG" >> $GITHUB_OUTPUT

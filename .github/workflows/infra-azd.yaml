@@ -210,7 +210,7 @@ jobs:
           repository: ${{ steps.promo.outputs.repo }}
           event-type: frontend-image-promote
           client-payload: |
-            {"image": "${{ steps.promo.outputs.image }}"}
+            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}"}
 
       - name: Verify dispatch token for cross-repo
         if: success() && steps.promo.outputs.repo != github.repository
@@ -231,7 +231,7 @@ jobs:
           repository: ${{ steps.promo.outputs.repo }}
           event-type: frontend-image-promote
           client-payload: |
-            {"image": "${{ steps.promo.outputs.image }}"}
+            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}"}
 
       - name: Expose deployment endpoints
         id: expose_endpoints
