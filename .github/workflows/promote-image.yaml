@@ -157,6 +157,14 @@ jobs:
             fi
           fi
 
+          # If still no previous digest (e.g., lacking permissions to read Container App), fall back to latest digest in target ACR repo
+          if [ -z "$PREV_DIGEST" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
+            LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+            if [ -n "$LATEST" ]; then
+              PREV_DIGEST="$LATEST"
+            fi
+          fi
+
           echo "Resolved previous image/digest: IMAGE='${PREV_IMAGE:-}' DIGEST='${PREV_DIGEST:-}'"
 
           # Detect if Azure CLI is authenticated; if not, skip ACR lookups
