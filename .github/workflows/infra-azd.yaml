@@ -42,35 +42,46 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install Azure Developer CLI (azd)
+      - name: Setup Azure Developer CLI (preferred)
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
         run: |
-          curl -fsSL https://aka.ms/install-azd.sh | bash
-          # Ensure the newly installed azd is on PATH for this job
-          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
-          echo "PATH updated to include: $HOME/.azure-dev/bin"
+          if ! command -v azd >/dev/null 2>&1; then
+            echo "setup-azd failed; installing via script"
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
           azd version
 
+      # - name: azd auth login (OIDC via provider)
+      #   run: |
+      #     echo "Authenticating azd using GitHub OIDC provider"
+      #     azd auth login \
+      #       --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+      #       --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+      #       --federated-credential-provider github
 
-      - name: azd auth login (OIDC via provider)
-        run: |
-          echo "Authenticating azd using GitHub OIDC provider"
-          azd auth login \
-            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
-            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-            --federated-credential-provider github
+      # - name: Verify az/azd auth
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     # Verify Azure CLI is authenticated for this job
+      #     az account show -o none
+      #     az account get-access-token -o none
+      #     # Verify azd is installed and on PATH
+      #     command -v azd >/dev/null 2>&1
+      #     azd version
 
-      - name: Verify az/azd auth
+      - name: "Sanity: az context"
         shell: bash
         run: |
           set -euo pipefail
-          # Verify Azure CLI is authenticated for this job
-          az account show -o none
-          az account get-access-token -o none
-          # Verify azd is installed and on PATH
-          command -v azd >/dev/null 2>&1
-          azd version
-
-
+          CTX=$(az account show --query "{tenant:tenantId, sub:id, user:user.name}" -o tsv)
+          echo "AZ context: $CTX"
 
       - name: Enable azd alpha features (deployment stacks)
         run: azd config set alpha.deployment.stacks on
@@ -78,8 +89,15 @@ jobs:
       - name: Ensure AZURE_ENV_NAME default
         run: |
           if [ -z "$AZURE_ENV_NAME" ]; then
+            # If not provided via repo/environment vars, derive from the ref that triggered the run.
+            # GITHUB_REF_NAME is the short branch/tag (e.g., "main" or "v1.2.3"). Default to "dev" if unavailable.
             NAME="${GITHUB_REF_NAME:-dev}"
+            # Normalize to a safe environment name:
+            #  - tr: make lowercase
+            #  - sed 's/[^a-z0-9-]/-/g': replace any character that's not a-z, 0-9, or '-' with '-'
+            #    This helps comply with Azure naming constraints for resources derived from env name.
             SAFE=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            # Write the resolved value to GITHUB_ENV to make it available to subsequent steps in this job.
             echo "AZURE_ENV_NAME=$SAFE" >> $GITHUB_ENV
             echo "Using fallback AZURE_ENV_NAME: $SAFE"
           else
