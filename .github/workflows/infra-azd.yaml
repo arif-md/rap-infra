@@ -210,8 +210,17 @@ jobs:
           echo "repo=$TARGET" >> $GITHUB_OUTPUT
           IMG='${{ steps.effective_image.outputs.configuredImage }}'
           echo "image=$IMG" >> $GITHUB_OUTPUT
+          # Resolve the source repository for commit history / compare links
+          # Prefer value provided by the originating event payload, then a configured var, else fall back to current repo
+          SRC_REPO='${{ github.event.client_payload.sourceRepo || vars.FRONTEND_SOURCE_REPO || '' }}'
+          if [ -z "$SRC_REPO" ]; then
+            SRC_REPO="$GITHUB_REPOSITORY"
+            echo "Warning: sourceRepo not provided in payload or vars; falling back to $SRC_REPO"
+          fi
+          echo "sourceRepo=$SRC_REPO" >> $GITHUB_OUTPUT
           echo "Promotion will target repo: $TARGET" 
           echo "Image to promote: $IMG"
+          echo "Source repo: $SRC_REPO"
 
       - name: Log and wait before promotion dispatch
         if: success() && steps.promo.outputs.image && steps.promo.outputs.repo
@@ -228,10 +237,10 @@ jobs:
           repository: ${{ steps.promo.outputs.repo }}
           event-type: frontend-image-promote
           client-payload: |
-            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}"}
+            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}", "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}"}
 
       - name: Verify dispatch token for cross-repo
-        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != github.repository
+        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != '' && steps.promo.outputs.repo != github.repository
         shell: bash
         run: |
           set -euo pipefail
@@ -249,7 +258,7 @@ jobs:
           repository: ${{ steps.promo.outputs.repo }}
           event-type: frontend-image-promote
           client-payload: |
-            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}"}
+            {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}", "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}"}
 
       - name: Expose deployment endpoints
         id: expose_endpoints

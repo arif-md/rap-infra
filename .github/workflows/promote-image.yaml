@@ -105,6 +105,16 @@ jobs:
           [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
           [ -n "$RG" ] && echo "rg=$RG" >> $GITHUB_OUTPUT
           [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
+          # Resolve the source repository that produced the image for links in release notes
+          SRC_REPO=""
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SRC_REPO='${{ github.event.client_payload.sourceRepo }}'
+          else
+            SRC_REPO='${{ inputs.sourceRepo }}'
+          fi
+          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ vars.FRONTEND_REPO }}'; fi
+          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ github.repository }}'; fi
+          echo "srcRepo=$SRC_REPO" >> $GITHUB_OUTPUT
           echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
 
       - name: Capture current deployed image (before promotion)
@@ -240,7 +250,7 @@ jobs:
           echo "Resolved SHAs: NEW='$NEW_SHA' PREV='$PREV_SHA'"
 
           FRONTEND_SUBDIR="frontend"
-          REPO_URL="https://github.com/${{ github.repository }}"
+          REPO_URL="https://github.com/${{ steps.prep.outputs.srcRepo || github.repository }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
           HTML_FILE="release-notes.html"
@@ -287,19 +297,28 @@ jobs:
             if [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
               echo "<h3>List of changes since last successful deployment</h3>"
               echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA}...${NEW_SHA}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
-              echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
-              echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
-              echo "  <tbody>"
-              COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true)
-              if [ -z "$COMMITS" ]; then
-                COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" || true)
+              if [ "${{ steps.prep.outputs.srcRepo }}" != "${{ github.repository }}" ]; then
+                echo "<p>(Commit table omitted because the source repository differs: <code>${{ steps.prep.outputs.srcRepo }}</code>.)</p>"
+              else
+                echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
+                echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
+                echo "  <tbody>"
+                COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true)
+                if [ -z "$COMMITS" ]; then
+                  COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" || true)
+                fi
+                ROWS=$(printf "%s\n" "$COMMITS" | awk 'NF' | wc -l | tr -d ' ')
+                if [ "${ROWS:-0}" -eq 0 ]; then
+                  echo "    <tr><td colspan=\"4\">(no commits found)</td></tr>"
+                else
+                  printf "%s\n" "$COMMITS" | awk 'NF' | while IFS='|' read -r H A D M; do
+                    ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
+                    printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$H" "$H" "$A" "$D" "$ESC_M"
+                  done
+                fi
+                echo "  </tbody>"
+                echo "</table>"
               fi
-              printf "%s\n" "$COMMITS" | while IFS='|' read -r H A D M; do
-                ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
-                printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$H" "$H" "$A" "$D" "$ESC_M"
-              done
-              echo "  </tbody>"
-              echo "</table>"
             elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
               echo "<p>First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}.</p>"
             else
