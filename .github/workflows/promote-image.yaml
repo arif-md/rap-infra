@@ -283,7 +283,7 @@ jobs:
               fi
               printf "%s\n" "$COMMITS" | while IFS='|' read -r H A D M; do
                 ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
-                echo "    <tr>\n      <td><a href=\"${REPO_URL}/commit/${H}\">${H}</a></td>\n      <td>${A}</td>\n      <td>${D}</td>\n      <td>${ESC_M}</td>\n    </tr>"
+                printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$H" "$H" "$A" "$D" "$ESC_M"
               done
               echo "  </tbody>"
               echo "</table>"
@@ -306,6 +306,20 @@ jobs:
           cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
           printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check email prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for v in MAIL_SERVER MAIL_USERNAME MAIL_PASSWORD MAIL_TO; do
+            if [ -z "${!v:-}" ]; then missing+=("$v"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Email will be skipped. Missing variables: ${missing[*]}"
+          else
+            echo "Email prerequisites present."
+          fi
 
       - name: Email approver (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
