@@ -118,6 +118,56 @@ How to create and add the token
 3) Verify
 	- Trigger a promotion to `test`. In the job summary and the approval email, the “List of changes” section should include a commit list/table instead of being empty.
 
+Recommended: stamp OCI labels in the frontend build
+
+To make changelog resolution resilient even when registry tags are pruned, stamp these OCI labels when building the frontend image. The promotion workflow can recover the commit directly from the image config (no tag lookups required):
+
+- org.opencontainers.image.revision = the full git SHA
+- org.opencontainers.image.source = owner/repo (e.g., `arif-md/rap-frontend`)
+- org.opencontainers.image.ref.name = branch or ref (e.g., `main`)
+
+Example (GitHub Actions using docker/build-push-action):
+
+```yaml
+- name: Build and push frontend image
+	uses: docker/build-push-action@v6
+	with:
+		context: .
+		platforms: linux/amd64
+		push: true
+		tags: |
+			${{ env.ACR_NAME }}.azurecr.io/raptor/frontend-dev:${{ github.sha }}
+			${{ env.ACR_NAME }}.azurecr.io/raptor/frontend-dev:${{ github.sha || github.ref_name }}
+			${{ env.ACR_NAME }}.azurecr.io/raptor/frontend-dev:build-${{ github.run_id }}
+		labels: |
+			org.opencontainers.image.title=rap-frontend
+			org.opencontainers.image.source=${{ github.repository }}
+			org.opencontainers.image.revision=${{ github.sha }}
+			org.opencontainers.image.ref.name=${{ github.ref_name }}
+```
+
+Example (plain Docker CLI):
+
+```bash
+docker build \
+	--label org.opencontainers.image.title=rap-frontend \
+	--label org.opencontainers.image.source=$GITHUB_REPOSITORY \
+	--label org.opencontainers.image.revision=$GITHUB_SHA \
+	--label org.opencontainers.image.ref.name=${GITHUB_REF_NAME:-main} \
+	-t $ACR_NAME.azurecr.io/raptor/frontend-dev:$GITHUB_SHA \
+	-t $ACR_NAME.azurecr.io/raptor/frontend-dev:build-$GITHUB_RUN_ID \
+	.
+
+docker push $ACR_NAME.azurecr.io/raptor/frontend-dev:$GITHUB_SHA
+docker push $ACR_NAME.azurecr.io/raptor/frontend-dev:build-$GITHUB_RUN_ID
+```
+
+How it’s used
+
+- The promotion workflow first tries to map digest → commit using ACR tags (fast path).
+- If tags are missing/pruned, it falls back to reading `org.opencontainers.image.revision` from the image config in ACR and uses that SHA to generate the compare link and commit list.
+- No changes are needed in the infra repo once the labels are stamped during build.
+
 Manual trigger
 
 - You can run the promotion workflow manually via GitHub UI and provide an `image@digest` input.
