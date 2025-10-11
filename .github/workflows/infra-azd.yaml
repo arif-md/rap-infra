@@ -255,6 +255,15 @@ jobs:
         id: expose_endpoints
         run: |
           FQDN=$(azd env get-value frontendFqdn || true)
+          # Fallback: if azd env doesn't have it yet, read from the Container App and persist back
+          if [ -z "$FQDN" ]; then
+            APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
+            az extension add -n containerapp -y >/dev/null 2>&1 || true
+            FQDN=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ -n "$FQDN" ]; then
+              azd env set frontendFqdn "$FQDN" >/dev/null || true
+            fi
+          fi
           echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
           echo "DEPLOY_URL=$FQDN" >> $GITHUB_ENV
           if [ -n "$FQDN" ]; then
