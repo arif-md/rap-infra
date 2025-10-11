@@ -92,6 +92,32 @@ Required variables/secrets
 	- test: `AZURE_ACR_NAME=ngraptortest`, `AZURE_RESOURCE_GROUP=rg-raptor-test`, `AZURE_LOCATION=<region>`
 - Environment secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` must exist for each environment (`dev`, `test`, and later `prod`).
 
+Optional (recommended for private frontend repo): FRONTEND_REPO_READ_TOKEN
+
+To populate the release notes with a commit list when your frontend repository is private, the promotion workflow uses an optional secret `FRONTEND_REPO_READ_TOKEN` to call the GitHub Compare API against the frontend repo.
+
+- What it does: Enables the workflow in this infra repo to fetch commits from your private frontend repo and render them in both the markdown notes and the approval email.
+- Where it’s used: `.github/workflows/promote-image.yaml` in the `prepare-and-notify` job. If the secret is not provided, the workflow falls back to the default token (which usually cannot read a different private repo), and the commit table may be empty—though the compare link will still work for authorized viewers.
+
+How to create and add the token
+
+1) Create a Fine-grained personal access token (recommended)
+	- GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token
+	- Repository access: Only select your frontend repository (e.g., `arif-md/rap-frontend`)
+	- Permissions → Repository permissions:
+	  - Contents: Read
+	  - Metadata: Read (typically included by default)
+	- Set an expiration date and keep it minimal.
+
+2) Add the token as a secret
+	- In the infra repo (this repository): Settings → Secrets and variables → Actions → New repository secret
+	- Name: `FRONTEND_REPO_READ_TOKEN`
+	- Value: paste the token
+	- Alternatively, you can store it as an Environment secret under the `preflight` environment; the workflow references `${{ secrets.FRONTEND_REPO_READ_TOKEN }}` which resolves environment or repo secrets with the same name.
+
+3) Verify
+	- Trigger a promotion to `test`. In the job summary and the approval email, the “List of changes” section should include a commit list/table instead of being empty.
+
 Manual trigger
 
 - You can run the promotion workflow manually via GitHub UI and provide an `image@digest` input.
@@ -99,6 +125,8 @@ Manual trigger
 Cross-repo dispatch
 
 - If your frontend and infra are in different repositories, ensure the frontend repo has a PAT secret `GH_PAT_REPO_DISPATCH` in its `dev` environment. That PAT must have access to this infra repo with Actions Read/Write to send repository_dispatch events (`frontend-image-pushed` and `frontend-image-promote`).
+
+Note: `FRONTEND_REPO_READ_TOKEN` (read access from infra → frontend for changelog) is separate from `GH_PAT_REPO_DISPATCH` (write permission from frontend → infra to trigger workflows). Use distinct tokens with the minimum scopes needed.
 
 Prod later:
 

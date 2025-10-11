@@ -19,6 +19,8 @@ jobs:
       contents: read
     env:
       TARGET_ENV: test
+      # Optional: fine-grained PAT with read access to the private frontend repo
+      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
       MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
@@ -305,7 +307,27 @@ jobs:
                   git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" || echo "(no commits found)"
                 fi
               else
-                echo "(Commit list omitted: source repository differs or SHAs unresolved)"
+                # Cross-repo or SHAs unresolved: fetch commits via GitHub API compare endpoint
+                COMP_BASE="${PREV_SHA:-$PREV_COMMIT_SHORT}"
+                COMP_HEAD="${NEW_SHA:-$NEW_COMMIT_SHORT}"
+                API_URL="https://api.github.com/repos/${{ steps.prep.outputs.srcRepo }}/compare/${COMP_BASE}...${COMP_HEAD}"
+                AUTH_H="Authorization: Bearer ${FRONTEND_REPO_READ_TOKEN:-${GITHUB_TOKEN}}"
+                RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' -H "$AUTH_H" "$API_URL" || true)
+                # If token lacks cross-repo access or repo is public, retry unauthenticated
+                if echo "$RESP" | grep -qE 'Resource not accessible by integration|Not Found|Bad credentials'; then
+                  RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' "$API_URL" || true)
+                fi
+                MD_COMMITS=$(printf '%s' "$RESP" | jq -r '
+                  (.commits // []) |
+                  map("- " + (.sha[0:7]) + " " + ((.commit.message | split("\n")[0]) // "") +
+                      " (" + ((.commit.author.name) // "") + ", " + ((.commit.author.date[0:10]) // "") + ")") |
+                  .[]
+                ' 2>/dev/null || true)
+                if [ -n "$MD_COMMITS" ]; then
+                  echo "$MD_COMMITS"
+                else
+                  echo "(no commits found)"
+                fi
               fi
             elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
               echo "First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
@@ -328,8 +350,34 @@ jobs:
             if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
               echo "<h3>List of changes since last successful deployment</h3>"
               echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
+              COMP_BASE="${PREV_SHA:-$PREV_COMMIT_SHORT}"
+              COMP_HEAD="${NEW_SHA:-$NEW_COMMIT_SHORT}"
               if [ "${{ steps.prep.outputs.srcRepo }}" != "${{ github.repository }}" ] || [ -z "$NEW_SHA" ] || [ -z "$PREV_SHA" ]; then
-                echo "<p>(Commit table omitted because the source repository differs: <code>${{ steps.prep.outputs.srcRepo }}</code>.)</p>"
+                # Cross-repo or SHAs unresolved: fetch commits via GitHub API compare endpoint and render table
+                API_URL="https://api.github.com/repos/${{ steps.prep.outputs.srcRepo }}/compare/${COMP_BASE}...${COMP_HEAD}"
+                AUTH_H="Authorization: Bearer ${FRONTEND_REPO_READ_TOKEN:-${GITHUB_TOKEN}}"
+                RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' -H "$AUTH_H" "$API_URL" || true)
+                if echo "$RESP" | grep -qE 'Resource not accessible by integration|Not Found|Bad credentials'; then
+                  RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' "$API_URL" || true)
+                fi
+                PARSED=$(printf '%s' "$RESP" | jq -r '
+                  (.commits // []) |
+                  map([.sha[0:7], .sha, (.commit.author.name // ""), (.commit.author.date[0:10] // ""), (.commit.message | split("\n")[0] // "")] | @tsv) |
+                  .[]
+                ' 2>/dev/null || true)
+                if [ -n "$PARSED" ]; then
+                  echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
+                  echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
+                  echo "  <tbody>"
+                  printf '%s\n' "$PARSED" | while IFS=$'\t' read -r SH SFULL A D M; do
+                    ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
+                    printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$SFULL" "$SH" "$A" "$D" "$ESC_M"
+                  done
+                  echo "  </tbody>"
+                  echo "</table>"
+                else
+                  echo "<p>(no commits found)</p>"
+                fi
               else
                 echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
                 echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
