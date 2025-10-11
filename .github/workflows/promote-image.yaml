@@ -78,9 +78,12 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV=${TARGET_ENV}
-          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
-          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
-          LOC='${{ vars.AZURE_LOCATION }}'
+          # Intentionally avoid using Environment-scoped vars here because this job runs under 'preflight'
+          # and those vars may point to DEV. We'll prefer values from the dispatch payload;
+          # otherwise derive by convention for the TARGET_ENV.
+          ACR_NAME=""
+          RG=""
+          LOC=""
           # Allow passing values from repository_dispatch payload
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             P_RG='${{ github.event.client_payload.resourceGroup }}'
@@ -93,14 +96,12 @@ jobs:
             [ -n "$P_LOC" ] && LOC="$P_LOC"
             [ -n "$P_ACR" ] && ACR_NAME="$P_ACR"
           fi
-          if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
-            echo "[prepare-and-notify] AZURE_* variables are not available at repo level (likely defined on the 'test' environment). Proceeding without them."
-          fi
           # Fallback RG naming convention if not provided (aligns with ensure-acr scripts)
           if [ -z "$RG" ]; then
             RG="rg-raptor-${TARGET_ENV}"
-            echo "[prepare-and-notify] Using fallback resource group: $RG"
+            echo "[prepare-and-notify] Using fallback resource group: $RG (preflight job)"
           fi
+          # Note: LOC/ACR may remain empty in preflight; later logic tolerates this and focuses on RG for lookup
           [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
           [ -n "$RG" ] && echo "rg=$RG" >> $GITHUB_OUTPUT
           [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
@@ -114,9 +115,12 @@ jobs:
           ENV='${{ steps.prep.outputs.env }}'
           RG='${{ steps.prep.outputs.rg }}'
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if [ -z "$SUB" ]; then
+            SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          fi
           APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
-          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --subscription "$SUB" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
           echo "ENV=$ENV"
           echo "RG=$RG"
@@ -124,6 +128,9 @@ jobs:
           echo "APP_NAME=$APP_NAME"
           echo "image=$CURR_IMG"
           echo "digest=$CURR_DIGEST"
+          if [ -z "$CURR_IMG" ]; then
+            echo "[prepare-and-notify] Warning: Could not resolve current image for Container App '$APP_NAME' in RG '$RG' (sub '${SUB:-default}')." >&2
+          fi
           echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
