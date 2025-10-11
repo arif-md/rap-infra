@@ -205,6 +205,25 @@ jobs:
 
           # (auth readiness already initialized above)
 
+          is_commit_like() {
+            # Return 0 (true) if the tag looks like a commit id (7-40 hex with at least one letter a-f)
+            local s="$1"
+            # allow prefixes like sha-<hex> or commit-<hex>
+            local core="$s"
+            if echo "$s" | grep -qiE '^(sha|commit)-[0-9a-f]{7,40}$'; then
+              core=$(echo "$s" | sed -E 's/^(sha|commit)-//I')
+            fi
+            if echo "$core" | grep -qiE '^[0-9a-f]{7,40}$' && echo "$core" | grep -q '[a-fA-F]'; then
+              return 0
+            fi
+            return 1
+          }
+
+          strip_prefix_commit() {
+            local s="$1"
+            echo "$s" | sed -E 's/^(sha|commit)-//I'
+          }
+
           get_commit_from_digest() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then return 0; fi
@@ -215,11 +234,9 @@ jobs:
                 TAGS=$(az acr repository show-manifests -n "$reg" --subscription "$SUB" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
               fi
             fi
-            # Extract first hex-looking commit id from tags (supports e.g. "sha-<hex>", "commit-<hex>", or raw hex)
             for t in $TAGS; do
-              HEX=$(echo "$t" | grep -oE '[0-9a-f]{7,40}' | head -n1 || true)
-              if [ -n "$HEX" ]; then
-                echo "$HEX"
+              if is_commit_like "$t"; then
+                strip_prefix_commit "$t"
                 return 0
               fi
             done
@@ -242,20 +259,22 @@ jobs:
 
           echo "Resolved commit tags: NEW='$NEW_COMMIT_SHORT' PREV='$PREV_COMMIT_SHORT'"
 
-          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
-          git fetch --prune --unshallow 2>/dev/null || true
-          git fetch --all --tags --force
+          # Only try to resolve SHAs locally if the source repo equals this repo
+          NEW_SHA=""; PREV_SHA=""
+          if [ "${{ steps.prep.outputs.srcRepo }}" = "${{ github.repository }}" ]; then
+            git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+            git fetch --prune --unshallow 2>/dev/null || true
+            git fetch --all --tags --force 2>/dev/null || true
+            to_full_sha() {
+              local short="$1"
+              if [ -z "$short" ]; then return 0; fi
+              git rev-parse "$short" 2>/dev/null || true
+            }
+            NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT")
+            PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT")
+          fi
 
-          to_full_sha() {
-            local short="$1"
-            if [ -z "$short" ]; then return 0; fi
-            git rev-parse "$short" 2>/dev/null || true
-          }
-
-          NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT")
-          PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT")
-
-          echo "Resolved SHAs: NEW='$NEW_SHA' PREV='$PREV_SHA'"
+          echo "Resolved SHAs: NEW='${NEW_SHA:-$NEW_COMMIT_SHORT}' PREV='${PREV_SHA:-$PREV_COMMIT_SHORT}'"
 
           FRONTEND_SUBDIR="frontend"
           REPO_URL="https://github.com/${{ steps.prep.outputs.srcRepo || github.repository }}"
@@ -274,15 +293,19 @@ jobs:
               echo "- Previously deployed digest: (none - first promotion)"
             fi
             echo
-            if [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
+            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
               echo "### Changes (${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT})"
               echo
-              echo "Compare: ${REPO_URL}/compare/${PREV_SHA}...${NEW_SHA}"
+              echo "Compare: ${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
               echo
               echo "#### Commits (frontend/ or repo-wide)"
-              git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true
-              if ! git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" | grep -q .; then
-                git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" || echo "(no commits found)"
+              if [ "${{ steps.prep.outputs.srcRepo }}" = "${{ github.repository }}" ] && [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
+                git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true
+                if ! git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" | grep -q .; then
+                  git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" || echo "(no commits found)"
+                fi
+              else
+                echo "(Commit list omitted: source repository differs or SHAs unresolved)"
               fi
             elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
               echo "First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
@@ -302,10 +325,10 @@ jobs:
             fi
             echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>"
 
-            if [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
+            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
               echo "<h3>List of changes since last successful deployment</h3>"
-              echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA}...${NEW_SHA}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
-              if [ "${{ steps.prep.outputs.srcRepo }}" != "${{ github.repository }}" ]; then
+              echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
+              if [ "${{ steps.prep.outputs.srcRepo }}" != "${{ github.repository }}" ] || [ -z "$NEW_SHA" ] || [ -z "$PREV_SHA" ]; then
                 echo "<p>(Commit table omitted because the source repository differs: <code>${{ steps.prep.outputs.srcRepo }}</code>.)</p>"
               else
                 echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
