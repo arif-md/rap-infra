@@ -231,7 +231,7 @@ jobs:
             {"image": "${{ steps.promo.outputs.image }}", "resourceGroup": "${{ env.AZURE_RESOURCE_GROUP }}", "location": "${{ env.AZURE_LOCATION }}", "acrName": "${{ env.AZURE_ACR_NAME }}"}
 
       - name: Verify dispatch token for cross-repo
-        if: success() && steps.promo.outputs.repo != github.repository
+        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != github.repository
         shell: bash
         run: |
           set -euo pipefail
@@ -242,7 +242,7 @@ jobs:
           fi
 
       - name: Dispatch promotion (cross-repo)
-        if: success() && steps.promo.outputs.repo != github.repository
+        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != github.repository
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.GH_PAT_REPO_DISPATCH }}
