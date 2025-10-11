@@ -118,6 +118,8 @@ jobs:
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --subscription "$SUB" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
+          echo "image=$CURR_IMG"
+          echo "digest=$CURR_DIGEST"
           echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
