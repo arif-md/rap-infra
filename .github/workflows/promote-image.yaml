@@ -80,31 +80,38 @@ jobs:
           TARGET_ENV=${TARGET_ENV}
           # Intentionally avoid using Environment-scoped vars here because this job runs under 'preflight'
           # and those vars may point to DEV. We'll prefer values from the dispatch payload;
-          # otherwise derive by convention for the TARGET_ENV.
+          # otherwise derive by convention for the TARGET_ENV. Location will be derived from the RG.
           ACR_NAME=""
           RG=""
           LOC=""
-          # Allow passing values from repository_dispatch payload
+          SUB=""
+          # Allow passing values from repository_dispatch payload (target-specific only)
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            P_RG='${{ github.event.client_payload.resourceGroup }}'
-            [ -z "$P_RG" ] && P_RG='${{ github.event.client_payload.rg }}'
-            P_LOC='${{ github.event.client_payload.location }}'
-            [ -z "$P_LOC" ] && P_LOC='${{ github.event.client_payload.loc }}'
-            P_ACR='${{ github.event.client_payload.acrName }}'
-            [ -z "$P_ACR" ] && P_ACR='${{ github.event.client_payload.acr }}'
-            [ -n "$P_RG" ] && RG="$P_RG"
-            [ -n "$P_LOC" ] && LOC="$P_LOC"
-            [ -n "$P_ACR" ] && ACR_NAME="$P_ACR"
+            T_RG='${{ github.event.client_payload.targetResourceGroup }}'
+            [ -z "$T_RG" ] && T_RG='${{ github.event.client_payload.targetRg }}'
+            T_ACR='${{ github.event.client_payload.targetAcrName }}'
+            [ -z "$T_ACR" ] && T_ACR='${{ github.event.client_payload.targetAcr }}'
+            T_SUB='${{ github.event.client_payload.targetSubscriptionId }}'
+            [ -z "$T_SUB" ] && T_SUB='${{ github.event.client_payload.subscriptionId }}'
+            [ -n "$T_RG" ] && RG="$T_RG"
+            [ -n "$T_ACR" ] && ACR_NAME="$T_ACR"
+            [ -n "$T_SUB" ] && SUB="$T_SUB"
           fi
           # Fallback RG naming convention if not provided (aligns with ensure-acr scripts)
           if [ -z "$RG" ]; then
             RG="rg-raptor-${TARGET_ENV}"
             echo "[prepare-and-notify] Using fallback resource group: $RG (preflight job)"
           fi
+          # Derive location from resource group if possible
+          if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
+          if command -v az >/dev/null 2>&1; then
+            LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
+          fi
           # Note: LOC/ACR may remain empty in preflight; later logic tolerates this and focuses on RG for lookup
           [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
           [ -n "$RG" ] && echo "rg=$RG" >> $GITHUB_OUTPUT
           [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
+          [ -n "$SUB" ] && echo "sub=$SUB" >> $GITHUB_OUTPUT
           # Resolve the source repository that produced the image for links in release notes
           SRC_REPO=""
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
@@ -124,7 +131,8 @@ jobs:
           set -euo pipefail
           ENV='${{ steps.prep.outputs.env }}'
           RG='${{ steps.prep.outputs.rg }}'
-          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          SUB='${{ steps.prep.outputs.sub }}'
+          if [ -z "$SUB" ]; then SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'; fi
           if [ -z "$SUB" ]; then
             SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           fi
@@ -437,15 +445,16 @@ jobs:
           set -euo pipefail
           # Prefer environment-specific repo variables; fallback to shared ones
           TARGET_ENV=${TARGET_ENV}
-            # Using environment-scoped variables directly (test environment)
-            ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
-            RG='${{ vars.AZURE_RESOURCE_GROUP }}'
-            LOC='${{ vars.AZURE_LOCATION }}'
-          if [ -z "$ACR_NAME" ]; then ACR_NAME='${{ vars.AZURE_ACR_NAME }}'; fi
-          if [ -z "$RG" ]; then RG='${{ vars.AZURE_RESOURCE_GROUP }}'; fi
-          if [ -z "$LOC" ]; then LOC='${{ vars.AZURE_LOCATION }}'; fi
-          if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
-            echo "Missing AZURE_* variables for test environment. Define AZURE_ACR_NAME_TEST, AZURE_RESOURCE_GROUP_TEST, and AZURE_LOCATION_TEST or shared fallbacks." >&2
+          # Using environment-scoped variables for ACR/RG; derive location from RG
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for test environment." >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in test environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -606,12 +615,16 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV=${TARGET_ENV}
-          # Using environment-scoped variables directly (prod environment)
+          # Using environment-scoped variables for ACR/RG; derive location from RG
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
           RG='${{ vars.AZURE_RESOURCE_GROUP }}'
-          LOC='${{ vars.AZURE_LOCATION }}'
-          if [ -z "$ACR_NAME" ] || [ -z "$RG" ] || [ -z "$LOC" ]; then
-            echo "Missing AZURE_* variables for prod environment. Define AZURE_ACR_NAME, AZURE_RESOURCE_GROUP, AZURE_LOCATION in the 'prod' environment." >&2
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP in the 'prod' environment." >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in prod environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT

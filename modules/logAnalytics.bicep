@@ -1,5 +1,5 @@
 param name string
-param location string
+param location string = resourceGroup().location
 param tags object = {}
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {

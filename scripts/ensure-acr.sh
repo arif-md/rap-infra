@@ -21,9 +21,10 @@ if [ -z "$AZURE_ACR_NAME" ]; then
   azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME" >/dev/null
 fi
 
-LOCATION=${AZURE_LOCATION}
+LOCATION=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
 if [ -z "$LOCATION" ]; then
-  LOCATION=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
+  echo "Could not resolve location for resource group '$AZURE_RESOURCE_GROUP'." >&2
+  exit 1
 fi
 
 # Ensure resource group exists (do not create it)

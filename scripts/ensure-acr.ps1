@@ -1,7 +1,7 @@
 Param(
   [string]$AcrName = $env:AZURE_ACR_NAME,
   [string]$ResourceGroup = $env:AZURE_RESOURCE_GROUP,
-  [string]$Location = $env:AZURE_LOCATION,
+  [string]$Location,
   [string]$EnvName = $env:AZURE_ENV_NAME
 )
 
@@ -17,7 +17,6 @@ function Get-AzdValue([string]$key) {
 if (-not $EnvName) { $EnvName = Get-AzdValue 'AZURE_ENV_NAME' }
 if (-not $AcrName)  { $AcrName  = Get-AzdValue 'AZURE_ACR_NAME' }
 if (-not $ResourceGroup) { $ResourceGroup = Get-AzdValue 'AZURE_RESOURCE_GROUP' }
-if (-not $Location) { $Location = Get-AzdValue 'AZURE_LOCATION' }
 
 if (-not $AcrName) {
   if (-not $EnvName) {
@@ -41,10 +40,7 @@ if (-not $ResourceGroup) {
 if (-not $Location) {
   $Location = (az group show -n $ResourceGroup --query location -o tsv 2>$null)
 }
-if (-not $Location) {
-  # Fallback to a commonly available region if RG doesn't exist yet
-  $Location = 'eastus2'
-}
+if (-not $Location) { throw "Could not resolve location for resource group '$ResourceGroup'." }
 
 # Ensure resource group exists (do not create it)
 Write-Host "[ensure-acr] Using RG='$ResourceGroup' Location='$Location' ACR='$AcrName'"

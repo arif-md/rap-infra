@@ -1,5 +1,5 @@
 param name string
-param location string
+param location string = resourceGroup().location
 @allowed([
   'Basic'
   'Standard'
@@ -19,7 +19,6 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
     adminUserEnabled: adminUserEnabled
     zoneRedundancy: 'Disabled'
     dataEndpointEnabled: false
-    anonymousPullEnabled: false
     publicNetworkAccess: 'Enabled'
   }
   tags: tags

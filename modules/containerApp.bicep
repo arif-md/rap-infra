@@ -1,5 +1,5 @@
 param name string
-param location string
+param location string = resourceGroup().location
 param environmentId string
 param image string
 param targetPort int

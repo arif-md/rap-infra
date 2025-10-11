@@ -1,6 +1,6 @@
 @description('Container App name')
 param name string
-param location string
+param location string = resourceGroup().location
 param tags object = {}
 
 @description('User-assigned managed identity name')
