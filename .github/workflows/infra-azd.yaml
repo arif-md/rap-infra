@@ -24,7 +24,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev
+    environment: test
     outputs:
       frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
