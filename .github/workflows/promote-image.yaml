@@ -245,6 +245,41 @@ jobs:
             return 0
           }
 
+          # Fallback: resolve commit from OCI labels in image config via ACR v2 API
+          # Requires ACR access; avoids dependence on tags
+          get_commit_from_labels() {
+            local reg="$1" repo="$2" dig="$3"
+            if [ -z "$dig" ]; then echo ""; return 0; fi
+            # Acquire a registry access token
+            local tok
+            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            if [ -z "$tok" ]; then echo ""; return 0; fi
+            local base="https://${reg}.azurecr.io/v2/${repo}"
+            # Try OCI and Docker media types
+            local mf
+            mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            if [ -z "$mf" ]; then echo ""; return 0; fi
+            # If manifest list/index, pick first manifest
+            local media
+            media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+              local child
+              child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
+              if [ -n "$child" ]; then
+                mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              fi
+            fi
+            local cfg
+            cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+            if [ -z "$cfg" ]; then echo ""; return 0; fi
+            local cfgJson
+            cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            if [ -z "$cfgJson" ]; then echo ""; return 0; fi
+            local rev
+            rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+            printf '%s' "$rev"
+          }
+
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ "$AZ_READY" -eq 1 ]; then
@@ -259,6 +294,22 @@ jobs:
             fi
           fi
 
+          # If tag-based mapping failed (e.g., tags pruned), fall back to labels
+          if [ -z "$NEW_COMMIT_SHORT" ] && [ -n "$NEW_DIGEST" ]; then
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
+          fi
+          if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
+            if [ -n "$TGT_ACR" ]; then
+              C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST")
+            fi
+            if [ -z "${C:-}" ]; then
+              C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            fi
+            [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
+          fi
+
+
           echo "Resolved commit tags: NEW='$NEW_COMMIT_SHORT' PREV='$PREV_COMMIT_SHORT'"
 
           # Only try to resolve SHAs locally if the source repo equals this repo
@@ -272,8 +323,9 @@ jobs:
               if [ -z "$short" ]; then return 0; fi
               git rev-parse "$short" 2>/dev/null || true
             }
-            NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT")
-            PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT")
+            # Preserve full SHAs from payload if set; otherwise expand short refs
+            if [ -z "${NEW_SHA:-}" ]; then NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT"); fi
+            if [ -z "${PREV_SHA:-}" ]; then PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT"); fi
           fi
 
           echo "Resolved SHAs: NEW='${NEW_SHA:-$NEW_COMMIT_SHORT}' PREV='${PREV_SHA:-$PREV_COMMIT_SHORT}'"
