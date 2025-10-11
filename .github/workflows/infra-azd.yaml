@@ -63,19 +63,18 @@ jobs:
           azd auth login \
             --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
             --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
-            --federated-credential-provider github \
-            --silent
+            --federated-credential-provider github
 
-      # - name: Verify az/azd auth
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
-      #     # Verify Azure CLI is authenticated for this job
-      #     az account show -o none
-      #     az account get-access-token -o none
-      #     # Verify azd is installed and on PATH
-      #     command -v azd >/dev/null 2>&1
-      #     azd version
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Verify Azure CLI is authenticated for this job
+          az account show -o none
+          az account get-access-token -o none
+          # Verify azd is installed and on PATH
+          command -v azd >/dev/null 2>&1
+          azd version
 
       - name: "Sanity: az context"
         shell: bash
