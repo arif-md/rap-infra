@@ -121,7 +121,8 @@ jobs:
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Resolve image from ACR (fallback to public)
-        if: github.event_name != 'repository_dispatch'
+        # Only do this for direct runs (push/manual). For repository_dispatch we always use the provided image.
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail

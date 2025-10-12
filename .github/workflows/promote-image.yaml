@@ -14,11 +14,13 @@ jobs:
     name: Prepare & Notify
     environment: preflight
     runs-on: ubuntu-latest
+    outputs:
+      targetEnv: ${{ steps.prep.outputs.env }}
     permissions:
       id-token: write
       contents: read
     env:
-      TARGET_ENV: test
+      TARGET_ENV: ${{ vars.PROMO_ENV_NAME || 'test' }}
       # Optional: fine-grained PAT with read access to the private frontend repo
       FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
@@ -79,7 +81,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TARGET_ENV=${TARGET_ENV}
+          # Resolve target environment from payload first, else fall back to configured default
+          TARGET_ENV='${{ github.event.client_payload.targetEnv || env.TARGET_ENV }}'
           # Intentionally avoid using Environment-scoped vars here because this job runs under 'preflight'
           # and those vars may point to DEV. We'll prefer values from the dispatch payload;
           # otherwise derive by convention for the TARGET_ENV. Location will be derived from the RG.
@@ -155,6 +158,7 @@ jobs:
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
       - name: Generate release notes (diff since last test deploy)
+        # Note: title/environment text is dynamic based on resolved target env
         id: relnotes
         shell: bash
         run: |
@@ -195,8 +199,9 @@ jobs:
             fi
           fi
 
-          # If still no previous digest (e.g., lacking permissions to read Container App), fall back to latest digest in target ACR repo
-          if [ -z "$PREV_DIGEST" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
+          # Fallback to target ACR latest ONLY for manual runs (workflow_dispatch).
+          # For repository_dispatch promotions we keep a truly blank baseline when the target is fresh.
+          if [ -z "$PREV_DIGEST" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
             LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
             if [ -n "$LATEST" ]; then
               PREV_DIGEST="$LATEST"
@@ -337,9 +342,9 @@ jobs:
           HTML_FILE="release-notes.html"
 
           {
-            echo "## Release notes: Promote frontend to test"
+            echo "## Release notes: Promote frontend to ${TGT_ENV}"
             echo
-            echo "- Target environment: test"
+            echo "- Target environment: ${TGT_ENV}"
             echo "- New image: ${SRC_IMAGE}"
             if [ -n "$PREV_DIGEST" ]; then
               echo "- Previously deployed digest: ${PREV_DIGEST}"
@@ -382,15 +387,15 @@ jobs:
                 fi
               fi
             elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
-              echo "First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
+              echo "First promotion to ${TGT_ENV} with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
             else
               echo "Could not resolve commit SHAs from image tags. Showing image digests only."
             fi
           } > "$NOTES_FILE"
 
           {
-            echo "<h2>Release notes: Promote frontend to test</h2>"
-            echo "<p><strong>Target environment:</strong> test</p>"
+            echo "<h2>Release notes: Promote frontend to ${TGT_ENV}</h2>"
+            echo "<p><strong>Target environment:</strong> ${TGT_ENV}</p>"
             echo "<p><strong>New image:</strong> ${SRC_IMAGE}</p>"
             if [ -n "$PREV_DIGEST" ]; then
               echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>"
@@ -451,7 +456,7 @@ jobs:
                 echo "</table>"
               fi
             elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
-              echo "<p>First promotion to test with this workflow. Baseline set to ${NEW_COMMIT_SHORT}.</p>"
+              echo "<p>First promotion to ${TGT_ENV} with this workflow. Baseline set to ${NEW_COMMIT_SHORT}.</p>"
             else
               echo "<p>Could not resolve commit SHAs from image tags. Showing image digests only.</p>"
             fi
@@ -492,27 +497,27 @@ jobs:
           server_port: ${{ env.MAIL_PORT || 587 }}
           username: ${{ env.MAIL_USERNAME }}
           password: ${{ env.MAIL_PASSWORD }}
-          subject: "[Approval Needed] Promote frontend to test"
+          subject: "[Approval Needed] Promote frontend to ${{ steps.prep.outputs.env }}"
           to: ${{ env.MAIL_TO }}
           from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
           html_body: |-
-            <p>A deployment to the '<strong>test</strong>' environment is pending approval.</p>
+            <p>A deployment to the '<strong>${{ steps.prep.outputs.env }}</strong>' environment is pending approval.</p>
             <p><strong>Image:</strong> ${{ steps.inp.outputs.srcImage }}<br>
-               <strong>Target:</strong> Azure Container Apps (test)</p>
+               <strong>Target:</strong> Azure Container Apps (${{ steps.prep.outputs.env }})</p>
             <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
             ${{ steps.relnotes.outputs.html }}
 
-  promote-test:
-    name: Promote to Test
+  promote-target:
+    name: Promote to ${{ needs.prepare-and-notify.outputs.targetEnv }}
     runs-on: ubuntu-latest
     needs: prepare-and-notify
-    environment: test
+    environment: ${{ needs.prepare-and-notify.outputs.targetEnv }}
     permissions:
       id-token: write
       contents: read
     env:
-      TARGET_ENV: test
+      TARGET_ENV: ${{ needs.prepare-and-notify.outputs.targetEnv }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -572,12 +577,12 @@ jobs:
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
           RG='${{ vars.AZURE_RESOURCE_GROUP }}'
           if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
-            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for test environment." >&2
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
-            echo "Could not resolve location for resource group '$RG' in test environment." >&2
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -670,7 +675,7 @@ jobs:
   promote-prod:
     name: Promote to Prod
     runs-on: ubuntu-latest
-    needs: promote-test
+    needs: promote-target
     if: ${{ vars.ENABLE_PROD_PROMOTION == 'true' }}
     environment: prod
     permissions:
