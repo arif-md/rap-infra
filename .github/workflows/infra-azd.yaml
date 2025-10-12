@@ -2,6 +2,11 @@ name: Infra - Provision and Deploy (azd)
 
 on:
   workflow_dispatch:
+    inputs:
+      targetEnv:
+        description: "GitHub Environment name to run under (e.g., test/train/prod)"
+        required: false
+        default: "test"
   push:
     branches: [ main ]
     paths:
@@ -24,7 +29,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: test
+    environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'test' }}
     outputs:
       frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
