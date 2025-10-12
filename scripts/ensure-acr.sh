@@ -33,11 +33,35 @@ if ! az group show -n "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! az acr show -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-  echo "Creating ACR '$AZURE_ACR_NAME' in RG '$AZURE_RESOURCE_GROUP'..."
-  az acr create -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" -l "$LOCATION" --sku Standard --admin-enabled false --only-show-errors >/dev/null
+# Try to find the ACR anywhere in the current subscription first (not just the current RG)
+EXIST_JSON=$(az acr show -n "$AZURE_ACR_NAME" -o json 2>/dev/null || true)
+if [ -n "$EXIST_JSON" ]; then
+  # Extract resource group from id if not directly available
+  EXIST_RG=$(printf '%s' "$EXIST_JSON" | jq -r '.resourceGroup // empty' 2>/dev/null || true)
+  if [ -z "$EXIST_RG" ]; then
+    EXIST_RG=$(printf '%s' "$EXIST_JSON" | jq -r '.id' 2>/dev/null | sed -n 's#.*/resourceGroups/\([^/]*\)/providers/.*#\1#p')
+  fi
+  echo "ACR '$AZURE_ACR_NAME' already exists in subscription in RG '${EXIST_RG:-unknown}'. Using existing registry."
 else
-  echo "ACR '$AZURE_ACR_NAME' already exists in RG '$AZURE_RESOURCE_GROUP'."
+  # Not found in current subscription, check if name is globally available
+  CHECK=$(az acr check-name -n "$AZURE_ACR_NAME" -o json 2>/dev/null || true)
+  NAME_AVAILABLE=$(printf '%s' "$CHECK" | jq -r '.nameAvailable // empty' 2>/dev/null || true)
+  REASON=$(printf '%s' "$CHECK" | jq -r '.reason // empty' 2>/dev/null || true)
+  MESSAGE=$(printf '%s' "$CHECK" | jq -r '.message // empty' 2>/dev/null || true)
+  if [ "$NAME_AVAILABLE" = "true" ]; then
+    echo "Creating ACR '$AZURE_ACR_NAME' in RG '$AZURE_RESOURCE_GROUP'..."
+    az acr create -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" -l "$LOCATION" --sku Standard --admin-enabled false --only-show-errors >/dev/null
+  else
+    # Name is not available globally
+    if [ "$REASON" = "AlreadyExists" ]; then
+      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' exists, but not in the current subscription or is inaccessible with current credentials." >&2
+      echo "[ensure-acr] Either switch to the subscription where it exists, grant access, or choose a different AZURE_ACR_NAME." >&2
+      exit 1
+    else
+      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' is not valid or not available: ${MESSAGE}" >&2
+      exit 1
+    fi
+  fi
 fi
 
 # If SERVICE_FRONTEND_IMAGE_NAME isn't set, try to resolve the latest image from ACR for this env

@@ -54,22 +54,29 @@ if (-not $Location) {
   $Location = (az group show -n $ResourceGroup --query location -o tsv 2>$null)
 }
 
-$exists = $false
-az acr show -n $AcrName -g $ResourceGroup -o none 2>$null
-$exists = ($LASTEXITCODE -eq 0)
-if (-not $exists) {
-  $check = az acr check-name -n $AcrName -o json | ConvertFrom-Json
-  if (-not $check.nameAvailable -and $check.reason -ne 'AlreadyExists') {
-    throw "ACR name '$AcrName' is not valid: $($check.message)"
+# Try to find the ACR anywhere in the current subscription (not restricted to RG)
+$acrInfoJson = az acr show -n $AcrName -o json 2>$null
+if ($LASTEXITCODE -eq 0 -and $acrInfoJson) {
+  $acrInfo = $acrInfoJson | ConvertFrom-Json
+  $acrRg = $acrInfo.resourceGroup
+  if (-not $acrRg -and $acrInfo.id) {
+    if ($acrInfo.id -match "/resourceGroups/([^/]+)/providers/") { $acrRg = $Matches[1] }
   }
-  if (-not $check.nameAvailable -and $check.reason -eq 'AlreadyExists') {
-    Write-Host "[ensure-acr] ACR name '$AcrName' exists globally but not in RG '$ResourceGroup'. Choose a unique name or use an existing registry in this RG."
-    throw "ACR name already taken globally: $AcrName"
-  }
-  Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$ResourceGroup'..."
-  az acr create -n $AcrName -g $ResourceGroup -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
+  Write-Host "[ensure-acr] ACR '$AcrName' already exists in subscription in RG '${acrRg}' (leaving as-is)."
 } else {
-  Write-Host "[ensure-acr] ACR '$AcrName' already exists in RG '$ResourceGroup'."
+  # Not found in current subscription, check global name availability
+  $check = az acr check-name -n $AcrName -o json | ConvertFrom-Json
+  if ($null -eq $check) { throw "Failed to validate ACR name '$AcrName'" }
+  if ($check.nameAvailable -eq $true) {
+    Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$ResourceGroup'..."
+    az acr create -n $AcrName -g $ResourceGroup -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
+  } else {
+    if ($check.reason -eq 'AlreadyExists') {
+      throw "[ensure-acr] ACR name '$AcrName' exists but is not in the current subscription or is inaccessible. Switch subscription or use a different name. Message: $($check.message)"
+    } else {
+      throw "[ensure-acr] ACR name '$AcrName' is not valid/available: $($check.message)"
+    }
+  }
 }
 
 # Resolve the service image if not already set, preferring ACR digest for this environment
