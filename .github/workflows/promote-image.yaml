@@ -376,9 +376,11 @@ jobs:
         run: |
           set -euo pipefail
           ACR='${{ steps.prep.outputs.acr }}'
-          RG='${{ steps.prep.outputs.rg }}'
-          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
-          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+          # Prefer override RG when provided for cross-RG ACR
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          echo "Ensuring ACR '$ACR' exists in resource group '$ACR_RG'"
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
 
       - name: Import manifest into target ACR repo
         id: import
@@ -404,6 +406,12 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          # Pass cross-RG override for ACR when configured
+          if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"
+          else
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -757,9 +765,10 @@ jobs:
         run: |
           set -euo pipefail
           ACR='${{ steps.prep.outputs.acr }}'
-          RG='${{ steps.prep.outputs.rg }}'
-          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
-          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          echo "Ensuring ACR '$ACR' exists in resource group '$ACR_RG'"
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
 
       - name: Import manifest into target ACR repo
         id: import
@@ -785,6 +794,11 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"
+          else
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -1138,9 +1152,10 @@ jobs:
         run: |
           set -euo pipefail
           ACR='${{ steps.prep.outputs.acr }}'
-          RG='${{ steps.prep.outputs.rg }}'
-          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
-          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          echo "Ensuring ACR '$ACR' exists in resource group '$ACR_RG'"
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
 
       - name: Import manifest into target ACR repo
         id: import
@@ -1166,6 +1181,11 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"
+          else
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
