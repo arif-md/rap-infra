@@ -241,9 +241,13 @@ jobs:
             echo "Warning: sourceRepo not provided in payload or vars; falling back to $SRC_REPO"
           fi
           echo "sourceRepo=$SRC_REPO" >> $GITHUB_OUTPUT
+          # Determine the promotion environment: prefer payload.promoEnv, fallback to configured default, else 'test'
+          PROMO_ENV='${{ github.event.client_payload.promoEnv || vars.PROMO_ENV_NAME || 'test' }}'
+          echo "env=$PROMO_ENV" >> $GITHUB_OUTPUT
           echo "Promotion will target repo: $TARGET" 
           echo "Image to promote: $IMG"
           echo "Source repo: $SRC_REPO"
+          echo "Promotion environment: $PROMO_ENV"
 
       - name: Log and wait before promotion dispatch
         if: success() && steps.promo.outputs.image && steps.promo.outputs.repo
@@ -261,11 +265,11 @@ jobs:
           event-type: frontend-image-promote
           client-payload: |
             {"image": "${{ steps.promo.outputs.image }}",
-             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', vars.PROMO_ENV_NAME || 'test') }}",
+             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
              "acrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
              "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}",
-             "targetEnv": "${{ vars.PROMO_ENV_NAME || 'test' }}",
-             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', vars.PROMO_ENV_NAME || 'test') }}",
+             "targetEnv": "${{ steps.promo.outputs.env }}",
+             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
              "targetAcrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
              "targetSubscriptionId": "${{ vars.PROMO_AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"}
 
@@ -289,11 +293,11 @@ jobs:
           event-type: frontend-image-promote
           client-payload: |
             {"image": "${{ steps.promo.outputs.image }}",
-             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', vars.PROMO_ENV_NAME || 'test') }}",
+             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
              "acrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
              "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}",
-             "targetEnv": "${{ vars.PROMO_ENV_NAME || 'test' }}",
-             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', vars.PROMO_ENV_NAME || 'test') }}",
+             "targetEnv": "${{ steps.promo.outputs.env }}",
+             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
              "targetAcrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
              "targetSubscriptionId": "${{ vars.PROMO_AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"}
 
