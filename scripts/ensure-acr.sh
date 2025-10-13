@@ -27,38 +27,97 @@ if [ -z "$LOCATION" ]; then
   exit 1
 fi
 
+# Optional: operator may provide the ACR resource group; otherwise we'll discover it subscription-wide
+ACR_LOCATION=""
+if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
+  ACR_LOCATION=$(az group show -n "$AZURE_ACR_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
+fi
+
 # Ensure resource group exists (do not create it)
 if ! az group show -n "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
   echo "Resource group '$AZURE_RESOURCE_GROUP' not found. Set AZURE_RESOURCE_GROUP to an existing RG (azd env set AZURE_RESOURCE_GROUP <name>) or pre-create it." >&2
   exit 1
 fi
 
-# Try to find the ACR anywhere in the current subscription first (not just the current RG)
+# Permissions preflight: verify required roles on target resource group for ACR create and role assignment
+SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
+ASSIGNEE="$(az account show --query user.name -o tsv 2>/dev/null || true)"
+TARGET_RG="$AZURE_ACR_RESOURCE_GROUP"
+if [ -z "$TARGET_RG" ]; then TARGET_RG="$AZURE_RESOURCE_GROUP"; fi
+
+# Ensure target RG exists and get its location
+if ! az group show -n "$TARGET_RG" >/dev/null 2>&1; then
+  echo "[preflight] Target ACR resource group '$TARGET_RG' not found. Set AZURE_ACR_RESOURCE_GROUP to an existing RG or create it." >&2
+  exit 1
+fi
+
+if [ -n "$SUB_ID" ] && [ -n "$ASSIGNEE" ]; then
+  ROLES=$(az role assignment list --assignee "$ASSIGNEE" --scope "/subscriptions/$SUB_ID/resourceGroups/$TARGET_RG" --include-inherited --query "[].roleDefinitionName" -o tsv 2>/dev/null || true)
+  if [ -n "$ROLES" ]; then
+    echo "[preflight] Roles for principal '$ASSIGNEE' at RG '$TARGET_RG': $(echo "$ROLES" | tr '\n' ', ' | sed 's/, $//')"
+    echo "$ROLES" | grep -Eiq '^(Owner|Contributor)$|\s(Owner|Contributor)\s' || {
+      echo "[preflight][ERROR] Missing Contributor or Owner on resource group '$TARGET_RG'. This is required to create or update ACR and related resources." >&2
+      echo "[preflight][HINT] Grant 'Contributor' (minimum) or 'Owner' at scope: /subscriptions/$SUB_ID/resourceGroups/$TARGET_RG" >&2
+      exit 1
+    }
+    echo "$ROLES" | grep -Eiq 'Owner|User Access Administrator' || {
+      echo "[preflight][ERROR] Missing permission to create role assignments in RG '$TARGET_RG'." >&2
+      echo "[preflight][DETAIL] The deployment assigns AcrPull to the app's managed identity; this requires 'Owner' or 'User Access Administrator' on the ACR's resource group." >&2
+      echo "[preflight][HINT] Grant 'Owner' or 'User Access Administrator' at: /subscriptions/$SUB_ID/resourceGroups/$TARGET_RG" >&2
+      exit 1
+    }
+  else
+    echo "[preflight][WARN] Could not read role assignments at scope '/subscriptions/$SUB_ID/resourceGroups/$TARGET_RG'. Ensure your principal has permission to read role assignments. Continuing, but operations may fail due to insufficient permissions." >&2
+  fi
+else
+  echo "[preflight][WARN] Unable to resolve subscription or principal for role checks; skipping permission preflight." >&2
+fi
+
 EXIST_JSON=$(az acr show -n "$AZURE_ACR_NAME" -o json 2>/dev/null || true)
 if [ -n "$EXIST_JSON" ]; then
-  # Extract resource group from id if not directly available
   EXIST_RG=$(printf '%s' "$EXIST_JSON" | jq -r '.resourceGroup // empty' 2>/dev/null || true)
   if [ -z "$EXIST_RG" ]; then
     EXIST_RG=$(printf '%s' "$EXIST_JSON" | jq -r '.id' 2>/dev/null | sed -n 's#.*/resourceGroups/\([^/]*\)/providers/.*#\1#p')
   fi
   echo "ACR '$AZURE_ACR_NAME' already exists in subscription in RG '${EXIST_RG:-unknown}'. Using existing registry."
+  if [ -n "$EXIST_RG" ]; then
+    azd env set AZURE_ACR_RESOURCE_GROUP "$EXIST_RG" >/dev/null || true
+    # Re-check role assignment permissions on the actual ACR RG
+    if [ -n "$SUB_ID" ] && [ -n "$ASSIGNEE" ]; then
+      ROLES_ACR=$(az role assignment list --assignee "$ASSIGNEE" --scope "/subscriptions/$SUB_ID/resourceGroups/$EXIST_RG" --include-inherited --query "[].roleDefinitionName" -o tsv 2>/dev/null || true)
+      if [ -n "$ROLES_ACR" ]; then
+        echo "[preflight] Roles for principal '$ASSIGNEE' at ACR RG '$EXIST_RG': $(echo "$ROLES_ACR" | tr '\n' ', ' | sed 's/, $//')"
+        echo "$ROLES_ACR" | grep -Eiq 'Owner|User Access Administrator' || {
+          echo "[preflight][ERROR] Missing permission to create role assignments in ACR RG '$EXIST_RG'." >&2
+          echo "[preflight][DETAIL] The deployment assigns AcrPull to the app's managed identity; this requires 'Owner' or 'User Access Administrator' on the ACR's resource group." >&2
+          echo "[preflight][HINT] Grant 'Owner' or 'User Access Administrator' at: /subscriptions/$SUB_ID/resourceGroups/$EXIST_RG" >&2
+          exit 1
+        }
+      else
+        echo "[preflight][WARN] Could not read role assignments at scope '/subscriptions/$SUB_ID/resourceGroups/$EXIST_RG'. Ensure your principal has permission to read role assignments. Continuing, but operations may fail due to insufficient permissions." >&2
+      fi
+    fi
+  fi
 else
-  # Not found in current subscription, check if name is globally available
+  # Not found via show; check name availability globally and create in preferred RG
   CHECK=$(az acr check-name -n "$AZURE_ACR_NAME" -o json 2>/dev/null || true)
   NAME_AVAILABLE=$(printf '%s' "$CHECK" | jq -r '.nameAvailable // empty' 2>/dev/null || true)
   REASON=$(printf '%s' "$CHECK" | jq -r '.reason // empty' 2>/dev/null || true)
   MESSAGE=$(printf '%s' "$CHECK" | jq -r '.message // empty' 2>/dev/null || true)
+  TARGET_RG="$AZURE_ACR_RESOURCE_GROUP"
+  if [ -z "$TARGET_RG" ]; then TARGET_RG="$AZURE_RESOURCE_GROUP"; fi
+  if [ -z "$ACR_LOCATION" ]; then ACR_LOCATION=$(az group show -n "$TARGET_RG" --query location -o tsv 2>/dev/null || true); fi
   if [ "$NAME_AVAILABLE" = "true" ]; then
-    echo "Creating ACR '$AZURE_ACR_NAME' in RG '$AZURE_RESOURCE_GROUP'..."
-    az acr create -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" -l "$LOCATION" --sku Standard --admin-enabled false --only-show-errors >/dev/null
+    echo "Creating ACR '$AZURE_ACR_NAME' in RG '$TARGET_RG'..."
+    az acr create -n "$AZURE_ACR_NAME" -g "$TARGET_RG" -l "$ACR_LOCATION" --sku Standard --admin-enabled false --only-show-errors >/dev/null
+    azd env set AZURE_ACR_RESOURCE_GROUP "$TARGET_RG" >/dev/null || true
   else
-    # Name is not available globally
     if [ "$REASON" = "AlreadyExists" ]; then
-      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' exists, but not in the current subscription or is inaccessible with current credentials." >&2
-      echo "[ensure-acr] Either switch to the subscription where it exists, grant access, or choose a different AZURE_ACR_NAME." >&2
+      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' exists, but is not accessible in this subscription or with current credentials." >&2
+      echo "[ensure-acr] Ensure your principal has Microsoft.ContainerRegistry/registries/read on the registry, or switch to the subscription where it exists." >&2
       exit 1
     else
-      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' is not valid or not available: ${MESSAGE}" >&2
+      echo "[ensure-acr] ACR name '$AZURE_ACR_NAME' is not valid/available: ${MESSAGE}" >&2
       exit 1
     fi
   fi

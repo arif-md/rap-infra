@@ -12,6 +12,9 @@ param containerAppsEnvironmentName string
 @description('ACR name (for image pull binding)')
 param containerRegistryName string
 
+@description('Resource group containing the ACR (for cross-RG reference)')
+param containerRegistryResourceGroup string
+
 @description('Existing image reference (e.g. myacr.azurecr.io/rap-frontend:latest)')
 param image string
 
@@ -47,9 +50,7 @@ resource cai 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppsEnvironmentName
 }
 
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: containerRegistryName
-}
+// We won't directly reference ACR here to avoid cross-scope constraints; we'll pass login server via image
 
 // Optional App Insights omitted
 
@@ -87,8 +88,8 @@ module frontend '../modules/containerApp.bicep' = {
     ingressExternal: true
     enableSessionAffinity: enableSessionAffinity
     userAssignedIdentity: uai.id
-  // Determine if the image is coming from the configured ACR
-  acrLoginServer: split(image, '/')[0] == acr.properties.loginServer ? acr.properties.loginServer : ''
+  // Determine if the image is coming from the configured ACR using the provided name
+  acrLoginServer: split(image, '/')[0] == '${containerRegistryName}.azurecr.io' ? '${containerRegistryName}.azurecr.io' : ''
     cpu: cpu
     memory: memory
     minReplicas: minReplicas
@@ -101,15 +102,13 @@ module frontend '../modules/containerApp.bicep' = {
   }
 }
 
-// Grant AcrPull to the user-assigned identity on the ACR
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipAcrPullRoleAssignment) {
-  name: guid(acr.id, 'AcrPull', uai.id)
-  scope: acr
-  properties: {
+// Grant AcrPull to the user-assigned identity on the ACR via cross-RG module scoped to the ACR RG
+module acrPull '../modules/acrPullRoleAssignment.bicep' = if (!skipAcrPullRoleAssignment) {
+  name: 'acrPullAssignment'
+  scope: resourceGroup(containerRegistryResourceGroup)
+  params: {
+    acrName: containerRegistryName
     principalId: uai.properties.principalId
-    // Specify principalType to mitigate replication delay issues when the identity is newly created
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
   }
 }
 

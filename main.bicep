@@ -17,6 +17,9 @@ param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowor
 @description('Optional override for ACR name (use existing)')
 param acrNameOverride string = ''
 
+@description('Optional override for the resource group that contains the existing ACR (defaults to current RG)')
+param acrResourceGroupOverride string = ''
+
 @description('Skip creating AcrPull role assignment for the frontend identity (useful for local runs without RBAC)')
 param skipAcrPullRoleAssignment bool = true
 
@@ -40,6 +43,7 @@ param tags object = {
 
 var namePrefix = toLower('${environmentName}-rap')
 var acrName    = !empty(acrNameOverride) ? acrNameOverride : toLower(replace('${environmentName}rapacr','-',''))
+var acrResourceGroup = !empty(acrResourceGroupOverride) ? acrResourceGroupOverride : resourceGroup().name
 var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
 
@@ -82,9 +86,11 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
 }
 
 
-// Treat ACR as an external dependency (created outside the stack via hook)
+// Treat ACR as an external dependency (created outside the stack via hook).
+// Allow ACR to be in a different resource group by scoping the existing resource.
 resource acrExisting 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName
+  scope: resourceGroup(acrResourceGroup)
 }
 
 // Frontend Angular Container App
@@ -99,8 +105,9 @@ module frontend 'app/frontend-angular.bicep' = {
     identityName: frontendIdentityName
     // Managed environment name matches what we created above
     containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
-    // ACR name for image pull identity binding
+  // ACR name and resource group for image pull identity binding
     containerRegistryName: acrName
+  containerRegistryResourceGroup: acrResourceGroup
     // Use provided image (from env via parameters file) or default placeholder
     image: frontendImage
   // Allow toggling AcrPull role assignment

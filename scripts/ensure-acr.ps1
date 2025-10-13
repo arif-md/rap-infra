@@ -44,7 +44,7 @@ if (-not $Location) { throw "Could not resolve location for resource group '$Res
 
 # Ensure resource group exists (do not create it)
 Write-Host "[ensure-acr] Using RG='$ResourceGroup' Location='$Location' ACR='$AcrName'"
-$rgExists = az group show -n $ResourceGroup -o none 2>$null
+az group show -n $ResourceGroup -o none 2>$null
 if ($LASTEXITCODE -ne 0) {
   throw "Resource group '$ResourceGroup' was not found. Set AZURE_RESOURCE_GROUP to an existing RG (azd env set AZURE_RESOURCE_GROUP <name>) or pre-create '$ResourceGroup'."
 }
@@ -52,6 +52,41 @@ if ($LASTEXITCODE -ne 0) {
 # If location still unknown, read it from the existing RG
 if (-not $Location) {
   $Location = (az group show -n $ResourceGroup --query location -o tsv 2>$null)
+}
+
+# If user pre-provided the ACR resource group, skip discovery/creation
+<#
+  Unify behavior for GitHub and local: perform subscription-wide discovery first.
+  If ACR exists, set AZURE_ACR_RESOURCE_GROUP accordingly.
+  If not, validate name and create in preferred RG: AZURE_ACR_RESOURCE_GROUP if provided, else AZURE_RESOURCE_GROUP.
+#>
+$preferredAcrRg = $env:AZURE_ACR_RESOURCE_GROUP
+
+# Permissions preflight: verify required roles on target resource group for ACR create and role assignment
+$subId = az account show --query id -o tsv 2>$null
+$assignee = az account show --query user.name -o tsv 2>$null
+$targetRg = if ($preferredAcrRg) { $preferredAcrRg } else { $ResourceGroup }
+
+az group show -n $targetRg -o none 2>$null
+if ($LASTEXITCODE -ne 0) {
+  throw "[preflight] Target ACR resource group '$targetRg' not found. Set AZURE_ACR_RESOURCE_GROUP to an existing RG or create it."
+}
+
+if ($subId -and $assignee) {
+  $roles = az role assignment list --assignee $assignee --scope "/subscriptions/$subId/resourceGroups/$targetRg" --include-inherited --query "[].roleDefinitionName" -o tsv 2>$null
+  if ($LASTEXITCODE -eq 0 -and $roles) {
+    Write-Host "[preflight] Roles for principal '$assignee' at RG '$targetRg': $($roles -join ', ')"
+    if (-not ($roles -match 'Owner' -or $roles -match 'Contributor')) {
+      throw "[preflight][ERROR] Missing Contributor or Owner on resource group '$targetRg'. This is required to create or update ACR and related resources. [HINT] Grant 'Contributor' (minimum) or 'Owner' at: /subscriptions/$subId/resourceGroups/$targetRg"
+    }
+    if (-not ($roles -match 'Owner' -or $roles -match 'User Access Administrator')) {
+      throw "[preflight][ERROR] Missing permission to create role assignments in RG '$targetRg'. [DETAIL] Assigning AcrPull requires 'Owner' or 'User Access Administrator' on the ACR's resource group. [HINT] Grant 'Owner' or 'User Access Administrator' at: /subscriptions/$subId/resourceGroups/$targetRg"
+    }
+  } else {
+    Write-Warning "[preflight] Could not read role assignments at scope '/subscriptions/$subId/resourceGroups/$targetRg'. Ensure your principal can read role assignments. Continuing, but operations may fail."
+  }
+} else {
+  Write-Warning "[preflight] Unable to resolve subscription or principal for role checks; skipping permission preflight."
 }
 
 # Try to find the ACR anywhere in the current subscription (not restricted to RG)
@@ -62,22 +97,44 @@ if ($LASTEXITCODE -eq 0 -and $acrInfoJson) {
   if (-not $acrRg -and $acrInfo.id) {
     if ($acrInfo.id -match "/resourceGroups/([^/]+)/providers/") { $acrRg = $Matches[1] }
   }
-  Write-Host "[ensure-acr] ACR '$AcrName' already exists in subscription in RG '${acrRg}' (leaving as-is)."
+  Write-Host "[ensure-acr] ACR '$AcrName' already exists in subscription in RG '${acrRg}' (using existing registry)."
+  if ($acrRg) { azd env set AZURE_ACR_RESOURCE_GROUP $acrRg | Out-Null }
+  # Re-check role assignment permission on actual ACR RG
+  if ($subId -and $assignee -and $acrRg) {
+    $rolesAcr = az role assignment list --assignee $assignee --scope "/subscriptions/$subId/resourceGroups/$acrRg" --include-inherited --query "[].roleDefinitionName" -o tsv 2>$null
+    if ($LASTEXITCODE -eq 0 -and $rolesAcr) {
+      Write-Host "[preflight] Roles for principal '$assignee' at ACR RG '$acrRg': $($rolesAcr -join ', ')"
+      if (-not ($rolesAcr -match 'Owner' -or $rolesAcr -match 'User Access Administrator')) {
+        throw "[preflight][ERROR] Missing permission to create role assignments in ACR RG '$acrRg'. [DETAIL] Assigning AcrPull requires 'Owner' or 'User Access Administrator' on the ACR's resource group. [HINT] Grant 'Owner' or 'User Access Administrator' at: /subscriptions/$subId/resourceGroups/$acrRg"
+      }
+    } else {
+      Write-Warning "[preflight] Could not read role assignments at scope '/subscriptions/$subId/resourceGroups/$acrRg'. Ensure your principal can read role assignments. Continuing, but operations may fail."
+    }
+  }
 } else {
   # Not found in current subscription, check global name availability
   $check = az acr check-name -n $AcrName -o json | ConvertFrom-Json
   if ($null -eq $check) { throw "Failed to validate ACR name '$AcrName'" }
+  $targetRg = if ($preferredAcrRg) { $preferredAcrRg } else { $ResourceGroup }
+  if (-not $Location) {
+    $Location = (az group show -n $targetRg --query location -o tsv 2>$null)
+  }
   if ($check.nameAvailable -eq $true) {
-    Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$ResourceGroup'..."
-    az acr create -n $AcrName -g $ResourceGroup -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
+    Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$targetRg'..."
+    az acr create -n $AcrName -g $targetRg -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
+    azd env set AZURE_ACR_RESOURCE_GROUP $targetRg | Out-Null
   } else {
     if ($check.reason -eq 'AlreadyExists') {
-      throw "[ensure-acr] ACR name '$AcrName' exists but is not in the current subscription or is inaccessible. Switch subscription or use a different name. Message: $($check.message)"
+      $sub = az account show --query id -o tsv 2>$null
+      $subName = az account show --query name -o tsv 2>$null
+      throw "[ensure-acr] ACR name '$AcrName' exists, but is not accessible in subscription '$subName' ($sub) with current permissions. Ensure your principal has Microsoft.ContainerRegistry/registries/read on the registry, or switch to the subscription where it exists. Message: $($check.message)"
     } else {
       throw "[ensure-acr] ACR name '$AcrName' is not valid/available: $($check.message)"
     }
   }
 }
+
+:ResolveImage
 
 # Resolve the service image if not already set, preferring ACR digest for this environment
 $currentImage = Get-AzdValue 'SERVICE_FRONTEND_IMAGE_NAME'
