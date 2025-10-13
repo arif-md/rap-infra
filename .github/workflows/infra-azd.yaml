@@ -23,7 +23,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'test' }}
+    environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
     env:
       # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
       AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}
