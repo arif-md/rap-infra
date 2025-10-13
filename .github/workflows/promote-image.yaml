@@ -10,18 +10,84 @@ on:
     types: [ frontend-image-promote ]
 
 jobs:
-  prepare-and-notify:
-    name: Prepare & Notify
-    environment: preflight
+  plan:
+    name: Determine promotion plan
     runs-on: ubuntu-latest
     outputs:
-      targetEnv: ${{ steps.prep.outputs.env }}
+      srcImage: ${{ steps.resolve.outputs.srcImage }}
+      srcRepo: ${{ steps.resolve.outputs.srcRepo }}
+      baseEnv: ${{ steps.parse.outputs.baseEnv }}
+      run_test: ${{ steps.parse.outputs.run_test }}
+      run_train: ${{ steps.parse.outputs.run_train }}
+      run_prod: ${{ steps.parse.outputs.run_prod }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve inputs
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            SRC_IMAGE='${{ github.event.client_payload.image }}'
+            SRC_REPO='${{ github.event.client_payload.sourceRepo }}'
+          else
+            SRC_IMAGE='${{ inputs.image }}'
+            SRC_REPO='${{ inputs.sourceRepo }}'
+          fi
+          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
+          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ vars.FRONTEND_REPO }}'; fi
+          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ github.repository }}'; fi
+          echo "srcImage=$SRC_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "srcRepo=$SRC_REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Parse base environment from image
+        id: parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ steps.resolve.outputs.srcImage }}'
+          PATH_PART="${SRC_IMAGE#*/}"
+          REPO_PART="${PATH_PART%@*}"
+          # Expect repo like raptor/frontend-<env>
+          if echo "$REPO_PART" | grep -qE 'frontend-(dev|test|train|prod)'; then
+            BASE_ENV=$(printf '%s' "$REPO_PART" | sed -nE 's@.*frontend-((dev|test|train|prod)).*@\1@p')
+          else
+            # Fallback: default to 'dev'
+            BASE_ENV=dev
+          fi
+          RUN_TEST=false
+          RUN_TRAIN=false
+          RUN_PROD=false
+          case "$BASE_ENV" in
+            dev)
+              RUN_TEST=true; RUN_TRAIN=true; RUN_PROD=true;;
+            test)
+              RUN_TRAIN=true; RUN_PROD=true;;
+            train)
+              RUN_PROD=true;;
+            prod)
+              :;;
+          esac
+          echo "baseEnv=$BASE_ENV" >> "$GITHUB_OUTPUT"
+          echo "run_test=$RUN_TEST" >> "$GITHUB_OUTPUT"
+          echo "run_train=$RUN_TRAIN" >> "$GITHUB_OUTPUT"
+          echo "run_prod=$RUN_PROD" >> "$GITHUB_OUTPUT"
+
+  prepare-and-notify-test:
+    name: Prepare & Notify (test)
+    if: ${{ needs.plan.outputs.run_test == 'true' }}
+    needs: plan
+    environment: preflight
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     env:
-      TARGET_ENV: ${{ vars.PROMO_ENV_NAME || 'test' }}
-      # Optional: fine-grained PAT with read access to the private frontend repo
+      TARGET_ENV: test
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
       FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
@@ -63,70 +129,21 @@ jobs:
           command -v azd >/dev/null 2>&1
           azd version
 
-      - name: Resolve inputs
-        id: inp
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            SRC_IMAGE='${{ github.event.client_payload.image }}'
-          else
-            SRC_IMAGE='${{ inputs.image }}'
-          fi
-          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
-          echo "srcImage=$SRC_IMAGE" >> $GITHUB_OUTPUT
-
       - name: Prepare target env variables
         id: prep
         shell: bash
         run: |
           set -euo pipefail
-          # Resolve target environment from payload first, else fall back to configured default
-          TARGET_ENV='${{ github.event.client_payload.targetEnv || env.TARGET_ENV }}'
-          # Intentionally avoid using Environment-scoped vars here because this job runs under 'preflight'
-          # and those vars may point to DEV. We'll prefer values from the dispatch payload;
-          # otherwise derive by convention for the TARGET_ENV. Location will be derived from the RG.
+          TARGET_ENV='${{ env.TARGET_ENV }}'
           ACR_NAME=""
-          RG=""
-          LOC=""
-          SUB=""
-          # Allow passing values from repository_dispatch payload (target-specific only)
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            T_RG='${{ github.event.client_payload.targetResourceGroup }}'
-            [ -z "$T_RG" ] && T_RG='${{ github.event.client_payload.targetRg }}'
-            T_ACR='${{ github.event.client_payload.targetAcrName }}'
-            [ -z "$T_ACR" ] && T_ACR='${{ github.event.client_payload.targetAcr }}'
-            T_SUB='${{ github.event.client_payload.targetSubscriptionId }}'
-            [ -z "$T_SUB" ] && T_SUB='${{ github.event.client_payload.subscriptionId }}'
-            [ -n "$T_RG" ] && RG="$T_RG"
-            [ -n "$T_ACR" ] && ACR_NAME="$T_ACR"
-            [ -n "$T_SUB" ] && SUB="$T_SUB"
-          fi
-          # Fallback RG naming convention if not provided (aligns with ensure-acr scripts)
-          if [ -z "$RG" ]; then
-            RG="rg-raptor-${TARGET_ENV}"
-            echo "[prepare-and-notify] Using fallback resource group: $RG (preflight job)"
-          fi
-          # Derive location from resource group if possible
-          if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
-          if command -v az >/dev/null 2>&1; then
-            LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
-          fi
-          # Note: LOC/ACR may remain empty in preflight; later logic tolerates this and focuses on RG for lookup
+          RG="rg-raptor-${TARGET_ENV}"
+          SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
           [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
-          [ -n "$RG" ] && echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
           [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
           [ -n "$SUB" ] && echo "sub=$SUB" >> $GITHUB_OUTPUT
-          # Resolve the source repository that produced the image for links in release notes
-          SRC_REPO=""
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            SRC_REPO='${{ github.event.client_payload.sourceRepo }}'
-          else
-            SRC_REPO='${{ inputs.sourceRepo }}'
-          fi
-          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ vars.FRONTEND_REPO }}'; fi
-          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ github.repository }}'; fi
-          echo "srcRepo=$SRC_REPO" >> $GITHUB_OUTPUT
+          echo "srcRepo=${{ env.SRC_REPO }}" >> $GITHUB_OUTPUT
           echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
 
       - name: Capture current deployed image (before promotion)
@@ -145,202 +162,81 @@ jobs:
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
-          echo "ENV=$ENV"
-          echo "RG=$RG"
-          echo "SUB=$SUB"
-          echo "APP_NAME=$APP_NAME"
-          echo "image=$CURR_IMG"
-          echo "digest=$CURR_DIGEST"
-          if [ -z "$CURR_IMG" ]; then
-            echo "[prepare-and-notify] Warning: Could not resolve current image for Container App '$APP_NAME' in RG '$RG' (sub '${SUB:-default}')." >&2
-          fi
           echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Generate release notes (diff since last test deploy)
-        # Note: title/environment text is dynamic based on resolved target env
+      - name: Generate release notes
         id: relnotes
         shell: bash
+        env:
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
         run: |
           set -euo pipefail
-          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          SRC_IMAGE="$SRC_IMAGE"
           NEW_DIGEST="${SRC_IMAGE#*@}"
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
           SRC_PATH="${SRC_IMAGE#*/}"
           SRC_REPO="${SRC_PATH%@*}"
-
-          # Target ACR/repo context (for previously deployed digest)
           TGT_ENV='${{ steps.prep.outputs.env }}'
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
-
-          # Initialize Azure CLI readiness and subscription early (used by fallbacks below)
           AZ_READY=0
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
-
           PREV_IMAGE='${{ steps.current.outputs.image }}'
           PREV_DIGEST='${{ steps.current.outputs.digest }}'
-          # If previously deployed image was tag-based (e.g., promoted-12345), resolve its digest from target ACR
           if [ -z "$PREV_DIGEST" ] && [ -n "$PREV_IMAGE" ]; then
             PREV_DOMAIN="${PREV_IMAGE%%/*}"
             PREV_REG=$(echo "$PREV_DOMAIN" | sed 's/\.azurecr\.io$//')
             PREV_PATH="${PREV_IMAGE#*/}"
             PREV_REPO="${PREV_PATH%@*}"
             PREV_TAG="${PREV_PATH#*:}"
-            # Only attempt if target ACR context known and prev image points there
             if [ -n "$TGT_ACR" ] && [ "$PREV_REG" = "$TGT_ACR" ] && [ -n "$PREV_TAG" ] && [ "$AZ_READY" -eq 1 ]; then
-              # Query the manifest digest for the specific tag
               CANDIDATE=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$PREV_REPO" --query "[?contains(join(',', tags), '$PREV_TAG')].digest | [0]" -o tsv 2>/dev/null || true)
-              if [ -n "$CANDIDATE" ]; then
-                PREV_DIGEST="$CANDIDATE"
-              fi
+              if [ -n "$CANDIDATE" ]; then PREV_DIGEST="$CANDIDATE"; fi
             fi
           fi
-
-          # Fallback to target ACR latest ONLY for manual runs (workflow_dispatch).
-          # For repository_dispatch promotions we keep a truly blank baseline when the target is fresh.
           if [ -z "$PREV_DIGEST" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
             LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
-            if [ -n "$LATEST" ]; then
-              PREV_DIGEST="$LATEST"
-            fi
+            [ -n "$LATEST" ] && PREV_DIGEST="$LATEST"
           fi
-
-          echo "Resolved previous image/digest: IMAGE='${PREV_IMAGE:-}' DIGEST='${PREV_DIGEST:-}'"
-
-          # (auth readiness already initialized above)
-
-          is_commit_like() {
-            # Return 0 (true) if the tag looks like a commit id (7-40 hex with at least one letter a-f)
-            local s="$1"
-            # allow prefixes like sha-<hex> or commit-<hex>
-            local core="$s"
-            if echo "$s" | grep -qiE '^(sha|commit)-[0-9a-f]{7,40}$'; then
-              core=$(echo "$s" | sed -E 's/^(sha|commit)-//I')
-            fi
-            if echo "$core" | grep -qiE '^[0-9a-f]{7,40}$' && echo "$core" | grep -q '[a-fA-F]'; then
-              return 0
-            fi
-            return 1
-          }
-
-          strip_prefix_commit() {
-            local s="$1"
-            echo "$s" | sed -E 's/^(sha|commit)-//I'
-          }
-
-          get_commit_from_digest() {
-            local reg="$1" repo="$2" dig="$3"
-            if [ -z "$dig" ]; then return 0; fi
-            local TAGS=""
-            if [ "$AZ_READY" -eq 1 ]; then
-              TAGS=$(az acr manifest show-metadata -n "$reg" --subscription "$SUB" --repository "$repo" --digest "$dig" --query "tags[]" -o tsv 2>/dev/null || true)
-              if [ -z "$TAGS" ]; then
-                TAGS=$(az acr repository show-manifests -n "$reg" --subscription "$SUB" --repository "$repo" --query "[?digest=='$dig'].tags[]" -o tsv 2>/dev/null || true)
-              fi
-            fi
-            for t in $TAGS; do
-              if is_commit_like "$t"; then
-                strip_prefix_commit "$t"
-                return 0
-              fi
-            done
-            return 0
-          }
-
-          # Fallback: resolve commit from OCI labels in image config via ACR v2 API
-          # Requires ACR access; avoids dependence on tags
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
-            # Acquire a registry access token
             local tok
             tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            if [ -z "$tok" ]; then echo ""; return 0; fi
+            [ -z "$tok" ] && { echo ""; return 0; }
             local base="https://${reg}.azurecr.io/v2/${repo}"
-            # Try OCI and Docker media types
-            local mf
-            mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
-            if [ -z "$mf" ]; then echo ""; return 0; fi
-            # If manifest list/index, pick first manifest
-            local media
-            media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            [ -z "$mf" ] && { echo ""; return 0; }
+            local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
             if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
-              local child
-              child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-              if [ -n "$child" ]; then
-                mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
-              fi
+              local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
             fi
-            local cfg
-            cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
-            if [ -z "$cfg" ]; then echo ""; return 0; fi
-            local cfgJson
-            cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
-            if [ -z "$cfgJson" ]; then echo ""; return 0; fi
-            local rev
-            rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+            local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+            [ -z "$cfg" ] && { echo ""; return 0; }
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            [ -z "$cfgJson" ] && { echo ""; return 0; }
+            local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
             printf '%s' "$rev"
           }
-
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
-          if [ "$AZ_READY" -eq 1 ]; then
-            # New commit from source (dev) registry/repo
-            NEW_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
-            # Previous commit: try target (test) first, then source (dev) as fallback
-            if [ -n "$TGT_ACR" ]; then
-              PREV_COMMIT_SHORT=$(get_commit_from_digest "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST")
-            fi
-            if [ -z "$PREV_COMMIT_SHORT" ]; then
-              PREV_COMMIT_SHORT=$(get_commit_from_digest "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
-            fi
-          fi
-
-          # If tag-based mapping failed (e.g., tags pruned), fall back to labels
-          if [ -z "$NEW_COMMIT_SHORT" ] && [ -n "$NEW_DIGEST" ]; then
+          if [ -n "$NEW_DIGEST" ]; then
             C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
             [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
           fi
           if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
-            if [ -n "$TGT_ACR" ]; then
-              C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST")
-            fi
-            if [ -z "${C:-}" ]; then
-              C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
-            fi
+            if [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
             [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
           fi
-
-
-          echo "Resolved commit tags: NEW='$NEW_COMMIT_SHORT' PREV='$PREV_COMMIT_SHORT'"
-
-          # Only try to resolve SHAs locally if the source repo equals this repo
-          NEW_SHA=""; PREV_SHA=""
-          if [ "${{ steps.prep.outputs.srcRepo }}" = "${{ github.repository }}" ]; then
-            git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
-            git fetch --prune --unshallow 2>/dev/null || true
-            git fetch --all --tags --force 2>/dev/null || true
-            to_full_sha() {
-              local short="$1"
-              if [ -z "$short" ]; then return 0; fi
-              git rev-parse "$short" 2>/dev/null || true
-            }
-            # Preserve full SHAs from payload if set; otherwise expand short refs
-            if [ -z "${NEW_SHA:-}" ]; then NEW_SHA=$(to_full_sha "$NEW_COMMIT_SHORT"); fi
-            if [ -z "${PREV_SHA:-}" ]; then PREV_SHA=$(to_full_sha "$PREV_COMMIT_SHORT"); fi
-          fi
-
-          echo "Resolved SHAs: NEW='${NEW_SHA:-$NEW_COMMIT_SHORT}' PREV='${PREV_SHA:-$PREV_COMMIT_SHORT}'"
-
-          FRONTEND_SUBDIR="frontend"
-          REPO_URL="https://github.com/${{ steps.prep.outputs.srcRepo || github.repository }}"
+          REPO_URL="https://github.com/${{ env.SRC_REPO }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
           HTML_FILE="release-notes.html"
-
           {
             echo "## Release notes: Promote frontend to ${TGT_ENV}"
             echo
@@ -356,112 +252,13 @@ jobs:
               echo "### Changes (${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT})"
               echo
               echo "Compare: ${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
-              echo
-              echo "#### Commits (frontend/ or repo-wide)"
-              if [ "${{ steps.prep.outputs.srcRepo }}" = "${{ github.repository }}" ] && [ -n "$NEW_SHA" ] && [ -n "$PREV_SHA" ]; then
-                git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true
-                if ! git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" | grep -q .; then
-                  git log --no-merges --pretty=format:'- %h %s (%an, %ad)' --date=short "${PREV_SHA}..${NEW_SHA}" || echo "(no commits found)"
-                fi
-              else
-                # Cross-repo or SHAs unresolved: fetch commits via GitHub API compare endpoint
-                COMP_BASE="${PREV_SHA:-$PREV_COMMIT_SHORT}"
-                COMP_HEAD="${NEW_SHA:-$NEW_COMMIT_SHORT}"
-                API_URL="https://api.github.com/repos/${{ steps.prep.outputs.srcRepo }}/compare/${COMP_BASE}...${COMP_HEAD}"
-                AUTH_H="Authorization: Bearer ${FRONTEND_REPO_READ_TOKEN:-${GITHUB_TOKEN}}"
-                RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' -H "$AUTH_H" "$API_URL" || true)
-                # If token lacks cross-repo access or repo is public, retry unauthenticated
-                if echo "$RESP" | grep -qE 'Resource not accessible by integration|Not Found|Bad credentials'; then
-                  RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' "$API_URL" || true)
-                fi
-                MD_COMMITS=$(printf '%s' "$RESP" | jq -r '
-                  (.commits // []) |
-                  map("- " + (.sha[0:7]) + " " + ((.commit.message | split("\n")[0]) // "") +
-                      " (" + ((.commit.author.name) // "") + ", " + ((.commit.author.date[0:10]) // "") + ")") |
-                  .[]
-                ' 2>/dev/null || true)
-                if [ -n "$MD_COMMITS" ]; then
-                  echo "$MD_COMMITS"
-                else
-                  echo "(no commits found)"
-                fi
-              fi
-            elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
-              echo "First promotion to ${TGT_ENV} with this workflow. Baseline set to ${NEW_COMMIT_SHORT}."
             else
               echo "Could not resolve commit SHAs from image tags. Showing image digests only."
             fi
           } > "$NOTES_FILE"
-
-          {
-            echo "<h2>Release notes: Promote frontend to ${TGT_ENV}</h2>"
-            echo "<p><strong>Target environment:</strong> ${TGT_ENV}</p>"
-            echo "<p><strong>New image:</strong> ${SRC_IMAGE}</p>"
-            if [ -n "$PREV_DIGEST" ]; then
-              echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>"
-            else
-              echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>"
-            fi
-            echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>"
-
-            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
-              echo "<h3>List of changes since last successful deployment</h3>"
-              echo "<p>Compare: <a href=\"${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}\">${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT}</a></p>"
-              COMP_BASE="${PREV_SHA:-$PREV_COMMIT_SHORT}"
-              COMP_HEAD="${NEW_SHA:-$NEW_COMMIT_SHORT}"
-              if [ "${{ steps.prep.outputs.srcRepo }}" != "${{ github.repository }}" ] || [ -z "$NEW_SHA" ] || [ -z "$PREV_SHA" ]; then
-                # Cross-repo or SHAs unresolved: fetch commits via GitHub API compare endpoint and render table
-                API_URL="https://api.github.com/repos/${{ steps.prep.outputs.srcRepo }}/compare/${COMP_BASE}...${COMP_HEAD}"
-                AUTH_H="Authorization: Bearer ${FRONTEND_REPO_READ_TOKEN:-${GITHUB_TOKEN}}"
-                RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' -H "$AUTH_H" "$API_URL" || true)
-                if echo "$RESP" | grep -qE 'Resource not accessible by integration|Not Found|Bad credentials'; then
-                  RESP=$(curl -sSL -H 'Accept: application/vnd.github+json' "$API_URL" || true)
-                fi
-                PARSED=$(printf '%s' "$RESP" | jq -r '
-                  (.commits // []) |
-                  map([.sha[0:7], .sha, (.commit.author.name // ""), (.commit.author.date[0:10] // ""), (.commit.message | split("\n")[0] // "")] | @tsv) |
-                  .[]
-                ' 2>/dev/null || true)
-                if [ -n "$PARSED" ]; then
-                  echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
-                  echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
-                  echo "  <tbody>"
-                  printf '%s\n' "$PARSED" | while IFS=$'\t' read -r SH SFULL A D M; do
-                    ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
-                    printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$SFULL" "$SH" "$A" "$D" "$ESC_M"
-                  done
-                  echo "  </tbody>"
-                  echo "</table>"
-                else
-                  echo "<p>(no commits found)</p>"
-                fi
-              else
-                echo "<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\">"
-                echo "  <thead><tr><th>Commit Hash</th><th>Author</th><th>Commit Date</th><th>Commit Message</th></tr></thead>"
-                echo "  <tbody>"
-                COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" -- "$FRONTEND_SUBDIR" || true)
-                if [ -z "$COMMITS" ]; then
-                  COMMITS=$(git log --no-merges --date=short --pretty=format:'%h|%an|%ad|%s' "${PREV_SHA}..${NEW_SHA}" || true)
-                fi
-                ROWS=$(printf "%s\n" "$COMMITS" | awk 'NF' | wc -l | tr -d ' ')
-                if [ "${ROWS:-0}" -eq 0 ]; then
-                  echo "    <tr><td colspan=\"4\">(no commits found)</td></tr>"
-                else
-                  printf "%s\n" "$COMMITS" | awk 'NF' | while IFS='|' read -r H A D M; do
-                    ESC_M=$(python3 -c 'import sys,html; print(html.escape(sys.argv[1]), end="")' "$M")
-                    printf '    <tr>\n      <td><a href="%s/commit/%s">%s</a></td>\n      <td>%s</td>\n      <td>%s</td>\n      <td>%s</td>\n    </tr>\n' "$REPO_URL" "$H" "$H" "$A" "$D" "$ESC_M"
-                  done
-                fi
-                echo "  </tbody>"
-                echo "</table>"
-              fi
-            elif [ -n "$NEW_SHA" ] && [ -z "$PREV_SHA" ]; then
-              echo "<p>First promotion to ${TGT_ENV} with this workflow. Baseline set to ${NEW_COMMIT_SHORT}.</p>"
-            else
-              echo "<p>Could not resolve commit SHAs from image tags. Showing image digests only.</p>"
-            fi
-          } > "$HTML_FILE"
-
+          printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
+          if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
+          echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
           {
             echo 'body<<EOF'
             cat "$NOTES_FILE"
@@ -470,7 +267,6 @@ jobs:
             cat "$HTML_FILE"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
-
           cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
           printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
@@ -502,22 +298,24 @@ jobs:
           from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
           html_body: |-
             <p>A deployment to the '<strong>${{ steps.prep.outputs.env }}</strong>' environment is pending approval.</p>
-            <p><strong>Image:</strong> ${{ steps.inp.outputs.srcImage }}<br>
+            <p><strong>Image:</strong> ${{ env.SRC_IMAGE }}<br>
                <strong>Target:</strong> Azure Container Apps (${{ steps.prep.outputs.env }})</p>
             <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
             ${{ steps.relnotes.outputs.html }}
 
-  promote-target:
-    name: Promote to ${{ needs.prepare-and-notify.outputs.targetEnv }}
+  promote-to-test:
+    name: Promote to test
+    if: ${{ needs.plan.outputs.run_test == 'true' }}
     runs-on: ubuntu-latest
-    needs: prepare-and-notify
-    environment: ${{ needs.prepare-and-notify.outputs.targetEnv }}
+    needs: [plan, prepare-and-notify-test]
+    environment: test
     permissions:
       id-token: write
       contents: read
     env:
-      TARGET_ENV: ${{ needs.prepare-and-notify.outputs.targetEnv }}
+      TARGET_ENV: test
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -546,34 +344,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Verify Azure CLI is authenticated for this job
           az account show -o none
           az account get-access-token -o none
-          # Verify azd is installed and on PATH
           command -v azd >/dev/null 2>&1
           azd version
-
-      - name: Resolve inputs
-        id: inp
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            SRC_IMAGE='${{ github.event.client_payload.image }}'
-          else
-            SRC_IMAGE='${{ inputs.image }}'
-          fi
-          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
-          echo "srcImage=$SRC_IMAGE" >> $GITHUB_OUTPUT
 
       - name: Prepare target env variables
         id: prep
         shell: bash
         run: |
           set -euo pipefail
-          # Prefer environment-specific repo variables; fallback to shared ones
           TARGET_ENV=${TARGET_ENV}
-          # Using environment-scoped variables for ACR/RG; derive location from RG
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
           RG='${{ vars.AZURE_RESOURCE_GROUP }}'
           if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
@@ -604,17 +385,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
           ACR='${{ steps.prep.outputs.acr }}'
           TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
           echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
           az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
-          # Extract digest from source string (after @)
           DIGEST="${SRC_IMAGE#*@}"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-      # Note: Release notes and email are handled in prepare-and-notify job
 
       - name: Prepare azd env
         shell: bash
@@ -645,7 +423,6 @@ jobs:
           set -euo pipefail
           FQDN=$(azd env get-value frontendFqdn || true)
           if [ -z "$FQDN" ]; then
-            # Fallback: query Container Apps for ingress FQDN
             ENV="${{ steps.prep.outputs.env }}"
             RG="${{ steps.prep.outputs.rg }}"
             APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
@@ -671,23 +448,255 @@ jobs:
             fi
           } >> $GITHUB_STEP_SUMMARY
 
-  promote-prod:
-    name: Promote to Prod
+  prepare-and-notify-train:
+    name: Prepare & Notify (train)
+    if: ${{ needs.plan.outputs.run_train == 'true' }}
+    needs: after-test
+    environment: preflight
     runs-on: ubuntu-latest
-    needs: promote-target
-    if: ${{ vars.ENABLE_PROD_PROMOTION == 'true' }}
-    environment: prod
     permissions:
       id-token: write
       contents: read
     env:
-      TARGET_ENV: prod
+      TARGET_ENV: train
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
+      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
       MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
       MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
       MAIL_TO: ${{ secrets.MAIL_TO }}
       MAIL_FROM: ${{ secrets.MAIL_FROM }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV='${{ env.TARGET_ENV }}'
+          ACR_NAME=""
+          RG="rg-raptor-${TARGET_ENV}"
+          SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
+          [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
+          [ -n "$SUB" ] && echo "sub=$SUB" >> $GITHUB_OUTPUT
+          echo "srcRepo=${{ env.SRC_REPO }}" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Capture current deployed image (before promotion)
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV='${{ steps.prep.outputs.env }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          SUB='${{ steps.prep.outputs.sub }}'
+          if [ -z "$SUB" ]; then SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'; fi
+          if [ -z "$SUB" ]; then
+            SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          fi
+          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_DIGEST="${CURR_IMG#*@}"
+          echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
+          echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: relnotes
+        shell: bash
+        env:
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+        run: |
+          set -euo pipefail
+          SRC_IMAGE="$SRC_IMAGE"
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          SRC_DOMAIN="${SRC_IMAGE%%/*}"
+          SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
+          SRC_PATH="${SRC_IMAGE#*/}"
+          SRC_REPO="${SRC_PATH%@*}"
+          TGT_ENV='${{ steps.prep.outputs.env }}'
+          TGT_ACR='${{ steps.prep.outputs.acr }}'
+          TGT_REPO="raptor/frontend-${TGT_ENV}"
+          AZ_READY=0
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
+          PREV_IMAGE='${{ steps.current.outputs.image }}'
+          PREV_DIGEST='${{ steps.current.outputs.digest }}'
+          if [ -z "$PREV_DIGEST" ] && [ -n "$PREV_IMAGE" ]; then
+            PREV_DOMAIN="${PREV_IMAGE%%/*}"
+            PREV_REG=$(echo "$PREV_DOMAIN" | sed 's/\.azurecr\.io$//')
+            PREV_PATH="${PREV_IMAGE#*/}"
+            PREV_REPO="${PREV_PATH%@*}"
+            PREV_TAG="${PREV_PATH#*:}"
+            if [ -n "$TGT_ACR" ] && [ "$PREV_REG" = "$TGT_ACR" ] && [ -n "$PREV_TAG" ] && [ "$AZ_READY" -eq 1 ]; then
+              CANDIDATE=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$PREV_REPO" --query "[?contains(join(',', tags), '$PREV_TAG')].digest | [0]" -o tsv 2>/dev/null || true)
+              if [ -n "$CANDIDATE" ]; then PREV_DIGEST="$CANDIDATE"; fi
+            fi
+          fi
+          if [ -z "$PREV_DIGEST" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
+            LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+            [ -n "$LATEST" ] && PREV_DIGEST="$LATEST"
+          fi
+          get_commit_from_labels() {
+            local reg="$1" repo="$2" dig="$3"
+            if [ -z "$dig" ]; then echo ""; return 0; fi
+            local tok
+            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$tok" ] && { echo ""; return 0; }
+            local base="https://${reg}.azurecr.io/v2/${repo}"
+            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            [ -z "$mf" ] && { echo ""; return 0; }
+            local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+              local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+            fi
+            local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+            [ -z "$cfg" ] && { echo ""; return 0; }
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            [ -z "$cfgJson" ] && { echo ""; return 0; }
+            local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+            printf '%s' "$rev"
+          }
+          NEW_COMMIT_SHORT=""
+          PREV_COMMIT_SHORT=""
+          if [ -n "$NEW_DIGEST" ]; then
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
+          fi
+          if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
+            if [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
+          fi
+          REPO_URL="https://github.com/${{ env.SRC_REPO }}"
+          BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOTES_FILE="release-notes.md"
+          HTML_FILE="release-notes.html"
+          {
+            echo "## Release notes: Promote frontend to ${TGT_ENV}"
+            echo
+            echo "- Target environment: ${TGT_ENV}"
+            echo "- New image: ${SRC_IMAGE}"
+            if [ -n "$PREV_DIGEST" ]; then
+              echo "- Previously deployed digest: ${PREV_DIGEST}"
+            else
+              echo "- Previously deployed digest: (none - first promotion)"
+            fi
+            echo
+            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
+              echo "### Changes (${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT})"
+              echo
+              echo "Compare: ${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
+            else
+              echo "Could not resolve commit SHAs from image tags. Showing image digests only."
+            fi
+          } > "$NOTES_FILE"
+          printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
+          if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
+          echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
+          {
+            echo 'body<<EOF'
+            cat "$NOTES_FILE"
+            echo 'EOF'
+            echo 'html<<EOF'
+            cat "$HTML_FILE"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check email prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for v in MAIL_SERVER MAIL_USERNAME MAIL_PASSWORD MAIL_TO; do
+            if [ -z "${!v:-}" ]; then missing+=("$v"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Email will be skipped. Missing variables: ${missing[*]}"
+          else
+            echo "Email prerequisites present."
+          fi
+
+      - name: Email approver (optional)
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
+          subject: "[Approval Needed] Promote frontend to ${{ steps.prep.outputs.env }}"
+          to: ${{ env.MAIL_TO }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: |-
+            <p>A deployment to the '<strong>${{ steps.prep.outputs.env }}</strong>' environment is pending approval.</p>
+            <p><strong>Image:</strong> ${{ env.SRC_IMAGE }}<br>
+               <strong>Target:</strong> Azure Container Apps (${{ steps.prep.outputs.env }})</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
+               <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
+            ${{ steps.relnotes.outputs.html }}
+
+  after-test:
+    name: Barrier after test
+    if: ${{ always() }}
+    needs: [plan, promote-to-test]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Proceeding to train stage"
+
+  promote-to-train:
+    name: Promote to train
+    if: ${{ needs.plan.outputs.run_train == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, prepare-and-notify-train]
+    environment: train
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: train
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -716,25 +725,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Verify Azure CLI is authenticated for this job
           az account show -o none
           az account get-access-token -o none
-          # Verify azd is installed and on PATH
           command -v azd >/dev/null 2>&1
           azd version
-
-      - name: Resolve inputs
-        id: inp
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            SRC_IMAGE='${{ github.event.client_payload.image }}'
-          else
-            SRC_IMAGE='${{ inputs.image }}'
-          fi
-          if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
-          echo "srcImage=$SRC_IMAGE" >> $GITHUB_OUTPUT
 
       - name: Prepare target env variables
         id: prep
@@ -742,16 +736,15 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV=${TARGET_ENV}
-          # Using environment-scoped variables for ACR/RG; derive location from RG
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
           RG='${{ vars.AZURE_RESOURCE_GROUP }}'
           if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
-            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP in the 'prod' environment." >&2
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
-            echo "Could not resolve location for resource group '$RG' in prod environment." >&2
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -773,7 +766,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC_IMAGE='${{ steps.inp.outputs.srcImage }}'
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
           ACR='${{ steps.prep.outputs.acr }}'
           TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
@@ -811,7 +804,6 @@ jobs:
           set -euo pipefail
           FQDN=$(azd env get-value frontendFqdn || true)
           if [ -z "$FQDN" ]; then
-            # Fallback: query Container Apps for ingress FQDN
             ENV="${{ steps.prep.outputs.env }}"
             RG="${{ steps.prep.outputs.rg }}"
             APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
@@ -836,3 +828,385 @@ jobs:
               echo "- Frontend: (not available)"
             fi
           } >> $GITHUB_STEP_SUMMARY
+
+  after-train:
+    name: Barrier after train
+    if: ${{ always() }}
+    needs: [plan, promote-to-train]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Proceeding to prod stage"
+
+  prepare-and-notify-prod:
+    name: Prepare & Notify (prod)
+    if: ${{ needs.plan.outputs.run_prod == 'true' }}
+    needs: after-train
+    environment: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: prod
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
+      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV='${{ env.TARGET_ENV }}'
+          ACR_NAME=""
+          RG="rg-raptor-${TARGET_ENV}"
+          SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
+          [ -n "$ACR_NAME" ] && echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          [ -n "$LOC" ] && echo "loc=$LOC" >> $GITHUB_OUTPUT
+          [ -n "$SUB" ] && echo "sub=$SUB" >> $GITHUB_OUTPUT
+          echo "srcRepo=${{ env.SRC_REPO }}" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Capture current deployed image (before promotion)
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV='${{ steps.prep.outputs.env }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          SUB='${{ steps.prep.outputs.sub }}'
+          if [ -z "$SUB" ]; then SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'; fi
+          if [ -z "$SUB" ]; then
+            SUB=$(az account show --query id -o tsv 2>/dev/null || true)
+          fi
+          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_DIGEST="${CURR_IMG#*@}"
+          echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
+          echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: relnotes
+        shell: bash
+        env:
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+        run: |
+          set -euo pipefail
+          SRC_IMAGE="$SRC_IMAGE"
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          SRC_DOMAIN="${SRC_IMAGE%%/*}"
+          SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
+          SRC_PATH="${SRC_IMAGE#*/}"
+          SRC_REPO="${SRC_PATH%@*}"
+          TGT_ENV='${{ steps.prep.outputs.env }}'
+          TGT_ACR='${{ steps.prep.outputs.acr }}'
+          TGT_REPO="raptor/frontend-${TGT_ENV}"
+          AZ_READY=0
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if az account show -o none >/dev/null 2>&1; then AZ_READY=1; fi
+          PREV_IMAGE='${{ steps.current.outputs.image }}'
+          PREV_DIGEST='${{ steps.current.outputs.digest }}'
+          if [ -z "$PREV_DIGEST" ] && [ -n "$PREV_IMAGE" ]; then
+            PREV_DOMAIN="${PREV_IMAGE%%/*}"
+            PREV_REG=$(echo "$PREV_DOMAIN" | sed 's/\.azurecr\.io$//')
+            PREV_PATH="${PREV_IMAGE#*/}"
+            PREV_REPO="${PREV_PATH%@*}"
+            PREV_TAG="${PREV_PATH#*:}"
+            if [ -n "$TGT_ACR" ] && [ "$PREV_REG" = "$TGT_ACR" ] && [ -n "$PREV_TAG" ] && [ "$AZ_READY" -eq 1 ]; then
+              CANDIDATE=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$PREV_REPO" --query "[?contains(join(',', tags), '$PREV_TAG')].digest | [0]" -o tsv 2>/dev/null || true)
+              if [ -n "$CANDIDATE" ]; then PREV_DIGEST="$CANDIDATE"; fi
+            fi
+          fi
+          if [ -z "$PREV_DIGEST" ] && [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "$TGT_ACR" ] && [ -n "$TGT_REPO" ] && [ "$AZ_READY" -eq 1 ]; then
+            LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+            [ -n "$LATEST" ] && PREV_DIGEST="$LATEST"
+          fi
+          get_commit_from_labels() {
+            local reg="$1" repo="$2" dig="$3"
+            if [ -z "$dig" ]; then echo ""; return 0; fi
+            local tok
+            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$tok" ] && { echo ""; return 0; }
+            local base="https://${reg}.azurecr.io/v2/${repo}"
+            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            [ -z "$mf" ] && { echo ""; return 0; }
+            local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+              local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+            fi
+            local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+            [ -z "$cfg" ] && { echo ""; return 0; }
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            [ -z "$cfgJson" ] && { echo ""; return 0; }
+            local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+            printf '%s' "$rev"
+          }
+          NEW_COMMIT_SHORT=""
+          PREV_COMMIT_SHORT=""
+          if [ -n "$NEW_DIGEST" ]; then
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
+          fi
+          if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
+            if [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
+          fi
+          REPO_URL="https://github.com/${{ env.SRC_REPO }}"
+          BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOTES_FILE="release-notes.md"
+          HTML_FILE="release-notes.html"
+          {
+            echo "## Release notes: Promote frontend to ${TGT_ENV}"
+            echo
+            echo "- Target environment: ${TGT_ENV}"
+            echo "- New image: ${SRC_IMAGE}"
+            if [ -n "$PREV_DIGEST" ]; then
+              echo "- Previously deployed digest: ${PREV_DIGEST}"
+            else
+              echo "- Previously deployed digest: (none - first promotion)"
+            fi
+            echo
+            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
+              echo "### Changes (${PREV_COMMIT_SHORT} → ${NEW_COMMIT_SHORT})"
+              echo
+              echo "Compare: ${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
+            else
+              echo "Could not resolve commit SHAs from image tags. Showing image digests only."
+            fi
+          } > "$NOTES_FILE"
+          printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
+          if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
+          echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
+          {
+            echo 'body<<EOF'
+            cat "$NOTES_FILE"
+            echo 'EOF'
+            echo 'html<<EOF'
+            cat "$HTML_FILE"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check email prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for v in MAIL_SERVER MAIL_USERNAME MAIL_PASSWORD MAIL_TO; do
+            if [ -z "${!v:-}" ]; then missing+=("$v"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Email will be skipped. Missing variables: ${missing[*]}"
+          else
+            echo "Email prerequisites present."
+          fi
+
+      - name: Email approver (optional)
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
+          subject: "[Approval Needed] Promote frontend to ${{ steps.prep.outputs.env }}"
+          to: ${{ env.MAIL_TO }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: |-
+            <p>A deployment to the '<strong>${{ steps.prep.outputs.env }}</strong>' environment is pending approval.</p>
+            <p><strong>Image:</strong> ${{ env.SRC_IMAGE }}<br>
+               <strong>Target:</strong> Azure Container Apps (${{ steps.prep.outputs.env }})</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
+               <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
+            ${{ steps.relnotes.outputs.html }}
+
+  promote-to-prod:
+    name: Promote to prod
+    if: ${{ needs.plan.outputs.run_prod == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, prepare-and-notify-prod]
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: prod
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR='${{ steps.prep.outputs.acr }}'
+          RG='${{ steps.prep.outputs.rg }}'
+          echo "Ensuring ACR '$ACR' exists in resource group '$RG'"
+          az acr show -n "$ACR" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env
+        shell: bash
+        run: |
+          set -euo pipefail
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Make preprovision hooks executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/ensure-acr.sh
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+      - name: Expose deployment endpoints
+        id: expose_endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN=$(azd env get-value frontendFqdn || true)
+          if [ -z "$FQDN" ]; then
+            ENV="${{ steps.prep.outputs.env }}"
+            RG="${{ steps.prep.outputs.rg }}"
+            APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+            az extension add -n containerapp -y >/dev/null 2>&1 || true
+            FQDN=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ -n "$FQDN" ]; then
+              azd env set frontendFqdn "$FQDN" >/dev/null || true
+            fi
+          fi
+          echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+          if [ -n "$FQDN" ]; then
+            echo "Frontend URL: https://$FQDN"
+          else
+            echo "Frontend URL not available"
+          fi
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Frontend: https://$FQDN"
+            else
+              echo "- Frontend: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
