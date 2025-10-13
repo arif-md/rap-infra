@@ -8,6 +8,9 @@
       "acrNameOverride": {
         "value": "${AZURE_ACR_NAME}"
       },
+      "acrResourceGroupOverride": {
+        "value": "${AZURE_ACR_RESOURCE_GROUP}"
+      },
       "skipAcrPullRoleAssignment": {
         "value": "${SKIP_ACR_PULL_ROLE_ASSIGNMENT=true}"
       },

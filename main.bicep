@@ -17,6 +17,9 @@ param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowor
 @description('Optional override for ACR name (use existing)')
 param acrNameOverride string = ''
 
+@description('Optional override for ACR resource group (when ACR is in a different RG)')
+param acrResourceGroupOverride string = ''
+
 @description('Skip creating AcrPull role assignment for the frontend identity (useful for local runs without RBAC)')
 param skipAcrPullRoleAssignment bool = true
 
@@ -40,6 +43,7 @@ param tags object = {
 
 var namePrefix = toLower('${environmentName}-rap')
 var acrName    = !empty(acrNameOverride) ? acrNameOverride : toLower(replace('${environmentName}rapacr','-',''))
+var acrResourceGroup = empty(acrResourceGroupOverride) ? resourceGroup().name : acrResourceGroupOverride
 var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
 
@@ -82,10 +86,7 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
 }
 
 
-// Treat ACR as an external dependency (created outside the stack via hook)
-resource acrExisting 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: acrName
-}
+// ACR is treated as external; avoid hard dependency at deploy time. Use name-derived login server when needed.
 
 // Frontend Angular Container App
 module frontend 'app/frontend-angular.bicep' = {
@@ -101,6 +102,8 @@ module frontend 'app/frontend-angular.bicep' = {
     containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
     // ACR name for image pull identity binding
     containerRegistryName: acrName
+  // ACR resource group (for cross-RG role assignment)
+  containerRegistryResourceGroup: acrResourceGroup
     // Use provided image (from env via parameters file) or default placeholder
     image: frontendImage
   // Allow toggling AcrPull role assignment
@@ -123,7 +126,8 @@ module frontend 'app/frontend-angular.bicep' = {
   }
 }
 // Useful outputs for azd and diagnostics
-output containerRegistryLoginServer string = acrExisting.properties.loginServer
+// Derive login server from the provided ACR name to avoid cross-RG coupling
+output containerRegistryLoginServer string = '${acrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
 
 /*module backend 'modules/containerApp.bicep' = {
