@@ -14,8 +14,8 @@ param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowor
 /* Removed backendImage and publicHostname parameters for simplicity */
 
 
-@description('Optional override for ACR name (use existing)')
-param acrNameOverride string = ''
+@description('Optional ACR name (use existing); when empty, a default is derived from environmentName')
+param acrName string = ''
 
 @description('Optional override for ACR resource group (when ACR is in a different RG)')
 param acrResourceGroupOverride string = ''
@@ -42,7 +42,7 @@ param tags object = {
 }
 
 var namePrefix = toLower('${environmentName}-rap')
-var acrName    = !empty(acrNameOverride) ? acrNameOverride : toLower(replace('${environmentName}rapacr','-',''))
+var resolvedAcrName = !empty(acrName) ? acrName : toLower(replace('${environmentName}rapacr','-',''))
 var acrResourceGroup = empty(acrResourceGroupOverride) ? resourceGroup().name : acrResourceGroupOverride
 var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
@@ -100,8 +100,8 @@ module frontend 'app/frontend-angular.bicep' = {
     identityName: frontendIdentityName
     // Managed environment name matches what we created above
     containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
-    // ACR name for image pull identity binding
-    containerRegistryName: acrName
+  // ACR name for image pull identity binding
+  containerRegistryName: resolvedAcrName
   // ACR resource group (for cross-RG role assignment)
   containerRegistryResourceGroup: acrResourceGroup
     // Use provided image (from env via parameters file) or default placeholder
@@ -127,7 +127,7 @@ module frontend 'app/frontend-angular.bicep' = {
 }
 // Useful outputs for azd and diagnostics
 // Derive login server from the provided ACR name to avoid cross-RG coupling
-output containerRegistryLoginServer string = '${acrName}.azurecr.io'
+output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
 
 /*module backend 'modules/containerApp.bicep' = {

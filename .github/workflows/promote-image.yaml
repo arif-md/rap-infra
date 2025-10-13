@@ -624,7 +624,6 @@ jobs:
           azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
           azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
@@ -791,7 +790,6 @@ jobs:
           azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
           azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"

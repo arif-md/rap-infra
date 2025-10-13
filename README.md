@@ -23,12 +23,9 @@ azd env new dev
 azd env select dev
 # Required env values used by Bicep/parameters
 azd env set AZURE_SUBSCRIPTION_ID <subscription-id>
-azd env set AZURE_LOCATION eastus2
 azd env set AZURE_ENV_NAME dev
 azd env set AZURE_RESOURCE_GROUP rg-raptor-dev
 azd env set AZURE_ACR_NAME ngraptordev
-# If your ACR name differs from the default mapping, set the override too
-azd env set acrNameOverride ngraptortest
 ```
 
 Notes
@@ -176,8 +173,8 @@ Approvals
 Required variables/secrets
 
 - Environment-scoped variables (define these in each GitHub Environment):
-	- dev: `AZURE_ACR_NAME=ngraptordev`, `AZURE_RESOURCE_GROUP=rg-raptor-dev`, `AZURE_LOCATION=<region>`
-	- test: `AZURE_ACR_NAME=ngraptortest`, `AZURE_RESOURCE_GROUP=rg-raptor-test`, `AZURE_LOCATION=<region>`
+	- dev: `AZURE_ACR_NAME=ngraptordev`, `AZURE_RESOURCE_GROUP=rg-raptor-dev`
+	- test: `AZURE_ACR_NAME=ngraptortest`, `AZURE_RESOURCE_GROUP=rg-raptor-test`
 - Environment secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` must exist for each environment (`dev`, `test`, and later `prod`).
 
 Optional (recommended for private frontend repo): FRONTEND_REPO_READ_TOKEN
