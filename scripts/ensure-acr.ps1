@@ -72,7 +72,12 @@ if ($LASTEXITCODE -eq 0 -and $acrInfoJson) {
     az acr create -n $AcrName -g $ResourceGroup -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
   } else {
     if ($check.reason -eq 'AlreadyExists') {
-      throw "[ensure-acr] ACR name '$AcrName' exists but is not in the current subscription or is inaccessible. Switch subscription or use a different name. Message: $($check.message)"
+      $sub = az account show --query id -o tsv 2>$null
+      $subName = az account show --query name -o tsv 2>$null
+      Write-Warning "[ensure-acr] ACR name '$AcrName' exists but could not be discovered via 'az acr show' with current permissions or subscription context."
+      Write-Warning "[ensure-acr] Proceeding without discovery. If role assignment is required, set AZURE_ACR_RESOURCE_GROUP to the ACR's resource group or ensure Reader on Microsoft.ContainerRegistry in the subscription."
+      if ($preferredAcrRg) { azd env set AZURE_ACR_RESOURCE_GROUP $preferredAcrRg | Out-Null }
+      goto ResolveImage
     } else {
       throw "[ensure-acr] ACR name '$AcrName' is not valid/available: $($check.message)"
     }

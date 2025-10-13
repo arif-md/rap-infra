@@ -50,6 +50,94 @@ azd env get-value frontendFqdn
 
 In CI, the workflow prints the URL in the job logs as “Frontend URL: https://…”, adds it to the job summary under “Deployment endpoints,” and exposes it as `frontendFqdn` output.
 
+## Local authentication and az defaults
+
+When running locally, ensure your CLI context matches CI and that no incorrect defaults are set in `az`.
+
+### Check and clear `az` defaults
+
+Sometimes `az` has a default resource group set (for example `group=rsg-raptor`). This can cause commands like `az acr show -n <acr>` to implicitly target the wrong RG and fail with `AuthorizationFailed`.
+
+```powershell
+# Show current subscription/tenant
+az account show --output table
+
+# List current defaults
+az configure --list-defaults
+
+# Clear an unwanted default group
+az configure --defaults group=
+
+# Verify defaults again (group should be empty)
+az configure --list-defaults
+```
+
+If you need to query a specific ACR, prefer RG-scoped calls:
+
+```powershell
+az acr show -n <AZURE_ACR_NAME> -g <AZURE_ACR_RESOURCE_GROUP>
+```
+
+### Log in locally with the same service principal as CI
+
+If you’re not authenticated (or on the wrong subscription), log in with the same service principal used in GitHub. Two options:
+
+- Option A (use `az` only; `azd` will piggyback on the current az session)
+
+```powershell
+az login --service-principal `
+	--username <AZURE_CLIENT_ID> `
+	--password <AZURE_CLIENT_SECRET> `
+	--tenant <AZURE_TENANT_ID>
+
+az account set --subscription <AZURE_SUBSCRIPTION_ID>
+```
+
+- Option B (explicitly log in `azd` with the SP as well)
+
+```powershell
+azd auth login `
+	--client-id <AZURE_CLIENT_ID> `
+	--client-secret <AZURE_CLIENT_SECRET> `
+	--tenant-id <AZURE_TENANT_ID>
+
+# Still set the az subscription
+az account set --subscription <AZURE_SUBSCRIPTION_ID>
+```
+
+### Verify local environment values
+
+Make sure your local `azd` environment mirrors the GitHub Environment values you expect.
+
+```powershell
+azd env select test
+azd env get-value AZURE_ENV_NAME              # e.g., test
+azd env get-value AZURE_RESOURCE_GROUP        # e.g., rg-raptor-test
+azd env get-value AZURE_ACR_NAME              # e.g., ngraptortest
+azd env get-value AZURE_ACR_RESOURCE_GROUP    # ACR's RG (may differ from the app RG)
+```
+
+If needed, set or correct them:
+
+```powershell
+azd env set AZURE_ENV_NAME test
+azd env set AZURE_RESOURCE_GROUP rg-raptor-test
+azd env set AZURE_ACR_NAME ngraptortest
+azd env set AZURE_ACR_RESOURCE_GROUP <acr-resource-group>
+```
+
+### Run deployment
+
+```powershell
+azd up --no-prompt --environment test
+```
+
+If your identity cannot read ACR via ARM but can pull images (data plane), the tooling will warn and continue. If role assignment on ACR is required, ensure your principal has Owner or User Access Administrator on the ACR’s resource group, or temporarily set:
+
+```powershell
+azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+```
+
 ## Clean up resources (safe)
 
 Deployment Stacks are enabled, so `azd down` deletes the managed resources it created while leaving the resource group itself intact (per template configuration).
