@@ -219,14 +219,74 @@ jobs:
             echo "didFastPath=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          if az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-            echo "Container App exists. Performing direct image update to: $IMG"
-            az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
-            echo "didFastPath=true" >> $GITHUB_OUTPUT
-          else
+          if ! az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
             echo "Container App does not exist; cannot fast-path."
             echo "didFastPath=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
+          # Determine registry of the new image
+          DOMAIN="${IMG%%/*}"
+          ACR_DOMAIN="${AZURE_ACR_NAME}.azurecr.io"
+          echo "[fast-path] App=$APP_NAME"
+          echo "[fast-path] Image=$IMG"
+          echo "[fast-path] New image domain: $DOMAIN"
+          echo "[fast-path] ACR name/domain: ${AZURE_ACR_NAME}/$ACR_DOMAIN"
+          if [ "$DOMAIN" = "$ACR_DOMAIN" ]; then
+            echo "Container App exists. Preparing ACR registry access for: $DOMAIN"
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          APP_JSON=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" -o json)
+          ID_TYPE=$(printf '%s' "$APP_JSON" | jq -r '.identity.type // "None"')
+            echo "[fast-path] Identity type (pre): $ID_TYPE"
+          if [ "$ID_TYPE" = "None" ] || [ -z "$ID_TYPE" ]; then
+            echo "Assigning system-managed identity to Container App (was: $ID_TYPE)"
+            az containerapp identity assign -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --system-assigned >/dev/null
+            # Refresh identity info
+            APP_JSON=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" -o json)
+            ID_TYPE=$(printf '%s' "$APP_JSON" | jq -r '.identity.type // "None"')
+              echo "[fast-path] Identity type (post-assign): $ID_TYPE"
+          fi
+          ACR_RG="${AZURE_ACR_RESOURCE_GROUP:-$AZURE_RESOURCE_GROUP}"
+          ACR_ID=$(az acr show -n "$AZURE_ACR_NAME" -g "$ACR_RG" --query id -o tsv 2>/dev/null || true)
+            echo "[fast-path] ACR RG: $ACR_RG"
+            echo "[fast-path] ACR ID: ${ACR_ID:-'(unresolved)'}"
+          if [ -z "$ACR_ID" ]; then
+            echo "Could not resolve ACR resource id for $AZURE_ACR_NAME in RG $ACR_RG; falling back."
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          ROLE_ID="$(az role definition list --name AcrPull --query "[0].name" -o tsv)"
+          if [ "$ID_TYPE" = "SystemAssigned" ] || [ "$ID_TYPE" = "SystemAssigned,UserAssigned" ]; then
+            PRINCIPAL_ID=$(printf '%s' "$APP_JSON" | jq -r '.identity.principalId // empty')
+              echo "[fast-path] System principal: ${PRINCIPAL_ID:-'(none)'}"
+            if [ -n "$PRINCIPAL_ID" ]; then
+              echo "Ensuring AcrPull for system-assigned identity $PRINCIPAL_ID"
+              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role "$ROLE_ID" --scope "$ACR_ID" >/dev/null 2>&1 || true
+              echo "Binding registry to app using system identity"
+              az containerapp registry set -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --server "$ACR_DOMAIN" --identity system >/dev/null
+            fi
+          fi
+          # If user-assigned identities exist, bind the first one too
+          UAI_KEYS=$(printf '%s' "$APP_JSON" | jq -r '.identity.userAssignedIdentities | keys[]?')
+          if [ -n "$UAI_KEYS" ]; then
+            FIRST_UAI=$(printf '%s' "$UAI_KEYS" | head -n 1)
+              echo "[fast-path] First UAI: ${FIRST_UAI:-'(none)'}"
+            if [ -n "$FIRST_UAI" ]; then
+              UAI_PRINCIPAL=$(az identity show --ids "$FIRST_UAI" --query principalId -o tsv 2>/dev/null || true)
+                echo "[fast-path] UAI principal: ${UAI_PRINCIPAL:-'(none)'}"
+              if [ -n "$UAI_PRINCIPAL" ]; then
+                echo "Ensuring AcrPull for user-assigned identity $UAI_PRINCIPAL"
+                az role assignment create --assignee-object-id "$UAI_PRINCIPAL" --assignee-principal-type ServicePrincipal --role "$ROLE_ID" --scope "$ACR_ID" >/dev/null 2>&1 || true
+                echo "Binding registry to app using user-assigned identity"
+                az containerapp registry set -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --server "$ACR_DOMAIN" --identity "$FIRST_UAI" >/dev/null
+              fi
+            fi
+          fi
+          else
+            echo "Image domain is not ACR; no registry binding required for fast path."
+          fi
+          echo "Performing direct image update to: $IMG"
+          az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
+          echo "didFastPath=true" >> $GITHUB_OUTPUT
 
       - name: azd up (provision + deploy)
         if: steps.fastpath.outputs.didFastPath != 'true'
