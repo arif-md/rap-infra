@@ -513,7 +513,7 @@ jobs:
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set tags.raptor.lastDigest="$NEW_DIGEST" tags.raptor.lastCommit="$NEW_SHA" >/dev/null
+            --set "tags['raptor.lastDigest']"="$NEW_DIGEST" "tags['raptor.lastCommit']"="$NEW_SHA" >/dev/null
 
   prepare-and-notify-train:
     name: Prepare & Notify (train)
@@ -959,7 +959,7 @@ jobs:
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set tags.raptor.lastDigest="$NEW_DIGEST" tags.raptor.lastCommit="$NEW_SHA" >/dev/null
+            --set "tags['raptor.lastDigest']"="$NEW_DIGEST" "tags['raptor.lastCommit']"="$NEW_SHA" >/dev/null
 
   after-train:
     name: Barrier after train
@@ -1405,5 +1405,5 @@ jobs:
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set tags.raptor.lastDigest="$NEW_DIGEST" tags.raptor.lastCommit="$NEW_SHA" >/dev/null
+            --set "tags['raptor.lastDigest']"="$NEW_DIGEST" "tags['raptor.lastCommit']"="$NEW_SHA" >/dev/null
 

@@ -278,7 +278,7 @@ jobs:
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set tags.raptor.lastDigest="$DIGEST" tags.raptor.lastCommit="$NEW_SHA" >/dev/null || true
+            --set "tags['raptor.lastDigest']"="$DIGEST" "tags['raptor.lastCommit']"="$NEW_SHA" >/dev/null || true
 
       - name: Prepare promotion target
         if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
