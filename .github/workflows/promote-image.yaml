@@ -516,7 +516,7 @@ jobs:
           if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
           az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --is-incremental true \
+            --is-incremental \
             --tags "${TAG_ARGS[@]}" >/dev/null
 
   prepare-and-notify-train:
@@ -966,7 +966,7 @@ jobs:
           if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
           az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --is-incremental true \
+            --is-incremental \
             --tags "${TAG_ARGS[@]}" >/dev/null
 
   after-train:
@@ -1416,6 +1416,6 @@ jobs:
           if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
           az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --is-incremental true \
+            --is-incremental \
             --tags "${TAG_ARGS[@]}" >/dev/null
 
