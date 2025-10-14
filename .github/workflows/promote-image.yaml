@@ -168,6 +168,8 @@ jobs:
           if [ "$CURR_IMG" = "$CURR_DIGEST" ]; then CURR_DIGEST=""; fi
           echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
+          echo "image=$CURR_IMG"
+          echo "digest=$CURR_DIGEST"
 
       - name: Generate release notes
         id: relnotes

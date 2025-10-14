@@ -54,7 +54,7 @@ else
   else
     # Name is not available globally
     if [ "$REASON" = "AlreadyExists" ]; then
-      echo "[ensure-acr][WARN] ACR name '$AZURE_ACR_NAME' exists but could not be discovered via 'az acr show' with current permissions or subscription context." >&2
+      echo "[ensure-acr][WARN] ACR name '$AZURE_ACR_NAME' exists but could not be discovered via 'az acr show' without specifying the ACR group name." >&2
       echo "[ensure-acr][HINT] If role assignment is required, set AZURE_ACR_RESOURCE_GROUP to the ACR's RG or ensure Reader on Microsoft.ContainerRegistry." >&2
       # proceed without discovery; image resolution below may still work if data-plane access is permitted
     else
