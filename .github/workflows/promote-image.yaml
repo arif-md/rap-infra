@@ -1,4 +1,4 @@
-name: Infra - Promote Image to Test/Prod
+name: Infra - Promote Image to Higher Environments
 
 on:
   workflow_dispatch:
