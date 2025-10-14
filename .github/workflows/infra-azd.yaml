@@ -223,6 +223,63 @@ jobs:
             echo "- Deployed: ${DEPLOYED_IMG:-'(unavailable)'}"
           } >> $GITHUB_STEP_SUMMARY
 
+      - name: Persist deployment metadata to tags (base env)
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          RG="$AZURE_RESOURCE_GROUP"
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
+          # Prefer configured image (what we attempted to deploy); fall back to the actual deployed image read back
+          IMG='${{ steps.effective_image.outputs.configuredImage }}'
+          if [ -z "$IMG" ]; then IMG='${{ steps.effective_image.outputs.deployedImage }}'; fi
+          if [ -z "$IMG" ]; then
+            echo "No image detected; skipping tag persistence."
+            exit 0
+          fi
+          DIGEST="${IMG#*@}"
+          if [ "$IMG" = "$DIGEST" ]; then
+            echo "Image is not in digest form; skipping tag persistence: $IMG"
+            exit 0
+          fi
+          DOMAIN="${IMG%%/*}"
+          REPO_PATH="${IMG#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          echo "Resolved image: domain=$DOMAIN repo=$REPO_NAME digest=$DIGEST"
+          # Attempt to resolve commit from OCI labels when image is in ACR
+          NEW_SHA=""
+          if echo "$DOMAIN" | grep -q ".azurecr.io$"; then
+            REG_NAME=$(echo "$DOMAIN" | sed 's/\\.azurecr\\.io$//')
+            get_commit_from_labels() {
+              local reg="$1" repo="$2" dig="$3"
+              if [ -z "$dig" ]; then echo ""; return 0; fi
+              local tok
+              tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+              [ -z "$tok" ] && { echo ""; return 0; }
+              local base="https://${reg}.azurecr.io/v2/${repo}"
+              local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+              [ -z "$mf" ] && { echo ""; return 0; }
+              local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+              if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+                local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
+                [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              fi
+              local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+              [ -z "$cfg" ] && { echo ""; return 0; }
+              local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+              [ -z "$cfgJson" ] && { echo ""; return 0; }
+              local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+              printf '%s' "$rev"
+            }
+            NEW_SHA=$(get_commit_from_labels "$REG_NAME" "$REPO_NAME" "$DIGEST")
+          fi
+          echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
+          az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+            --resource-type "Microsoft.App/containerApps" \
+            --set tags.raptor.lastDigest="$DIGEST" tags.raptor.lastCommit="$NEW_SHA" >/dev/null || true
+
       - name: Prepare promotion target
         if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
         id: promo
