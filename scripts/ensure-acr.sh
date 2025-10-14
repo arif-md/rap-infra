@@ -65,7 +65,10 @@ else
 fi
 
 # If SERVICE_FRONTEND_IMAGE_NAME isn't set, try to resolve the latest image from ACR for this env
-CURRENT_IMAGE="$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || true)"
+RAW_IMAGE=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || true)
+# Use only first line, strip CR, and ignore azd 'ERROR:' output
+CURRENT_IMAGE=$(printf '%s' "$RAW_IMAGE" | tr -d '\r' | head -n1)
+if printf '%s' "$CURRENT_IMAGE" | grep -qi '^error:'; then CURRENT_IMAGE=""; fi
 ACR_DOMAIN="${AZURE_ACR_NAME}.azurecr.io"
 CURRENT_DOMAIN="${CURRENT_IMAGE%%/*}"
 if [ -z "$CURRENT_IMAGE" ]; then
@@ -101,5 +104,43 @@ else
     fi
   else
     echo "SERVICE_FRONTEND_IMAGE_NAME already set to ACR image; leaving as-is."
+    # Validate that the digest still exists (heal if pruned)
+    REPO_PATH="${CURRENT_IMAGE#*/}"
+    REPO_NAME="${REPO_PATH%@*}"
+    DIGEST_PART="${CURRENT_IMAGE##*@}"
+    if [ "$CURRENT_IMAGE" = "$DIGEST_PART" ]; then
+      echo "Current image is not digest form (tag only); will attempt to resolve latest digest for repo $REPO_NAME"
+      LATEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO_NAME" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+      if [ -n "$LATEST" ]; then
+        HEALED_IMAGE="$ACR_DOMAIN/$REPO_NAME@$LATEST"
+        echo "Resolved latest digest: $HEALED_IMAGE"
+        azd env set SERVICE_FRONTEND_IMAGE_NAME "$HEALED_IMAGE" >/dev/null
+        CURRENT_IMAGE="$HEALED_IMAGE"
+      else
+        echo "Could not resolve any digest for $REPO_NAME; leaving tag-based image as-is."
+      fi
+    else
+      # Only check existence if digest form
+      if [ -n "$REPO_NAME" ] && [ -n "$DIGEST_PART" ]; then
+        echo "Validating digest exists in ACR: $AZURE_ACR_NAME / $REPO_NAME @ $DIGEST_PART"
+        if ! az acr manifest show -n "$AZURE_ACR_NAME" --repository "$REPO_NAME" --name "$DIGEST_PART" >/dev/null 2>&1; then
+          echo "[heal] Digest no longer present (likely purged): $DIGEST_PART"
+          NEW_DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO_NAME" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+          if [ -n "$NEW_DIGEST" ]; then
+            HEALED_IMAGE="$ACR_DOMAIN/$REPO_NAME@$NEW_DIGEST"
+            echo "[heal] Switching to latest available digest: $HEALED_IMAGE"
+            azd env set SERVICE_FRONTEND_IMAGE_NAME "$HEALED_IMAGE" >/dev/null
+            CURRENT_IMAGE="$HEALED_IMAGE"
+          else
+            FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+            echo "[heal] No digests remain in repo; falling back to public image: $FALLBACK"
+            azd env set SERVICE_FRONTEND_IMAGE_NAME "$FALLBACK" >/dev/null
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true >/dev/null
+          fi
+        else
+          echo "Digest is present; no healing required."
+        fi
+      fi
+    fi
   fi
 fi
