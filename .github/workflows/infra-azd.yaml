@@ -365,9 +365,12 @@ jobs:
             NEW_SHA=$(get_commit_from_labels "$REG_NAME" "$REPO_NAME" "$DIGEST")
           fi
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
+          if [ -z "$DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
+          SET_ARGS=("tags['raptor.lastDigest']=${DIGEST}")
+          if [ -n "$NEW_SHA" ]; then SET_ARGS+=("tags['raptor.lastCommit']=${NEW_SHA}"); fi
           az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set "tags['raptor.lastDigest']"="$DIGEST" "tags['raptor.lastCommit']"="$NEW_SHA" >/dev/null || true
+            --set "${SET_ARGS[@]}" >/dev/null || true
 
       - name: Prepare promotion target
         if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
