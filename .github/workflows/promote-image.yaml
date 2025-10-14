@@ -512,11 +512,12 @@ jobs:
           NEW_SHA=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           if [ -z "$NEW_DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
-          SET_ARGS=("tags['raptor.lastDigest']=${NEW_DIGEST}")
-          if [ -n "$NEW_SHA" ]; then SET_ARGS+=("tags['raptor.lastCommit']=${NEW_SHA}"); fi
-          az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+          TAG_ARGS=("raptor.lastDigest=${NEW_DIGEST}")
+          if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
+          az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set "${SET_ARGS[@]}" >/dev/null
+            --is-incremental true \
+            --tags "${TAG_ARGS[@]}" >/dev/null
 
   prepare-and-notify-train:
     name: Prepare & Notify (train)
@@ -961,11 +962,12 @@ jobs:
           NEW_SHA=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           if [ -z "$NEW_DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
-          SET_ARGS=("tags['raptor.lastDigest']=${NEW_DIGEST}")
-          if [ -n "$NEW_SHA" ]; then SET_ARGS+=("tags['raptor.lastCommit']=${NEW_SHA}"); fi
-          az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+          TAG_ARGS=("raptor.lastDigest=${NEW_DIGEST}")
+          if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
+          az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set "${SET_ARGS[@]}" >/dev/null
+            --is-incremental true \
+            --tags "${TAG_ARGS[@]}" >/dev/null
 
   after-train:
     name: Barrier after train
@@ -1410,9 +1412,10 @@ jobs:
           NEW_SHA=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           if [ -z "$NEW_DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
-          SET_ARGS=("tags['raptor.lastDigest']=${NEW_DIGEST}")
-          if [ -n "$NEW_SHA" ]; then SET_ARGS+=("tags['raptor.lastCommit']=${NEW_SHA}"); fi
-          az resource update -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+          TAG_ARGS=("raptor.lastDigest=${NEW_DIGEST}")
+          if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
+          az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
-            --set "${SET_ARGS[@]}" >/dev/null
+            --is-incremental true \
+            --tags "${TAG_ARGS[@]}" >/dev/null
 
