@@ -348,7 +348,7 @@ jobs:
                 local cfgDig; cfgDig=$(printf '%s' "$cmf" | jq -r '.config.digest // empty')
                 echo "[debug] ($label) child cfg=${cfgDig:0:25}..."
                 [ -z "$cfgDig" ] && continue
-                cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/../blobs/$cfgDig" 2>/dev/null || true)
+                cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$base/v2/${repo}/blobs/$cfgDig" 2>/dev/null || true)
                 [ -z "$cfgJson" ] && { echo "[debug] ($label) child cfg blob empty"; continue; }
                 local rev1 rev2
                 rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
@@ -366,7 +366,7 @@ jobs:
             local cfgDig; cfgDig=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
             echo "[debug] ($label) cfg=${cfgDig:0:25}..."
             [ -z "$cfgDig" ] && return 0
-            cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/../blobs/$cfgDig" 2>/dev/null || true)
+            cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$base/v2/${repo}/blobs/$cfgDig" 2>/dev/null || true)
             [ -z "$cfgJson" ] && { echo "[debug] ($label) cfg blob empty"; return 0; }
             local rev1 rev2
             rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
