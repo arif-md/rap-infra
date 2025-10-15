@@ -163,6 +163,11 @@ jobs:
           APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          CURR_DIGEST="${CURR_IMG#*@}"
+          if [ "$CURR_IMG" = "$CURR_DIGEST" ]; then CURR_DIGEST=""; fi
+          echo "image=$CURR_IMG" >> $GITHUB_OUTPUT
+          echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
+
       - name: Make utility scripts executable
         shell: bash
         run: |
