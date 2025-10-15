@@ -167,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x infra/scripts/*.sh || true
+          chmod +x scripts/*.sh || true
 
       - name: Generate release notes (shared)
         id: relnotes
@@ -186,7 +186,7 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash infra/scripts/relnotes.sh
+          bash scripts/relnotes.sh
 
       - name: Append release notes to summary
         shell: bash
@@ -641,7 +641,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x infra/scripts/*.sh || true
+          chmod +x scripts/*.sh || true
 
       - name: Generate release notes (shared)
         id: relnotes
@@ -660,7 +660,7 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash infra/scripts/relnotes.sh
+          bash scripts/relnotes.sh
 
       - name: Append release notes to summary
         shell: bash
@@ -1071,7 +1071,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x infra/scripts/*.sh || true
+          chmod +x scripts/*.sh || true
 
       - name: Generate release notes (shared)
         id: relnotes
@@ -1090,7 +1090,7 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash infra/scripts/relnotes.sh
+          bash scripts/relnotes.sh
 
       - name: Append release notes to summary
         shell: bash
