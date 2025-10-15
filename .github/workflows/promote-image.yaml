@@ -268,32 +268,38 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash -c 'cat <<SCRIPT > /tmp/email-compose.sh
-          #!/usr/bin/env bash
-          set -euo pipefail
+          
           NEEDS_APPROVAL=${NEEDS_APPROVAL:-false}
-          TARGET_ENV=${TARGET_ENV:-}
-          SRC_IMAGE=${SRC_IMAGE:-}
-          BUILD_URL=${BUILD_URL:-}
-          RELEASE_HTML=${RELEASE_HTML:-release-notes.html}
           SUBJECT_PREFIX="[Deployment Notice]"
           INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is ready."
+          
           if [ "$NEEDS_APPROVAL" = "true" ]; then
             SUBJECT_PREFIX="[Approval Needed]"
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
+          
           SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
+          
           {
             printf "<p>%s</p>\n" "$INTRO"
             printf "<p><strong>Image:</strong> %s<br>\n<strong>Target:</strong> Azure Container Apps (%s)</p>\n" "$SRC_IMAGE" "$TARGET_ENV"
-            printf "<p><a href=\"%s\">Build details</a>%s</p>\n" "$BUILD_URL" "$([ "$NEEDS_APPROVAL" = "true" ] && echo ' • <a href="'"$BUILD_URL"'">Review &amp; approve</a>')"
+            if [ "$NEEDS_APPROVAL" = "true" ]; then
+              printf "<p><a href=\"%s\">Build details</a> • <a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL" "$BUILD_URL"
+            else
+              printf "<p><a href=\"%s\">Build details</a></p>\n" "$BUILD_URL"
+            fi
             cat "$RELEASE_HTML" || true
           } > "$EMAIL_HTML"
-          echo 'subject<<EOF' >> "$GITHUB_OUTPUT"; echo "$SUBJECT" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          echo 'html<<EOF' >> "$GITHUB_OUTPUT"; cat "$EMAIL_HTML" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          SCRIPT'
-          bash /tmp/email-compose.sh
+          
+          {
+            echo "subject<<EOF"
+            echo "$SUBJECT"
+            echo "EOF"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Email approver/notify (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
@@ -684,32 +690,38 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash -c 'cat <<SCRIPT > /tmp/email-compose.sh
-          #!/usr/bin/env bash
-          set -euo pipefail
+          
           NEEDS_APPROVAL=${NEEDS_APPROVAL:-false}
-          TARGET_ENV=${TARGET_ENV:-}
-          SRC_IMAGE=${SRC_IMAGE:-}
-          BUILD_URL=${BUILD_URL:-}
-          RELEASE_HTML=${RELEASE_HTML:-release-notes.html}
           SUBJECT_PREFIX="[Deployment Notice]"
           INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is ready."
+          
           if [ "$NEEDS_APPROVAL" = "true" ]; then
             SUBJECT_PREFIX="[Approval Needed]"
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
+          
           SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
+          
           {
             printf "<p>%s</p>\n" "$INTRO"
             printf "<p><strong>Image:</strong> %s<br>\n<strong>Target:</strong> Azure Container Apps (%s)</p>\n" "$SRC_IMAGE" "$TARGET_ENV"
-            printf "<p><a href=\"%s\">Build details</a>%s</p>\n" "$BUILD_URL" "$([ "$NEEDS_APPROVAL" = "true" ] && echo ' • <a href="'"$BUILD_URL"'">Review &amp; approve</a>')"
+            if [ "$NEEDS_APPROVAL" = "true" ]; then
+              printf "<p><a href=\"%s\">Build details</a> • <a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL" "$BUILD_URL"
+            else
+              printf "<p><a href=\"%s\">Build details</a></p>\n" "$BUILD_URL"
+            fi
             cat "$RELEASE_HTML" || true
           } > "$EMAIL_HTML"
-          echo 'subject<<EOF' >> "$GITHUB_OUTPUT"; echo "$SUBJECT" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          echo 'html<<EOF' >> "$GITHUB_OUTPUT"; cat "$EMAIL_HTML" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          SCRIPT'
-          bash /tmp/email-compose.sh
+          
+          {
+            echo "subject<<EOF"
+            echo "$SUBJECT"
+            echo "EOF"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Email approver/notify (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
@@ -1114,32 +1126,38 @@ jobs:
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          bash -c 'cat <<SCRIPT > /tmp/email-compose.sh
-          #!/usr/bin/env bash
-          set -euo pipefail
+          
           NEEDS_APPROVAL=${NEEDS_APPROVAL:-false}
-          TARGET_ENV=${TARGET_ENV:-}
-          SRC_IMAGE=${SRC_IMAGE:-}
-          BUILD_URL=${BUILD_URL:-}
-          RELEASE_HTML=${RELEASE_HTML:-release-notes.html}
           SUBJECT_PREFIX="[Deployment Notice]"
           INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is ready."
+          
           if [ "$NEEDS_APPROVAL" = "true" ]; then
             SUBJECT_PREFIX="[Approval Needed]"
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
+          
           SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
+          
           {
             printf "<p>%s</p>\n" "$INTRO"
             printf "<p><strong>Image:</strong> %s<br>\n<strong>Target:</strong> Azure Container Apps (%s)</p>\n" "$SRC_IMAGE" "$TARGET_ENV"
-            printf "<p><a href=\"%s\">Build details</a>%s</p>\n" "$BUILD_URL" "$([ "$NEEDS_APPROVAL" = "true" ] && echo ' • <a href="'"$BUILD_URL"'">Review &amp; approve</a>')"
+            if [ "$NEEDS_APPROVAL" = "true" ]; then
+              printf "<p><a href=\"%s\">Build details</a> • <a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL" "$BUILD_URL"
+            else
+              printf "<p><a href=\"%s\">Build details</a></p>\n" "$BUILD_URL"
+            fi
             cat "$RELEASE_HTML" || true
           } > "$EMAIL_HTML"
-          echo 'subject<<EOF' >> "$GITHUB_OUTPUT"; echo "$SUBJECT" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          echo 'html<<EOF' >> "$GITHUB_OUTPUT"; cat "$EMAIL_HTML" >> "$GITHUB_OUTPUT"; echo 'EOF' >> "$GITHUB_OUTPUT"
-          SCRIPT'
-          bash /tmp/email-compose.sh
+          
+          {
+            echo "subject<<EOF"
+            echo "$SUBJECT"
+            echo "EOF"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Email approver/notify (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
