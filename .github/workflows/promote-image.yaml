@@ -220,26 +220,78 @@ jobs:
             LATEST=$(az acr repository show-manifests -n "$TGT_ACR" --subscription "$SUB" --repository "$TGT_REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
             [ -n "$LATEST" ] && PREV_DIGEST="$LATEST"
           fi
+          # Resolve commit SHA from OCI labels in ACR for the given repo@digest.
+          # - Handles single-manifest and multi-arch manifest lists by iterating all children.
+          # - Checks common alternate label keys and performs a case-insensitive fallback.
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
+            # Obtain a data-plane bearer token for the registry
             local tok
             tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
             [ -z "$tok" ] && { echo ""; return 0; }
             local base="https://${reg}.azurecr.io/v2/${repo}"
-            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+
+            # Helper: fetch a manifest JSON for a digest with appropriate Accept headers
+            _fetch_manifest() {
+              local digest="$1"
+              curl -fsSL \
+                -H "Authorization: Bearer $tok" \
+                -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+                "$base/manifests/$digest" 2>/dev/null || true
+            }
+
+            # Helper: extract revision from a single-manifest JSON by reading its config blob labels
+            _extract_rev_from_manifest() {
+              local manifest_json="$1"
+              local cfg
+              cfg=$(printf '%s' "$manifest_json" | jq -r '.config.digest // empty')
+              [ -z "$cfg" ] && { echo ""; return 0; }
+              local cfgJson
+              cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+              [ -z "$cfgJson" ] && { echo ""; return 0; }
+              # Try standard and common alternate keys, then case-insensitive search across labels
+              local rev
+              rev=$(printf '%s' "$cfgJson" | jq -r '
+                .config.Labels["org.opencontainers.image.revision"]
+                // .config.Labels["org.opencontainers.image.vcs-ref"]
+                // empty')
+              if [ -z "$rev" ]; then
+                # Case-insensitive fallback: scan label keys for *revision*
+                rev=$(printf '%s' "$cfgJson" | jq -r '
+                  (.config.Labels // {})
+                  | to_entries
+                  | map(select((.key|ascii_downcase) == "org.opencontainers.image.revision"))
+                  | .[0].value // empty')
+              fi
+              printf '%s' "$rev"
+            }
+
+            # Fetch the top-level manifest
+            local mf
+            mf=$(_fetch_manifest "$dig")
             [ -z "$mf" ] && { echo ""; return 0; }
-            local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            local media
+            media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+
+            # If this is a manifest list (multi-arch), iterate each child manifest until a revision label is found
             if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
-              local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              local child
+              for child in $(printf '%s' "$mf" | jq -r '.manifests[].digest // empty'); do
+                [ -z "$child" ] && continue
+                local cmf
+                cmf=$(_fetch_manifest "$child")
+                [ -z "$cmf" ] && continue
+                local rev
+                rev=$(_extract_rev_from_manifest "$cmf")
+                if [ -n "$rev" ]; then printf '%s' "$rev"; return 0; fi
+              done
+              # Nothing found across children
+              echo ""; return 0
             fi
-            local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
-            [ -z "$cfg" ] && { echo ""; return 0; }
-            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
-            [ -z "$cfgJson" ] && { echo ""; return 0; }
-            local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
-            printf '%s' "$rev"
+
+            # Single-manifest path
+            _extract_rev_from_manifest "$mf"
           }
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""

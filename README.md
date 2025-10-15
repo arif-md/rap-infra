@@ -266,3 +266,77 @@ Note: `FRONTEND_REPO_READ_TOKEN` (read access from infra → frontend for change
 Prod later:
 
 - The promotion workflow includes a guard `ENABLE_PROD_PROMOTION` repo variable. Leave it unset/false for now. When your admin creates prod RG/ACR, add the corresponding variables (in the `prod` environment), secrets for the `prod` environment, enable required reviewers, and set `ENABLE_PROD_PROMOTION=true` to include prod in the pipeline.
+
+## Approval email and release notes generation
+
+This section explains how the promotion workflow prepares the email content and the release notes that appear in the approval email and job summary.
+
+### Inputs
+
+- New image to promote (by digest): `SRC_IMAGE` (for example, `ngraptordev.azurecr.io/raptor/frontend-dev@sha256:<...>`)
+- Target environment metadata resolved in the job:
+	- `AZURE_RESOURCE_GROUP`, `AZURE_ACR_NAME` (optionally `AZURE_ACR_RESOURCE_GROUP`)
+	- Subscription ID and resolved location
+- Email settings (optional, only if you want email notifications):
+	- `MAIL_SERVER`, `MAIL_PORT` (default 587), `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_TO`, `MAIL_FROM`
+
+### Data sources used to build release notes
+
+1) Current deployed image/digest in the target environment
+	 - Reads from the existing Container App: `properties.template.containers[0].image`
+	 - If the image is `repo@digest`, we capture that digest.
+	 - If the image is `repo:tag`, we try to resolve a digest in the target ACR by matching the tag to the repo’s manifest list.
+
+2) Commit SHAs via OCI labels (preferred)
+	 - Uses the registry’s HTTP API with a temporary ACR token to fetch the image manifest and its config blob.
+	 - Reads the `org.opencontainers.image.revision` label from the config to get a commit SHA.
+	 - Handles manifest lists by following the first child manifest (multi-arch images); if the top manifest is a list, we fetch the first child’s config.
+
+3) Durable fallbacks via Container App tags
+	 - If commit resolution fails, we consult resource tags on the Container App itself:
+		 - `raptor.lastDigest`
+		 - `raptor.lastCommit`
+	 - These are written during successful deployments to persist baseline metadata even if registry tags are later pruned.
+
+### Resolution order and fallbacks
+
+- Previous digest (`PREV_DIGEST`):
+	1. From the currently deployed image in the Container App (preferred).
+	2. If the current image is tag-form only, attempt to resolve the digest in the target ACR for that repo.
+	3. If still unresolved on a manual run, fall back to the latest digest in the target repo.
+	4. If nothing is found, treat this as the first promotion (no previous digest).
+
+- Previous commit (`PREV_SHA`):
+	1. Resolve from OCI labels using the actual previous image’s registry/repo/digest.
+	2. Fall back to the target ACR/repo.
+	3. Fall back to the source image’s registry/repo.
+	4. Fall back to Container App tags `raptor.lastCommit`.
+	5. If still not found, we proceed with digest-only notes (no commit compare).
+
+- New commit (`NEW_SHA`):
+	- Resolved from `SRC_IMAGE`’s config labels in its source registry.
+
+### Outputs produced
+
+- A markdown file and an HTML fragment (attached to the email and appended to the job summary) that contain:
+	- Target environment
+	- New image (`image@digest`)
+	- Previously deployed digest (or “none – first promotion” if unavailable)
+	- Changes section:
+		- If both commits are available: a GitHub compare link (`previous…new`).
+		- Otherwise: a digest change summary (`prevDigest → newDigest`) with a note that commit SHAs were not available.
+
+### Email delivery
+
+- If the `MAIL_*` variables are present, the job sends an approval email that includes:
+	- A header indicating the target environment
+	- The new image
+	- Links to build details and the approval page
+	- The rendered HTML release notes fragment described above
+
+### Notes and edge cases
+
+- Labels and ACR import: `az acr import` preserves manifests and config blobs, so OCI labels stamped at build time should be retained. If commit resolution fails, it’s typically due to querying the wrong repo/digest, insufficient data-plane scope for registry HTTP calls, or multi-arch manifests where the first child lacks the label.
+- Digest-only fallback: even when commit SHAs are not resolvable, the workflow now keeps and displays the previous digest so release notes are still informative.
+- First promotion: if we cannot determine a previous digest, the notes explicitly state “none – first promotion.”
+- Durability: Container App tags (`raptor.lastDigest`/`raptor.lastCommit`) provide a baseline even if the registry later purges old tags/manifests.
