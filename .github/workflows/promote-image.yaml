@@ -493,10 +493,12 @@ jobs:
                   echo '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th align="left">SHA</th><th align="left">Message</th><th align="left">Author</th><th align="left">Date</th></tr></thead><tbody>' >> "$HTML_FILE"
                   TMP=$(mktemp)
                   HTTP=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$TMP" -w "%{http_code}" "$API_URL" || true)
+                  echo "response status = $HTTP, response = $TMP"
                   if echo "$HTTP" | grep -qE '^(200|201|204)$'; then
                     JSON=$(cat "$TMP")
                     MAX=${COMMITS_TABLE_LIMIT}
                     TOTAL=$(printf '%s' "$JSON" | jq -r '(.commits // []) | length')
+                    echo "Total = $TOTAL"
                     printf '%s' "$JSON" | jq -r --argjson max "$MAX" '
                       (.commits // []) | .[0:$max] | .[] | [
                         .sha,
