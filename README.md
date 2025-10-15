@@ -340,3 +340,14 @@ This section explains how the promotion workflow prepares the email content and 
 - Digest-only fallback: even when commit SHAs are not resolvable, the workflow now keeps and displays the previous digest so release notes are still informative.
 - First promotion: if we cannot determine a previous digest, the notes explicitly state “none – first promotion.”
 - Durability: Container App tags (`raptor.lastDigest`/`raptor.lastCommit`) provide a baseline even if the registry later purges old tags/manifests.
+
+### Commit table in emails (optional)
+
+When both NEW and PREV commit SHAs are resolved from the image labels and they differ, the promotion workflow calls the GitHub Compare API and renders a small commit table (SHA, message, author, date) inside the email and job summary.
+
+- Tokens used
+	- Same repo: the built-in `GITHUB_TOKEN` (contents: read) is used automatically.
+	- Cross-repo: set `FRONTEND_REPO_READ_TOKEN` with read access to the frontend repo; the workflow will use it when the source repo differs from this infra repo.
+- Fallbacks
+	- If the API call fails (rate limit, permissions, etc.), the email still includes the digest delta and a clickable compare link.
+	- The workflow logs will include a brief diagnostic line with the HTTP status if fetching commits fails.

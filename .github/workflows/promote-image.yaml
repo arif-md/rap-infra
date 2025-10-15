@@ -178,6 +178,8 @@ jobs:
           SRC_IMAGE: ${{ env.SRC_IMAGE }}
         run: |
           set -euo pipefail
+          # Allow overriding commit table size via repo/env variable
+          COMMITS_TABLE_LIMIT='${{ vars.COMMITS_TABLE_LIMIT || 50 }}'
           SRC_IMAGE="$SRC_IMAGE"
           NEW_DIGEST="${SRC_IMAGE#*@}"
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
@@ -449,6 +451,54 @@ jobs:
                 printf '<p>No code changes detected (same commit: <code>%s</code>).</p>\n' "$NEW_COMMIT_SHORT" >> "$HTML_FILE"
               else
                 printf '<p>Compare commits: <a href="%s/compare/%s...%s">%s → %s</a></p>\n' "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" "${PREV_COMMIT_SHORT}" "${NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+                # Attempt to render a commit log table
+                OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+                REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+                API_URL="https://api.github.com/repos/${OWNER}/${REPO_NAME}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
+                # Choose token: default repo token if same repo, else fallback to FRONTEND_REPO_READ_TOKEN
+                GH_TOKEN_USE=""
+                if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+                if [ -n "$GH_TOKEN_USE" ]; then
+                  echo "<details><summary>Commit log</summary>" >> "$HTML_FILE"
+                  echo '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th align="left">SHA</th><th align="left">Message</th><th align="left">Author</th><th align="left">Date</th></tr></thead><tbody>' >> "$HTML_FILE"
+                  TMP=$(mktemp)
+                  HTTP=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$TMP" -w "%{http_code}" "$API_URL" || true)
+                  if echo "$HTTP" | grep -qE '^(200|201|204)$'; then
+                    JSON=$(cat "$TMP")
+                    MAX=${COMMITS_TABLE_LIMIT}
+                    TOTAL=$(printf '%s' "$JSON" | jq -r '(.commits // []) | length')
+                    printf '%s' "$JSON" | jq -r --argjson max "$MAX" '
+                      (.commits // []) | .[0:$max] | .[] | [
+                        .sha,
+                        (.html_url // ""),
+                        (.commit.message | split("\n")[0]),
+                        (.commit.author.name // .author.login // "n/a"),
+                        (.commit.author.date // .commit.committer.date // "n/a")
+                      ] | @tsv' |
+                    while IFS=$'\t' read -r SHA URL MSG AUTHOR DATE; do
+                      SHORT=${SHA:0:7}
+                      # Basic HTML escaping for message
+                      MSG_ESC=$(printf '%s' "$MSG" | sed 's/&/&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                      if [ -n "$URL" ]; then
+                        printf '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$URL" "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                      else
+                        printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                      fi
+                    done
+                    if [ "$TOTAL" -gt "$MAX" ]; then
+                      echo "</tbody></table>" >> "$HTML_FILE"
+                      printf '<p>Showing first %d of %d commits. See the compare link above for the full list.</p>\n' "$MAX" "$TOTAL" >> "$HTML_FILE"
+                    else
+                      echo "</tbody></table>" >> "$HTML_FILE"
+                    fi
+                  else
+                    echo "[relnotes] Commit API failed ($HTTP) for: $API_URL" >&2
+                    echo '<p>(Commit details unavailable; see the compare link above.)</p>' >> "$HTML_FILE"
+                  fi
+                  echo "</details>" >> "$HTML_FILE"
+                else
+                  echo "[relnotes] No token available to read ${SRC_REPO}. Skipping commit table." >&2
+                fi
               fi
             else
               echo "<p>Commit SHAs not available from image labels.</p>" >> "$HTML_FILE"
@@ -1013,6 +1063,51 @@ jobs:
           printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
           if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
           echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
+          # Commit table (when SHAs resolved and different)
+          if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ] && [ "${NEW_SHA:-$NEW_COMMIT_SHORT}" != "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
+            OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+            REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+            API_URL="https://api.github.com/repos/${OWNER}/${REPO_NAME}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
+            GH_TOKEN_USE=""
+            if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+            if [ -n "$GH_TOKEN_USE" ]; then
+              echo "<h3>Changes</h3>" >> "$HTML_FILE"
+              TMP=$(mktemp)
+              HTTP=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$TMP" -w "%{http_code}" "$API_URL" || true)
+              if echo "$HTTP" | grep -qE '^(200|201|204)$'; then
+                JSON=$(cat "$TMP")
+                echo '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th align="left">SHA</th><th align="left">Message</th><th align="left">Author</th><th align="left">Date</th></tr></thead><tbody>' >> "$HTML_FILE"
+                MAX=${COMMITS_TABLE_LIMIT}
+                TOTAL=$(printf '%s' "$JSON" | jq -r '(.commits // []) | length')
+                printf '%s' "$JSON" | jq -r --argjson max "$MAX" '
+                  (.commits // []) | .[0:$max] | .[] | [
+                    .sha,
+                    (.html_url // ""),
+                    (.commit.message | split("\n")[0]),
+                    (.commit.author.name // .author.login // "n/a"),
+                    (.commit.author.date // .commit.committer.date // "n/a")
+                  ] | @tsv' |
+                while IFS=$'\t' read -r SHA URL MSG AUTHOR DATE; do
+                  SHORT=${SHA:0:7}
+                  MSG_ESC=$(printf '%s' "$MSG" | sed 's/&/&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                  if [ -n "$URL" ]; then
+                    printf '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$URL" "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                  else
+                    printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                  fi
+                done
+                echo "</tbody></table>" >> "$HTML_FILE"
+                if [ "$TOTAL" -gt "$MAX" ]; then
+                  printf '<p>Showing first %d of %d commits. <a href="%s/compare/%s...%s">See more</a>.</p>\n' "$MAX" "$TOTAL" "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+                fi
+              else
+                echo "[relnotes] Commit API failed ($HTTP) for: $API_URL" >&2
+                printf '<p>(Commit details unavailable; <a href="%s/compare/%s...%s">view compare</a>.)</p>\n' "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+              fi
+            else
+              echo "[relnotes] No token available to read ${SRC_REPO}. Skipping commit table." >&2
+            fi
+          fi
           {
             echo 'body<<EOF'
             cat "$NOTES_FILE"
@@ -1522,6 +1617,51 @@ jobs:
           printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
           if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
           echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
+          # Commit table (when SHAs resolved and different)
+          if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ] && [ "${NEW_SHA:-$NEW_COMMIT_SHORT}" != "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
+            OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+            REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+            API_URL="https://api.github.com/repos/${OWNER}/${REPO_NAME}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
+            GH_TOKEN_USE=""
+            if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+            if [ -n "$GH_TOKEN_USE" ]; then
+              echo "<h3>Changes</h3>" >> "$HTML_FILE"
+              TMP=$(mktemp)
+              HTTP=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$TMP" -w "%{http_code}" "$API_URL" || true)
+              if echo "$HTTP" | grep -qE '^(200|201|204)$'; then
+                JSON=$(cat "$TMP")
+                echo '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th align="left">SHA</th><th align="left">Message</th><th align="left">Author</th><th align="left">Date</th></tr></thead><tbody>' >> "$HTML_FILE"
+                MAX=${COMMITS_TABLE_LIMIT}
+                TOTAL=$(printf '%s' "$JSON" | jq -r '(.commits // []) | length')
+                printf '%s' "$JSON" | jq -r --argjson max "$MAX" '
+                  (.commits // []) | .[0:$max] | .[] | [
+                    .sha,
+                    (.html_url // ""),
+                    (.commit.message | split("\n")[0]),
+                    (.commit.author.name // .author.login // "n/a"),
+                    (.commit.author.date // .commit.committer.date // "n/a")
+                  ] | @tsv' |
+                while IFS=$'\t' read -r SHA URL MSG AUTHOR DATE; do
+                  SHORT=${SHA:0:7}
+                  MSG_ESC=$(printf '%s' "$MSG" | sed 's/&/&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                  if [ -n "$URL" ]; then
+                    printf '<tr><td><a href="%s">%s</a></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$URL" "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                  else
+                    printf '<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td><code>%s</code></td></tr>\n' "$SHORT" "$MSG_ESC" "$AUTHOR" "$DATE" >> "$HTML_FILE"
+                  fi
+                done
+                echo "</tbody></table>" >> "$HTML_FILE"
+                if [ "$TOTAL" -gt "$MAX" ]; then
+                  printf '<p>Showing first %d of %d commits. <a href="%s/compare/%s...%s">See more</a>.</p>\n' "$MAX" "$TOTAL" "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+                fi
+              else
+                echo "[relnotes] Commit API failed ($HTTP) for: $API_URL" >&2
+                printf '<p>(Commit details unavailable; <a href="%s/compare/%s...%s">view compare</a>.)</p>\n' "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+              fi
+            else
+              echo "[relnotes] No token available to read ${SRC_REPO}. Skipping commit table." >&2
+            fi
+          fi
           {
             echo 'body<<EOF'
             cat "$NOTES_FILE"
