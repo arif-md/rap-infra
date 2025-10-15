@@ -410,6 +410,36 @@ jobs:
           if [ -n "$PREV_DIGEST" ] && [ -z "$PREV_COMMIT_SHORT" ]; then
             echo "[preflight] Previous digest not resolvable to commit; proceeding with digest-only changelog."
           fi
+          # Try to expand abbreviated SHAs to full SHAs using GitHub API (improves compare/table reliability)
+          OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+          GH_TOKEN_USE=""
+          if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+          resolve_full_sha() {
+            local ref="$1"
+            if [ -z "$ref" ] || [ -z "$GH_TOKEN_USE" ]; then echo "$ref"; return 0; fi
+            local url="https://api.github.com/repos/${OWNER}/${REPO_NAME}/commits/${ref}"
+            local tmp; tmp=$(mktemp)
+            local code; code=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$tmp" -w "%{http_code}" "$url" || true)
+            if echo "$code" | grep -qE '^(200)$'; then
+              jq -r '.sha // empty' < "$tmp"
+            else
+              echo "$ref"
+            fi
+          }
+          if [ -n "${NEW_SHA:-}" ]; then
+            if [ ${#NEW_SHA} -lt 40 ]; then NEW_SHA=$(resolve_full_sha "$NEW_SHA"); fi
+          elif [ -n "$NEW_COMMIT_SHORT" ]; then
+            NEW_SHA=$(resolve_full_sha "$NEW_COMMIT_SHORT")
+          fi
+          if [ -n "${PREV_SHA:-}" ]; then
+            if [ ${#PREV_SHA} -lt 40 ]; then PREV_SHA=$(resolve_full_sha "$PREV_SHA"); fi
+          elif [ -n "$PREV_COMMIT_SHORT" ]; then
+            PREV_SHA=$(resolve_full_sha "$PREV_COMMIT_SHORT")
+          fi
+          # Normalize short displays after expansion
+          if [ -n "${NEW_SHA:-}" ]; then NEW_COMMIT_SHORT="${NEW_SHA:0:7}"; fi
+          if [ -n "${PREV_SHA:-}" ]; then PREV_COMMIT_SHORT="${PREV_SHA:0:7}"; fi
           REPO_URL="https://github.com/${{ env.SRC_REPO }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
@@ -1037,6 +1067,35 @@ jobs:
             echo "[preflight] Previous digest not resolvable to commit; treating as first promotion baseline."
             PREV_DIGEST=""
           fi
+          # Expand abbreviated SHAs to full via GitHub API to ensure compare/table
+          OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+          GH_TOKEN_USE=""
+          if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+          resolve_full_sha() {
+            local ref="$1"
+            if [ -z "$ref" ] || [ -z "$GH_TOKEN_USE" ]; then echo "$ref"; return 0; fi
+            local url="https://api.github.com/repos/${OWNER}/${REPO_NAME}/commits/${ref}"
+            local tmp; tmp=$(mktemp)
+            local code; code=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$tmp" -w "%{http_code}" "$url" || true)
+            if echo "$code" | grep -qE '^(200)$'; then
+              jq -r '.sha // empty' < "$tmp"
+            else
+              echo "$ref"
+            fi
+          }
+          if [ -n "${NEW_SHA:-}" ]; then
+            if [ ${#NEW_SHA} -lt 40 ]; then NEW_SHA=$(resolve_full_sha "$NEW_SHA"); fi
+          elif [ -n "$NEW_COMMIT_SHORT" ]; then
+            NEW_SHA=$(resolve_full_sha "$NEW_COMMIT_SHORT")
+          fi
+          if [ -n "${PREV_SHA:-}" ]; then
+            if [ ${#PREV_SHA} -lt 40 ]; then PREV_SHA=$(resolve_full_sha "$PREV_SHA"); fi
+          elif [ -n "$PREV_COMMIT_SHORT" ]; then
+            PREV_SHA=$(resolve_full_sha "$PREV_COMMIT_SHORT")
+          fi
+          if [ -n "${NEW_SHA:-}" ]; then NEW_COMMIT_SHORT="${NEW_SHA:0:7}"; fi
+          if [ -n "${PREV_SHA:-}" ]; then PREV_COMMIT_SHORT="${PREV_SHA:0:7}"; fi
           REPO_URL="https://github.com/${{ env.SRC_REPO }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
@@ -1591,6 +1650,35 @@ jobs:
             echo "[preflight] Previous digest not resolvable to commit; treating as first promotion baseline."
             PREV_DIGEST=""
           fi
+          # Expand abbreviated SHAs to full via GitHub API to ensure compare/table
+          OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
+          GH_TOKEN_USE=""
+          if [ "${{ github.repository }}" = "$SRC_REPO" ]; then GH_TOKEN_USE='${{ github.token }}'; else GH_TOKEN_USE='${{ env.FRONTEND_REPO_READ_TOKEN }}'; fi
+          resolve_full_sha() {
+            local ref="$1"
+            if [ -z "$ref" ] || [ -z "$GH_TOKEN_USE" ]; then echo "$ref"; return 0; fi
+            local url="https://api.github.com/repos/${OWNER}/${REPO_NAME}/commits/${ref}"
+            local tmp; tmp=$(mktemp)
+            local code; code=$(curl -sS -H "Authorization: Bearer $GH_TOKEN_USE" -H "Accept: application/vnd.github+json" -o "$tmp" -w "%{http_code}" "$url" || true)
+            if echo "$code" | grep -qE '^(200)$'; then
+              jq -r '.sha // empty' < "$tmp"
+            else
+              echo "$ref"
+            fi
+          }
+          if [ -n "${NEW_SHA:-}" ]; then
+            if [ ${#NEW_SHA} -lt 40 ]; then NEW_SHA=$(resolve_full_sha "$NEW_SHA"); fi
+          elif [ -n "$NEW_COMMIT_SHORT" ]; then
+            NEW_SHA=$(resolve_full_sha "$NEW_COMMIT_SHORT")
+          fi
+          if [ -n "${PREV_SHA:-}" ]; then
+            if [ ${#PREV_SHA} -lt 40 ]; then PREV_SHA=$(resolve_full_sha "$PREV_SHA"); fi
+          elif [ -n "$PREV_COMMIT_SHORT" ]; then
+            PREV_SHA=$(resolve_full_sha "$PREV_COMMIT_SHORT")
+          fi
+          if [ -n "${NEW_SHA:-}" ]; then NEW_COMMIT_SHORT="${NEW_SHA:0:7}"; fi
+          if [ -n "${PREV_SHA:-}" ]; then PREV_COMMIT_SHORT="${PREV_SHA:0:7}"; fi
           REPO_URL="https://github.com/${{ env.SRC_REPO }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           NOTES_FILE="release-notes.md"
