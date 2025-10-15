@@ -221,22 +221,34 @@ jobs:
             [ -n "$LATEST" ] && PREV_DIGEST="$LATEST"
           fi
           # Resolve commit SHA from OCI labels in ACR for the given repo@digest.
+          # - Performs proper ACR OAuth token exchange to obtain a repository-scoped access token.
           # - Handles single-manifest and multi-arch manifest lists by iterating all children.
           # - Checks common alternate label keys and performs a case-insensitive fallback.
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
-            # Obtain a data-plane bearer token for the registry
-            local tok
-            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            [ -z "$tok" ] && { echo ""; return 0; }
+            # Step 1: Get ACR refresh token via az (works across tenants/subscriptions if principal has AcrPull)
+            local refresh
+            refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$refresh" ] && { echo ""; return 0; }
+            # Step 2: Exchange refresh token for repository-scoped access token (pull)
+            local scope access base
+            scope="repository:${repo}:pull"
+            base="https://${reg}.azurecr.io"
+            access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "grant_type=refresh_token" \
+              --data-urlencode "service=${reg}.azurecr.io" \
+              --data-urlencode "scope=${scope}" \
+              --data-urlencode "refresh_token=${refresh}" \
+              "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+            [ -z "$access" ] && { echo ""; return 0; }
             local base="https://${reg}.azurecr.io/v2/${repo}"
 
             # Helper: fetch a manifest JSON for a digest with appropriate Accept headers
             _fetch_manifest() {
               local digest="$1"
               curl -fsSL \
-                -H "Authorization: Bearer $tok" \
+                -H "Authorization: Bearer $access" \
                 -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
                 "$base/manifests/$digest" 2>/dev/null || true
             }
@@ -248,7 +260,7 @@ jobs:
               cfg=$(printf '%s' "$manifest_json" | jq -r '.config.digest // empty')
               [ -z "$cfg" ] && { echo ""; return 0; }
               local cfgJson
-              cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+              cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$base/blobs/$cfg" 2>/dev/null || true)
               [ -z "$cfgJson" ] && { echo ""; return 0; }
               # Try standard and common alternate keys, then case-insensitive search across labels
               local rev
@@ -256,6 +268,13 @@ jobs:
                 .config.Labels["org.opencontainers.image.revision"]
                 // .config.Labels["org.opencontainers.image.vcs-ref"]
                 // empty')
+              if [ -z "$rev" ]; then
+                # Docker schema sometimes carries labels under container_config
+                rev=$(printf '%s' "$cfgJson" | jq -r '
+                  .container_config.Labels["org.opencontainers.image.revision"]
+                  // .container_config.Labels["org.opencontainers.image.vcs-ref"]
+                  // empty')
+              fi
               if [ -z "$rev" ]; then
                 # Case-insensitive fallback: scan label keys for *revision*
                 rev=$(printf '%s' "$cfgJson" | jq -r '
@@ -300,11 +319,19 @@ jobs:
             echo "[debug] Inspecting $label: reg=$reg repo=$repo digest=${dig:0:25}..."
             if [ -z "$reg" ] || [ -z "$repo" ] || [ -z "$dig" ]; then
               echo "[debug] Skipping ($label): missing inputs"; return 0; fi
-            local tok mf media base ann cfg cfgJson
-            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            if [ -z "$tok" ]; then echo "[debug] ($label) token MISSING for $reg"; return 0; fi
-            base="https://${reg}.azurecr.io/v2/${repo}"
-            mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            local refresh access mf media base ann cfg cfgJson
+            refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            if [ -z "$refresh" ]; then echo "[debug] ($label) token MISSING for $reg"; return 0; fi
+            base="https://${reg}.azurecr.io"
+            access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "grant_type=refresh_token" \
+              --data-urlencode "service=${reg}.azurecr.io" \
+              --data-urlencode "scope=repository:${repo}:pull" \
+              --data-urlencode "refresh_token=${refresh}" \
+              "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+            if [ -z "$access" ]; then echo "[debug] ($label) access token exchange failed"; return 0; fi
+            local v2base="${base}/v2/${repo}"
+            mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$dig" 2>/dev/null || true)
             if [ -z "$mf" ]; then echo "[debug] ($label) manifest fetch empty"; return 0; fi
             media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
             echo "[debug] ($label) mediaType=$media"
@@ -316,12 +343,12 @@ jobs:
               for child in $(printf '%s' "$mf" | jq -r '.manifests[].digest // empty'); do
                 count=$((count+1)); [ $count -gt 3 ] && { echo "[debug] ($label) ...truncated child scan"; break; }
                 echo "[debug] ($label) child[$count]=${child:0:25}..."
-                local cmf; cmf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+                local cmf; cmf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$child" 2>/dev/null || true)
                 [ -z "$cmf" ] && { echo "[debug] ($label) child manifest empty"; continue; }
                 local cfgDig; cfgDig=$(printf '%s' "$cmf" | jq -r '.config.digest // empty')
                 echo "[debug] ($label) child cfg=${cfgDig:0:25}..."
                 [ -z "$cfgDig" ] && continue
-                cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfgDig" 2>/dev/null || true)
+                cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/../blobs/$cfgDig" 2>/dev/null || true)
                 [ -z "$cfgJson" ] && { echo "[debug] ($label) child cfg blob empty"; continue; }
                 local rev1 rev2
                 rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
@@ -339,7 +366,7 @@ jobs:
             local cfgDig; cfgDig=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
             echo "[debug] ($label) cfg=${cfgDig:0:25}..."
             [ -z "$cfgDig" ] && return 0
-            cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfgDig" 2>/dev/null || true)
+            cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/../blobs/$cfgDig" 2>/dev/null || true)
             [ -z "$cfgJson" ] && { echo "[debug] ($label) cfg blob empty"; return 0; }
             local rev1 rev2
             rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
