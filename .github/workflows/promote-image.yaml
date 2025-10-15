@@ -268,10 +268,9 @@ jobs:
               if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$TAGS_COMMIT" ]; then PREV_COMMIT_SHORT="${TAGS_COMMIT:0:7}"; PREV_SHA="$TAGS_COMMIT"; fi
             fi
           fi
-          # If still unable to resolve previous commit, treat as first promotion baseline
+          # If unable to resolve previous commit, KEEP the previous digest; we'll show digest-only notes
           if [ -n "$PREV_DIGEST" ] && [ -z "$PREV_COMMIT_SHORT" ]; then
-            echo "[preflight] Previous digest not resolvable to commit; treating as first promotion baseline."
-            PREV_DIGEST=""
+            echo "[preflight] Previous digest not resolvable to commit; proceeding with digest-only changelog."
           fi
           REPO_URL="https://github.com/${{ env.SRC_REPO }}"
           BUILD_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -293,12 +292,22 @@ jobs:
               echo
               echo "Compare: ${REPO_URL}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
             else
-              echo "Could not resolve commit SHAs from image tags. Showing image digests only."
+              echo "Commit SHAs not available from image labels. Showing image digests only."
             fi
           } > "$NOTES_FILE"
           printf '<h2>Release notes: Promote frontend to %s</h2>\n<p><strong>Target environment:</strong> %s</p>\n<p><strong>New image:</strong> %s</p>\n' "$TGT_ENV" "$TGT_ENV" "$SRC_IMAGE" > "$HTML_FILE"
           if [ -n "$PREV_DIGEST" ]; then echo "<p><strong>Previously deployed digest:</strong> ${PREV_DIGEST}</p>" >> "$HTML_FILE"; else echo "<p><strong>Previously deployed digest:</strong> (none - first promotion)</p>" >> "$HTML_FILE"; fi
           echo "<p><a href=\"${BUILD_URL}\">Build details</a></p>" >> "$HTML_FILE"
+          # Render a digest-based Changes block for HTML
+          if [ -n "$PREV_DIGEST" ]; then
+            echo "<h3>Changes</h3>" >> "$HTML_FILE"
+            printf '<p>Digest change: <code>%s</code> → <code>%s</code></p>\n' "$PREV_DIGEST" "$NEW_DIGEST" >> "$HTML_FILE"
+            if [ -n "${NEW_SHA:-$NEW_COMMIT_SHORT}" ] && [ -n "${PREV_SHA:-$PREV_COMMIT_SHORT}" ]; then
+              printf '<p>Compare commits: <a href="%s/compare/%s...%s">%s → %s</a></p>\n' "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" "${PREV_COMMIT_SHORT}" "${NEW_COMMIT_SHORT}" >> "$HTML_FILE"
+            else
+              echo "<p>Commit SHAs not available from image labels.</p>" >> "$HTML_FILE"
+            fi
+          fi
           {
             echo 'body<<EOF'
             cat "$NOTES_FILE"
