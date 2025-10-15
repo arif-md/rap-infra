@@ -196,18 +196,6 @@ jobs:
           printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
           cat release-notes.html >> "$GITHUB_STEP_SUMMARY"
 
-          # Emit extra debug breadcrumbs to the logs and summary to pinpoint lookup issues
-          echo "\n[debug] ===== Label resolution debug ====="
-          debug_rev "$SRC_REG_NAME" "$ACR_REPO" "$NEW_DIGEST" "NEW"
-          if [ -n "$PREV_DIGEST" ]; then
-            if [ -n "${PREV_REG_NAME:-}" ] && [ -n "${PREV_REPO_NAME:-}" ]; then
-              debug_rev "$PREV_REG_NAME" "$PREV_REPO_NAME" "$PREV_DIGEST" "PREV(actual)"
-            elif [ -n "$TGT_ACR" ]; then
-              debug_rev "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST" "PREV(target)"
-            fi
-          fi
-          echo "[debug] ================================="
-
       - name: ACR label access diagnostics (preflight)
         if: always()
         shell: bash
