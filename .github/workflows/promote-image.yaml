@@ -185,7 +185,9 @@ jobs:
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
           SRC_PATH="${SRC_IMAGE#*/}"
-          SRC_REPO="${SRC_PATH%@*}"
+          # IMPORTANT: Do NOT overwrite SRC_REPO (which is the GitHub owner/repo)
+          # Derive the ACR repository separately from the image path
+          ACR_REPO="${SRC_PATH%@*}"
           TGT_ENV='${{ steps.prep.outputs.env }}'
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
@@ -382,7 +384,7 @@ jobs:
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ -n "$NEW_DIGEST" ]; then
-            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$NEW_DIGEST")
             [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
           fi
           if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
@@ -391,7 +393,7 @@ jobs:
             # Fall back to target ACR/repo
             if [ -z "${C:-}" ] && [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
             # Fall back to source image registry/repo
-            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$PREV_DIGEST")
             [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
           fi
           # Fallback: try reading last deployment metadata from Container App tags
@@ -550,7 +552,7 @@ jobs:
 
           # Emit extra debug breadcrumbs to the logs and summary to pinpoint lookup issues
           echo "\n[debug] ===== Label resolution debug ====="
-          debug_rev "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST" "NEW"
+          debug_rev "$SRC_REG_NAME" "$ACR_REPO" "$NEW_DIGEST" "NEW"
           if [ -n "$PREV_DIGEST" ]; then
             if [ -n "${PREV_REG_NAME:-}" ] && [ -n "${PREV_REPO_NAME:-}" ]; then
               debug_rev "$PREV_REG_NAME" "$PREV_REPO_NAME" "$PREV_DIGEST" "PREV(actual)"
@@ -991,12 +993,15 @@ jobs:
           SRC_IMAGE: ${{ env.SRC_IMAGE }}
         run: |
           set -euo pipefail
+          # Allow overriding commit table size via repo/env variable
+          COMMITS_TABLE_LIMIT='${{ vars.COMMITS_TABLE_LIMIT || 50 }}'
           SRC_IMAGE="$SRC_IMAGE"
           NEW_DIGEST="${SRC_IMAGE#*@}"
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
           SRC_PATH="${SRC_IMAGE#*/}"
-          SRC_REPO="${SRC_PATH%@*}"
+          # Do NOT overwrite SRC_REPO (GitHub owner/repo); derive ACR repository separately
+          ACR_REPO="${SRC_PATH%@*}"
           TGT_ENV='${{ steps.prep.outputs.env }}'
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
@@ -1044,12 +1049,12 @@ jobs:
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ -n "$NEW_DIGEST" ]; then
-            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$NEW_DIGEST")
             [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
           fi
           if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
             if [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
-            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$PREV_DIGEST")
             [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
           fi
           # Fallback: try reading last deployment metadata from Container App tags
@@ -1574,12 +1579,15 @@ jobs:
           SRC_IMAGE: ${{ env.SRC_IMAGE }}
         run: |
           set -euo pipefail
+          # Allow overriding commit table size via repo/env variable
+          COMMITS_TABLE_LIMIT='${{ vars.COMMITS_TABLE_LIMIT || 50 }}'
           SRC_IMAGE="$SRC_IMAGE"
           NEW_DIGEST="${SRC_IMAGE#*@}"
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
           SRC_PATH="${SRC_IMAGE#*/}"
-          SRC_REPO="${SRC_PATH%@*}"
+          # Preserve SRC_REPO (GitHub owner/repo) and derive container repo separately
+          ACR_REPO="${SRC_PATH%@*}"
           TGT_ENV='${{ steps.prep.outputs.env }}'
           TGT_ACR='${{ steps.prep.outputs.acr }}'
           TGT_REPO="raptor/frontend-${TGT_ENV}"
@@ -1627,12 +1635,12 @@ jobs:
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ -n "$NEW_DIGEST" ]; then
-            C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST")
+            C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$NEW_DIGEST")
             [ -n "$C" ] && NEW_COMMIT_SHORT="${C:0:7}" && NEW_SHA="$C"
           fi
           if [ -z "$PREV_COMMIT_SHORT" ] && [ -n "$PREV_DIGEST" ]; then
             if [ -n "$TGT_ACR" ]; then C=$(get_commit_from_labels "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST"); fi
-            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$SRC_REPO" "$PREV_DIGEST")
+            [ -z "${C:-}" ] && C=$(get_commit_from_labels "$SRC_REG_NAME" "$ACR_REPO" "$PREV_DIGEST")
             [ -n "$C" ] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
           fi
           # Fallback: try reading last deployment metadata from Container App tags
