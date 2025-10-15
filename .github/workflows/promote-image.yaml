@@ -372,6 +372,38 @@ jobs:
           printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: ACR label access diagnostics (preflight)
+        if: always()
+        shell: bash
+        env:
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+        run: |
+          set -euo pipefail
+          echo "=== ACR label access diagnostics ==="
+          TGT_ENV='${{ steps.prep.outputs.env }}'
+          TGT_ACR='${{ steps.prep.outputs.acr || '' }}'
+          PREV_IMAGE='${{ steps.current.outputs.image || '' }}'
+          SRC_DOMAIN="${SRC_IMAGE%%/*}"
+          SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
+          if [ -n "$TGT_ACR" ]; then
+            echo "Target ACR: $TGT_ACR"
+            tok=$(az acr login -n "$TGT_ACR" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            if [ -n "$tok" ]; then echo " - Token: OK"; else echo " - Token: MISSING (no data-plane access)"; fi
+          else
+            echo "Target ACR: (not set)"
+          fi
+          echo "Source ACR: $SRC_REG_NAME"
+          stok=$(az acr login -n "$SRC_REG_NAME" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+          if [ -n "$stok" ]; then echo " - Token: OK"; else echo " - Token: MISSING (no data-plane access)"; fi
+          if [ -n "$PREV_IMAGE" ]; then
+            PREV_DOMAIN="${PREV_IMAGE%%/*}"
+            PREV_REG_NAME=$(echo "$PREV_DOMAIN" | sed 's/\.azurecr\.io$//')
+            echo "Previous image ACR: $PREV_REG_NAME"
+            ptok=$(az acr login -n "$PREV_REG_NAME" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            if [ -n "$ptok" ]; then echo " - Token: OK"; else echo " - Token: MISSING (no data-plane access)"; fi
+          fi
+          echo "===================================="
+
       - name: Check email prerequisites
         shell: bash
         run: |
