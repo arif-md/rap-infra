@@ -293,6 +293,63 @@ jobs:
             # Single-manifest path
             _extract_rev_from_manifest "$mf"
           }
+
+          # Debug helper: print where revision might be located for a given repo@digest
+          debug_rev() {
+            local reg="$1" repo="$2" dig="$3" label="$4"
+            echo "[debug] Inspecting $label: reg=$reg repo=$repo digest=${dig:0:25}..."
+            if [ -z "$reg" ] || [ -z "$repo" ] || [ -z "$dig" ]; then
+              echo "[debug] Skipping ($label): missing inputs"; return 0; fi
+            local tok mf media base ann cfg cfgJson
+            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            if [ -z "$tok" ]; then echo "[debug] ($label) token MISSING for $reg"; return 0; fi
+            base="https://${reg}.azurecr.io/v2/${repo}"
+            mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            if [ -z "$mf" ]; then echo "[debug] ($label) manifest fetch empty"; return 0; fi
+            media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+            echo "[debug] ($label) mediaType=$media"
+            ann=$(printf '%s' "$mf" | jq -r '.annotations["org.opencontainers.image.revision"] // empty')
+            if [ -n "$ann" ]; then echo "[debug] ($label) index.annotation.revision=$ann"; fi
+            # If manifest list, iterate a few children
+            if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+              local child count=0
+              for child in $(printf '%s' "$mf" | jq -r '.manifests[].digest // empty'); do
+                count=$((count+1)); [ $count -gt 3 ] && { echo "[debug] ($label) ...truncated child scan"; break; }
+                echo "[debug] ($label) child[$count]=${child:0:25}..."
+                local cmf; cmf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+                [ -z "$cmf" ] && { echo "[debug] ($label) child manifest empty"; continue; }
+                local cfgDig; cfgDig=$(printf '%s' "$cmf" | jq -r '.config.digest // empty')
+                echo "[debug] ($label) child cfg=${cfgDig:0:25}..."
+                [ -z "$cfgDig" ] && continue
+                cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfgDig" 2>/dev/null || true)
+                [ -z "$cfgJson" ] && { echo "[debug] ($label) child cfg blob empty"; continue; }
+                local rev1 rev2
+                rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+                rev2=$(printf '%s' "$cfgJson" | jq -r '.container_config.Labels["org.opencontainers.image.revision"] // empty')
+                if [ -n "$rev1" ] || [ -n "$rev2" ]; then
+                  echo "[debug] ($label) revision found in child cfg: ${rev1:-$rev2}"
+                  break
+                else
+                  echo "[debug] ($label) revision not present in child cfg labels"
+                fi
+              done
+              return 0
+            fi
+            # Single-manifest path
+            local cfgDig; cfgDig=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
+            echo "[debug] ($label) cfg=${cfgDig:0:25}..."
+            [ -z "$cfgDig" ] && return 0
+            cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfgDig" 2>/dev/null || true)
+            [ -z "$cfgJson" ] && { echo "[debug] ($label) cfg blob empty"; return 0; }
+            local rev1 rev2
+            rev1=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+            rev2=$(printf '%s' "$cfgJson" | jq -r '.container_config.Labels["org.opencontainers.image.revision"] // empty')
+            if [ -n "$rev1" ] || [ -n "$rev2" ]; then
+              echo "[debug] ($label) revision found in cfg: ${rev1:-$rev2}"
+            else
+              echo "[debug] ($label) revision not present in cfg labels"
+            fi
+          }
           NEW_COMMIT_SHORT=""
           PREV_COMMIT_SHORT=""
           if [ -n "$NEW_DIGEST" ]; then
@@ -371,6 +428,18 @@ jobs:
           cat "$NOTES_FILE" >> "$GITHUB_STEP_SUMMARY"
           printf '\n<!-- Rendered HTML changelog -->\n' >> "$GITHUB_STEP_SUMMARY"
           cat "$HTML_FILE" >> "$GITHUB_STEP_SUMMARY"
+
+          # Emit extra debug breadcrumbs to the logs and summary to pinpoint lookup issues
+          echo "\n[debug] ===== Label resolution debug ====="
+          debug_rev "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST" "NEW"
+          if [ -n "$PREV_DIGEST" ]; then
+            if [ -n "${PREV_REG_NAME:-}" ] && [ -n "${PREV_REPO_NAME:-}" ]; then
+              debug_rev "$PREV_REG_NAME" "$PREV_REPO_NAME" "$PREV_DIGEST" "PREV(actual)"
+            elif [ -n "$TGT_ACR" ]; then
+              debug_rev "$TGT_ACR" "$TGT_REPO" "$PREV_DIGEST" "PREV(target)"
+            fi
+          fi
+          echo "[debug] ================================="
 
       - name: ACR label access diagnostics (preflight)
         if: always()
