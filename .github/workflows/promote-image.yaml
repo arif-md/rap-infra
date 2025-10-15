@@ -524,7 +524,50 @@ jobs:
             echo "Email prerequisites present."
           fi
 
-      - name: Email approver (optional)
+      - name: Check environment approvals (required reviewers)
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ENV='${{ steps.prep.outputs.env }}'
+          REPO='${{ github.repository }}'
+          URL="https://api.github.com/repos/${REPO}/environments/${ENV}"
+          JSON=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL" || true)
+          COUNT=$(printf '%s' "$JSON" | jq -r '[.protection_rules[]? | select(.type=="required_reviewers") | (.reviewers // []) | length] | add // 0')
+          NEED="false"; if [ "${COUNT:-0}" -gt 0 ]; then NEED="true"; fi
+          echo "needsApproval=$NEED" >> $GITHUB_OUTPUT
+
+      - name: Compose email header
+        id: emailhdr
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV='${{ steps.prep.outputs.env }}'
+          IMG='${{ env.SRC_IMAGE }}'
+          BUILD_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          TARGET="Azure Container Apps ($ENV)"
+          if [ '${{ steps.gate.outputs.needsApproval }}' = 'true' ]; then
+            SUBJECT="[Approval Needed] Promote frontend to ${ENV}"
+            INTRO="A deployment to the '<strong>${ENV}</strong>' environment is pending approval."
+            LINKS="<a href=\"${BUILD_URL}\">Build details</a> • <a href=\"${BUILD_URL}\">Review &amp; approve</a>"
+          else
+            SUBJECT="[Deployment Notice] Promote frontend to ${ENV}"
+            INTRO="A deployment to the '<strong>${ENV}</strong>' environment is ready."
+            LINKS="<a href=\"${BUILD_URL}\">Build details</a>"
+          fi
+          echo "subject=$SUBJECT" >> $GITHUB_OUTPUT
+          {
+            echo 'intro_html<<EOF'
+            echo "$INTRO"
+            echo 'EOF'
+            echo 'links_html<<EOF'
+            echo "$LINKS"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Email approver/notify (optional)
         if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
         uses: dawidd6/action-send-mail@v3
         with:
@@ -532,15 +575,14 @@ jobs:
           server_port: ${{ env.MAIL_PORT || 587 }}
           username: ${{ env.MAIL_USERNAME }}
           password: ${{ env.MAIL_PASSWORD }}
-          subject: "[Approval Needed] Promote frontend to ${{ steps.prep.outputs.env }}"
+          subject: "${{ steps.emailhdr.outputs.subject }}"
           to: ${{ env.MAIL_TO }}
           from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
           html_body: |-
-            <p>A deployment to the '<strong>${{ steps.prep.outputs.env }}</strong>' environment is pending approval.</p>
+            <p>${{ steps.emailhdr.outputs.intro_html }}</p>
             <p><strong>Image:</strong> ${{ env.SRC_IMAGE }}<br>
                <strong>Target:</strong> Azure Container Apps (${{ steps.prep.outputs.env }})</p>
-            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Build details</a> •
-               <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Review &amp; approve</a></p>
+            <p>${{ steps.emailhdr.outputs.links_html }}</p>
             ${{ steps.relnotes.outputs.html }}
 
   promote-to-test:
