@@ -255,31 +255,13 @@ jobs:
             exit 0
           fi
           ROLE_ID="$(az role definition list --name AcrPull --query "[0].name" -o tsv)"
-          if [ "$ID_TYPE" = "SystemAssigned" ] || [ "$ID_TYPE" = "SystemAssigned,UserAssigned" ]; then
-            PRINCIPAL_ID=$(printf '%s' "$APP_JSON" | jq -r '.identity.principalId // empty')
-              echo "[fast-path] System principal: ${PRINCIPAL_ID:-'(none)'}"
-            if [ -n "$PRINCIPAL_ID" ]; then
-              echo "Ensuring AcrPull for system-assigned identity $PRINCIPAL_ID"
-              az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --role "$ROLE_ID" --scope "$ACR_ID" >/dev/null 2>&1 || true
-              echo "Binding registry to app using system identity"
-              az containerapp registry set -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --server "$ACR_DOMAIN" --identity system >/dev/null
-            fi
-          fi
-          # If user-assigned identities exist, bind the first one too
-          UAI_KEYS=$(printf '%s' "$APP_JSON" | jq -r '.identity.userAssignedIdentities | keys[]?')
-          if [ -n "$UAI_KEYS" ]; then
-            FIRST_UAI=$(printf '%s' "$UAI_KEYS" | head -n 1)
-              echo "[fast-path] First UAI: ${FIRST_UAI:-'(none)'}"
-            if [ -n "$FIRST_UAI" ]; then
-              UAI_PRINCIPAL=$(az identity show --ids "$FIRST_UAI" --query principalId -o tsv 2>/dev/null || true)
-                echo "[fast-path] UAI principal: ${UAI_PRINCIPAL:-'(none)'}"
-              if [ -n "$UAI_PRINCIPAL" ]; then
-                echo "Ensuring AcrPull for user-assigned identity $UAI_PRINCIPAL"
-                az role assignment create --assignee-object-id "$UAI_PRINCIPAL" --assignee-principal-type ServicePrincipal --role "$ROLE_ID" --scope "$ACR_ID" >/dev/null 2>&1 || true
-                echo "Binding registry to app using user-assigned identity"
-                az containerapp registry set -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --server "$ACR_DOMAIN" --identity "$FIRST_UAI" >/dev/null
-              fi
-            fi
+          
+          # Ensure ACR is configured for Container App (registry binding)
+          chmod +x scripts/ensure-acr-binding.sh
+          if ! ./scripts/ensure-acr-binding.sh "$APP_NAME" "$AZURE_RESOURCE_GROUP" "$AZURE_ACR_NAME" "$ACR_DOMAIN"; then
+            echo "Failed to ensure ACR binding; cannot fast-path."
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
           else
             echo "Image domain is not ACR; no registry binding required for fast path."
@@ -299,13 +281,23 @@ jobs:
               CURRENT_REPO="${CURRENT_PATH%@*}"
               CURRENT_DIGEST="${CURRENT_IMG#*@}"
               echo "Checking if currently deployed digest exists in ACR: $CURRENT_DIGEST"
-              DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
-              if [ -z "$DIGEST_EXISTS" ]; then
-                echo "Currently deployed digest not found in ACR (repository may have been deleted)."
+              
+              # First check if repository exists
+              REPO_EXISTS=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>/dev/null || true)
+              if [ -z "$REPO_EXISTS" ]; then
+                echo "Currently deployed repository not found in ACR (repository may have been deleted)."
                 echo "Using 'az containerapp revision copy' to force new revision with new image."
                 USE_REVISION_COPY=true
               else
-                echo "✓ Currently deployed digest exists in ACR"
+                # Repository exists, now check if specific digest exists
+                DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
+                if [ -z "$DIGEST_EXISTS" ]; then
+                  echo "Currently deployed digest not found in ACR (may have been deleted)."
+                  echo "Using 'az containerapp revision copy' to force new revision with new image."
+                  USE_REVISION_COPY=true
+                else
+                  echo "✓ Currently deployed digest exists in ACR"
+                fi
               fi
             fi
           fi

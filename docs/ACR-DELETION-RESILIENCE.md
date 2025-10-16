@@ -22,7 +22,16 @@ GET https:: MANIFEST_UNKNOWN: manifest sha256:OLD_DIGEST is not found
 
 This happens because `az containerapp update --image` validates that Azure can pull ALL images in the template, including the currently deployed one.
 
-## Solution 1: Smart Fast-Path Detection (infra-azd.yaml)
+## Important: Image Must Exist
+
+⚠️ **Critical Requirement:** The workflows expect that the **NEW image being deployed exists** in ACR or a public registry.
+
+If you delete all ACR repositories:
+- ✅ **Push/manual runs** → Automatically fall back to `mcr.microsoft.com/azuredocs/containerapps-helloworld:latest`
+- ❌ **Repository dispatch runs** → Will fail because they always use the image from the event payload
+- **Solution:** Rebuild and push a new image before deploying
+
+## Solution: Smart Fast-Path Detection with Revision Copy (infra-azd.yaml)
 
 ### Location
 `.github/workflows/infra-azd.yaml` - "Fast image-only update" step
@@ -38,26 +47,46 @@ Before attempting `az containerapp update --image`:
      --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv)
    ```
 
-2. **If digest not found** → Skip fast-path:
+### Logic
+Before attempting `az containerapp update --image`:
+
+1. **Check if repository exists in ACR**:
    ```bash
-   if [ -z "$DIGEST_EXISTS" ]; then
-     echo "Currently deployed digest not found in ACR (repository may have been deleted)."
-     echo "Skipping fast-path to avoid validation errors - will use full azd up instead."
-     echo "didFastPath=false" >> $GITHUB_OUTPUT
-     exit 0
+   CURRENT_IMG=$(az containerapp show -n "$APP_NAME" ...)
+   CURRENT_REG=$(echo "$CURRENT_DOMAIN" | sed 's/\.azurecr\.io$//')
+   CURRENT_REPO="${CURRENT_PATH%@*}"
+   
+   REPO_EXISTS=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" \
+     --query "name" -o tsv 2>/dev/null || true)
+   ```
+
+2. **If repository doesn't exist** → Use revision copy:
+   ```bash
+   if [ -z "$REPO_EXISTS" ]; then
+     echo "Currently deployed repository not found in ACR (repository may have been deleted)."
+     echo "Using 'az containerapp revision copy' to force new revision with new image."
+     USE_REVISION_COPY=true
    fi
    ```
 
-3. **Fall back to `azd up`**:
-   - `azd up` provisions via Bicep templates
-   - Bicep creates a **new revision** with only the new image
-   - Azure doesn't validate the old digest (it's not referenced anywhere)
-   - Deployment succeeds!
+3. **If repository exists, check if specific digest exists**:
+   ```bash
+   DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" \
+     --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
+   if [ -z "$DIGEST_EXISTS" ]; then
+     USE_REVISION_COPY=true
+   fi
+   ```
+
+4. **Use appropriate deployment method**:
+   - If `USE_REVISION_COPY=true` → Use `az containerapp revision copy --image`
+   - Otherwise → Use regular `az containerapp update --image`
 
 ### Benefits
-- ✅ Workflow doesn't fail when ACR repo is deleted
-- ✅ Automatically uses full provision instead of fast-path
-- ✅ Clean deployment with new image
+- ✅ Handles deleted repositories (repository doesn't exist)
+- ✅ Handles deleted digests (repository exists but specific digest deleted)
+- ✅ Uses fast `revision copy` instead of slow `azd up` (5-10 minute savings)
+- ✅ Bypasses Azure's validation of old images
 - ✅ No manual intervention required
 
 ## Solution 2: Fallback to Container App Tags for Changelog (relnotes.sh)
