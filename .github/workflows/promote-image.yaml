@@ -547,7 +547,7 @@ jobs:
   prepare-and-notify-train:
     name: Prepare & Notify (train)
     if: ${{ needs.plan.outputs.run_train == 'true' }}
-    needs: after-test
+    needs: [plan, after-test]
     environment: preflight
     runs-on: ubuntu-latest
     permissions:
@@ -983,7 +983,7 @@ jobs:
   prepare-and-notify-prod:
     name: Prepare & Notify (prod)
     if: ${{ needs.plan.outputs.run_prod == 'true' }}
-    needs: after-train
+    needs: [plan, after-train]
     environment: preflight
     runs-on: ubuntu-latest
     permissions:
