@@ -284,8 +284,51 @@ jobs:
           else
             echo "Image domain is not ACR; no registry binding required for fast path."
           fi
-          echo "Performing direct image update to: $IMG"
-          az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
+          
+          # Check if currently deployed digest exists in ACR
+          # If it doesn't (e.g., ACR repo was deleted), we can't use simple update
+          # because Azure validates all images. Instead, create a new revision copy.
+          CURRENT_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          USE_REVISION_COPY=false
+          
+          if [ -n "$CURRENT_IMG" ] && echo "$CURRENT_IMG" | grep -q "@sha256:"; then
+            CURRENT_DOMAIN="${CURRENT_IMG%%/*}"
+            if echo "$CURRENT_DOMAIN" | grep -q ".azurecr.io$"; then
+              CURRENT_REG=$(echo "$CURRENT_DOMAIN" | sed 's/\.azurecr\.io$//')
+              CURRENT_PATH="${CURRENT_IMG#*/}"
+              CURRENT_REPO="${CURRENT_PATH%@*}"
+              CURRENT_DIGEST="${CURRENT_IMG#*@}"
+              echo "Checking if currently deployed digest exists in ACR: $CURRENT_DIGEST"
+              DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
+              if [ -z "$DIGEST_EXISTS" ]; then
+                echo "Currently deployed digest not found in ACR (repository may have been deleted)."
+                echo "Using 'az containerapp revision copy' to force new revision with new image."
+                USE_REVISION_COPY=true
+              else
+                echo "✓ Currently deployed digest exists in ACR"
+              fi
+            fi
+          fi
+          
+          if [ "$USE_REVISION_COPY" = "true" ]; then
+            echo "Creating new revision with image: $IMG"
+            # Get current revision name
+            CURRENT_REVISION=$(az containerapp revision list -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null || true)
+            if [ -n "$CURRENT_REVISION" ]; then
+              # Use revision copy to create new revision with updated image
+              # This bypasses validation of the old image
+              az containerapp revision copy -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" \
+                --from-revision "$CURRENT_REVISION" \
+                --image "$IMG"
+            else
+              echo "Could not determine current revision; falling back to regular update"
+              az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
+            fi
+          else
+            echo "Performing direct image update to: $IMG"
+            az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
+          fi
+          
           echo "didFastPath=true" >> $GITHUB_OUTPUT
 
       - name: azd up (provision + deploy)

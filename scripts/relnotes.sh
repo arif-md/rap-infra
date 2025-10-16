@@ -214,6 +214,21 @@ if [[ -z "$PREV_COMMIT_SHORT" && -n "$PREV_DIGEST" ]]; then
   [[ -n "$C" ]] && PREV_COMMIT_SHORT="${C:0:7}" && PREV_SHA="$C"
 fi
 
+# Fallback: If we couldn't get PREV_SHA from image labels (e.g., ACR repo was deleted),
+# try reading from Container App tags where we persist raptor.lastCommit
+if [[ -z "$PREV_SHA" && -n "$RG" && "$AZ_READY" -eq 1 ]]; then
+  APP_NAME="${TARGET_ENV}-rap-fe"
+  echo "[debug] Attempting to read previous commit from Container App tags: $APP_NAME"
+  PREV_SHA_FROM_TAG=$(az resource show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --resource-type "Microsoft.App/containerApps" --query "tags.\"raptor.lastCommit\"" -o tsv 2>/dev/null || true)
+  if [[ -n "$PREV_SHA_FROM_TAG" ]]; then
+    echo "[debug] Found previous commit in Container App tags: $PREV_SHA_FROM_TAG"
+    PREV_SHA="$PREV_SHA_FROM_TAG"
+    PREV_COMMIT_SHORT="${PREV_SHA:0:7}"
+  else
+    echo "[debug] No previous commit found in Container App tags"
+  fi
+fi
+
 # Try to expand abbreviated SHAs to full SHAs via GitHub API
 OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
 REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
