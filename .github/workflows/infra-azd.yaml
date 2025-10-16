@@ -208,120 +208,41 @@ jobs:
           set -euo pipefail
           APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
           IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME || true)
+          
+          # Early validation checks
           if [ -z "$IMG" ]; then
             echo "No configured image; cannot fast-path."
             echo "didFastPath=false" >> $GITHUB_OUTPUT
             exit 0
           fi
+          
           DIGEST_PART="${IMG#*@}"
           if [ "$IMG" = "$DIGEST_PART" ]; then
             echo "Image is not digest-form; skipping fast-path: $IMG"
             echo "didFastPath=false" >> $GITHUB_OUTPUT
             exit 0
           fi
+          
           if ! az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
             echo "Container App does not exist; cannot fast-path."
             echo "didFastPath=false" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # Determine registry of the new image
-          DOMAIN="${IMG%%/*}"
+          
+          # Extract ACR information
           ACR_DOMAIN="${AZURE_ACR_NAME}.azurecr.io"
           echo "[fast-path] App=$APP_NAME"
           echo "[fast-path] Image=$IMG"
-          echo "[fast-path] New image domain: $DOMAIN"
-          echo "[fast-path] ACR name/domain: ${AZURE_ACR_NAME}/$ACR_DOMAIN"
-          if [ "$DOMAIN" = "$ACR_DOMAIN" ]; then
-            echo "Container App exists. Preparing ACR registry access for: $DOMAIN"
-          az extension add -n containerapp -y >/dev/null 2>&1 || true
-          APP_JSON=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" -o json)
-          ID_TYPE=$(printf '%s' "$APP_JSON" | jq -r '.identity.type // "None"')
-            echo "[fast-path] Identity type (pre): $ID_TYPE"
-          if [ "$ID_TYPE" = "None" ] || [ -z "$ID_TYPE" ]; then
-            echo "Assigning system-managed identity to Container App (was: $ID_TYPE)"
-            az containerapp identity assign -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --system-assigned >/dev/null
-            # Refresh identity info
-            APP_JSON=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" -o json)
-            ID_TYPE=$(printf '%s' "$APP_JSON" | jq -r '.identity.type // "None"')
-              echo "[fast-path] Identity type (post-assign): $ID_TYPE"
-          fi
-          ACR_RG="${AZURE_ACR_RESOURCE_GROUP:-$AZURE_RESOURCE_GROUP}"
-          ACR_ID=$(az acr show -n "$AZURE_ACR_NAME" -g "$ACR_RG" --query id -o tsv 2>/dev/null || true)
-            echo "[fast-path] ACR RG: $ACR_RG"
-            echo "[fast-path] ACR ID: ${ACR_ID:-'(unresolved)'}"
-          if [ -z "$ACR_ID" ]; then
-            echo "Could not resolve ACR resource id for $AZURE_ACR_NAME in RG $ACR_RG; falling back."
-            echo "didFastPath=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          ROLE_ID="$(az role definition list --name AcrPull --query "[0].name" -o tsv)"
+          echo "[fast-path] ACR domain: $ACR_DOMAIN"
           
-          # Ensure ACR is configured for Container App (registry binding)
-          chmod +x scripts/ensure-acr-binding.sh
-          if ! ./scripts/ensure-acr-binding.sh "$APP_NAME" "$AZURE_RESOURCE_GROUP" "$AZURE_ACR_NAME" "$ACR_DOMAIN"; then
-            echo "Failed to ensure ACR binding; cannot fast-path."
-            echo "didFastPath=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          # Execute consolidated image update script
+          chmod +x scripts/update-containerapp-image.sh
+          if ./scripts/update-containerapp-image.sh "$APP_NAME" "$AZURE_RESOURCE_GROUP" "$IMG" "$AZURE_ACR_NAME" "$ACR_DOMAIN"; then
+            echo "didFastPath=true" >> $GITHUB_OUTPUT
           else
-            echo "Image domain is not ACR; no registry binding required for fast path."
+            echo "Fast-path update failed; falling back to azd up"
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
           fi
-          
-          # Check if currently deployed digest exists in ACR
-          # If it doesn't (e.g., ACR repo was deleted), we can't use simple update
-          # because Azure validates all images. Instead, create a new revision copy.
-          CURRENT_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
-          USE_REVISION_COPY=false
-          
-          if [ -n "$CURRENT_IMG" ] && echo "$CURRENT_IMG" | grep -q "@sha256:"; then
-            CURRENT_DOMAIN="${CURRENT_IMG%%/*}"
-            if echo "$CURRENT_DOMAIN" | grep -q ".azurecr.io$"; then
-              CURRENT_REG=$(echo "$CURRENT_DOMAIN" | sed 's/\.azurecr\.io$//')
-              CURRENT_PATH="${CURRENT_IMG#*/}"
-              CURRENT_REPO="${CURRENT_PATH%@*}"
-              CURRENT_DIGEST="${CURRENT_IMG#*@}"
-              echo "Checking if currently deployed digest exists in ACR: $CURRENT_DIGEST"
-              
-              # First check if repository exists
-              REPO_EXISTS=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>/dev/null || true)
-              if [ -z "$REPO_EXISTS" ]; then
-                echo "Currently deployed repository not found in ACR (repository may have been deleted)."
-                echo "Using 'az containerapp revision copy' to force new revision with new image."
-                USE_REVISION_COPY=true
-              else
-                # Repository exists, now check if specific digest exists
-                DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
-                if [ -z "$DIGEST_EXISTS" ]; then
-                  echo "Currently deployed digest not found in ACR (may have been deleted)."
-                  echo "Using 'az containerapp revision copy' to force new revision with new image."
-                  USE_REVISION_COPY=true
-                else
-                  echo "✓ Currently deployed digest exists in ACR"
-                fi
-              fi
-            fi
-          fi
-          
-          if [ "$USE_REVISION_COPY" = "true" ]; then
-            echo "Creating new revision with image: $IMG"
-            # Get current revision name
-            CURRENT_REVISION=$(az containerapp revision list -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null || true)
-            if [ -n "$CURRENT_REVISION" ]; then
-              # Use revision copy to create new revision with updated image
-              # This bypasses validation of the old image
-              az containerapp revision copy -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" \
-                --from-revision "$CURRENT_REVISION" \
-                --image "$IMG"
-            else
-              echo "Could not determine current revision; falling back to regular update"
-              az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
-            fi
-          else
-            echo "Performing direct image update to: $IMG"
-            az containerapp update -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --image "$IMG"
-          fi
-          
-          echo "didFastPath=true" >> $GITHUB_OUTPUT
 
       - name: azd up (provision + deploy)
         if: steps.fastpath.outputs.didFastPath != 'true'

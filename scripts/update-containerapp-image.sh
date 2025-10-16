@@ -1,0 +1,273 @@
+#!/bin/bash
+# update-containerapp-image.sh
+#
+# Fast-path image update for Azure Container Apps with intelligent ACR deletion resilience.
+# This script safely updates a Container App's container image, handling scenarios where
+# old images may have been deleted from ACR.
+#
+# USAGE:
+#   ./update-containerapp-image.sh <app-name> <resource-group> <new-image> <acr-name> <acr-domain>
+#
+# ARGUMENTS:
+#   app-name      Container App name (e.g., "test-rap-fe")
+#   resource-group Resource group name (e.g., "rg-raptor-test")
+#   new-image     New image with digest (e.g., "acr.azurecr.io/repo@sha256:...")
+#   acr-name      ACR registry name (e.g., "ngraptortest")
+#   acr-domain    ACR full domain (e.g., "ngraptortest.azurecr.io")
+#
+# REQUIREMENTS:
+#   - Container App must exist
+#   - Azure CLI authenticated with Container Apps permissions
+#   - New image must be in digest format (@sha256:...)
+#   - ACR must be accessible (registry binding already configured)
+#
+# BEHAVIOR:
+#   1. Ensures ACR registry binding is configured (calls ensure-acr-binding.sh)
+#   2. Checks if currently deployed image still exists in ACR:
+#      a. FAST PATH: Check by commit tag (raptor.lastCommit) - much faster
+#      b. FALLBACK: Check by digest in manifest list - slower but thorough
+#   3. If old image exists: Use direct update (az containerapp update)
+#   4. If old image deleted: Use revision copy (bypasses old image validation)
+#
+# EXIT CODES:
+#   0 - Success
+#   1 - Error (prerequisites not met, update failed)
+#
+# PERFORMANCE:
+#   - Tag-based check: ~1-2 seconds (single API call)
+#   - Digest-based check: ~3-5 seconds (lists all manifests)
+#   - Uses tag check first for optimal performance
+#
+# EXAMPLE:
+#   ./update-containerapp-image.sh \
+#     "test-rap-fe" \
+#     "rg-raptor-test" \
+#     "ngraptortest.azurecr.io/raptor/frontend-test@sha256:abc123..." \
+#     "ngraptortest" \
+#     "ngraptortest.azurecr.io"
+
+set -euo pipefail
+
+# ============================================================================
+# ARGUMENT VALIDATION
+# ============================================================================
+
+if [ $# -ne 5 ]; then
+  echo "Error: Invalid number of arguments" >&2
+  echo "Usage: $0 <app-name> <resource-group> <new-image> <acr-name> <acr-domain>" >&2
+  exit 1
+fi
+
+APP_NAME="$1"
+RG="$2"
+NEW_IMG="$3"
+ACR_NAME="$4"
+ACR_DOMAIN="$5"
+
+# ============================================================================
+# PREREQUISITE CHECKS
+# ============================================================================
+
+# Validate new image is digest-based
+DIGEST_PART="${NEW_IMG#*@}"
+if [ "$NEW_IMG" = "$DIGEST_PART" ]; then
+  echo "❌ Error: Image must be in digest format (image@sha256:...)" >&2
+  exit 1
+fi
+
+# Verify Container App exists
+if ! az containerapp show -n "$APP_NAME" -g "$RG" >/dev/null 2>&1; then
+  echo "❌ Error: Container App '$APP_NAME' not found in resource group '$RG'" >&2
+  exit 1
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📦 Container App Image Update"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  App:    $APP_NAME"
+echo "  RG:     $RG"
+echo "  Image:  $NEW_IMG"
+echo ""
+
+# ============================================================================
+# ENSURE ACR REGISTRY BINDING
+# ============================================================================
+
+echo "📋 Step 1: Ensure ACR registry binding"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+DOMAIN="${NEW_IMG%%/*}"
+if [ "$DOMAIN" = "$ACR_DOMAIN" ]; then
+  chmod +x "$(dirname "$0")/ensure-acr-binding.sh"
+  if ! "$(dirname "$0")/ensure-acr-binding.sh" "$APP_NAME" "$RG" "$ACR_NAME" "$ACR_DOMAIN"; then
+    echo "❌ Failed to ensure ACR binding" >&2
+    exit 1
+  fi
+else
+  echo "ℹ️  Image not from specified ACR, skipping registry binding"
+fi
+
+echo ""
+
+# ============================================================================
+# CHECK IF CURRENT IMAGE EXISTS IN ACR (ACR DELETION RESILIENCE)
+# ============================================================================
+
+echo "📋 Step 2: Check if currently deployed image exists in ACR"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Get currently deployed image
+CURRENT_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+USE_REVISION_COPY=false
+
+if [ -z "$CURRENT_IMG" ]; then
+  echo "ℹ️  No current image found (new deployment)"
+elif ! echo "$CURRENT_IMG" | grep -q "@sha256:"; then
+  echo "ℹ️  Current image is tag-based (not digest), skipping check"
+else
+  # Parse current image details
+  CURRENT_DOMAIN="${CURRENT_IMG%%/*}"
+  
+  if ! echo "$CURRENT_DOMAIN" | grep -q ".azurecr.io$"; then
+    echo "ℹ️  Current image is not from ACR, skipping check"
+  else
+    CURRENT_REG=$(echo "$CURRENT_DOMAIN" | sed 's/\.azurecr\.io$//')
+    CURRENT_PATH="${CURRENT_IMG#*/}"
+    CURRENT_REPO="${CURRENT_PATH%@*}"
+    CURRENT_DIGEST="${CURRENT_IMG#*@}"
+    
+    echo "Currently deployed image:"
+    echo "  Full:       $CURRENT_IMG"
+    echo "  Registry:   $CURRENT_REG"
+    echo "  Repository: $CURRENT_REPO"
+    echo "  Digest:     ${CURRENT_DIGEST:0:19}..."
+    echo ""
+    
+    # ========================================================================
+    # PERFORMANCE OPTIMIZATION: Check by commit tag first (FAST PATH)
+    # ========================================================================
+    
+    echo "🔍 Checking if image exists in ACR..."
+    echo ""
+    
+    # Get commit tag from Container App metadata
+    COMMIT_TAG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "tags.\"raptor.lastCommit\"" -o tsv 2>/dev/null || true)
+    IMAGE_EXISTS=false
+    
+    if [ -n "$COMMIT_TAG" ] && [ "$COMMIT_TAG" != "null" ]; then
+      echo "  Method 1: Check by commit tag (fast path)"
+      echo "  → Commit tag: $COMMIT_TAG"
+      
+      # Query ACR for this specific tag (much faster than listing all manifests)
+      TAG_EXISTS=$(az acr repository show-tags -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?@=='$COMMIT_TAG'] | [0]" -o tsv 2>/dev/null || true)
+      
+      if [ -n "$TAG_EXISTS" ]; then
+        echo "  ✅ Found image by commit tag (fast check succeeded)"
+        IMAGE_EXISTS=true
+      else
+        echo "  ⚠️  Commit tag not found in ACR"
+      fi
+      echo ""
+    fi
+    
+    # ========================================================================
+    # FALLBACK: Check by digest in manifest list (SLOW PATH)
+    # ========================================================================
+    
+    if [ "$IMAGE_EXISTS" = "false" ]; then
+      echo "  Method 2: Check by digest (fallback - slower)"
+      
+      # First check if repository exists
+      echo "  → Checking repository existence..."
+      REPO_CHECK_OUTPUT=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>&1 || true)
+      REPO_EXISTS=$(echo "$REPO_CHECK_OUTPUT" | head -n 1 | grep -v "ERROR\|error" | grep -v "^$" || true)
+      
+      if echo "$REPO_CHECK_OUTPUT" | grep -iq "ERROR"; then
+        echo "  ⚠️  Cannot verify repository (may lack ACR data-plane permissions)"
+        echo "  Raw output: $REPO_CHECK_OUTPUT"
+        echo "  → Will use revision copy as safe default"
+        USE_REVISION_COPY=true
+      elif [ -z "$REPO_EXISTS" ]; then
+        echo "  ❌ Repository deleted from ACR"
+        echo "  → Will use revision copy to bypass validation"
+        USE_REVISION_COPY=true
+      else
+        echo "  ✅ Repository exists"
+        
+        # Check if specific digest exists in manifests
+        echo "  → Checking digest in manifest list..."
+        DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
+        
+        if [ -z "$DIGEST_EXISTS" ]; then
+          echo "  ❌ Digest not found in ACR (image deleted)"
+          echo "  → Will use revision copy to bypass validation"
+          USE_REVISION_COPY=true
+        else
+          echo "  ✅ Digest exists in ACR"
+          IMAGE_EXISTS=true
+        fi
+      fi
+      echo ""
+    fi
+  fi
+fi
+
+# ============================================================================
+# UPDATE CONTAINER APP IMAGE
+# ============================================================================
+
+echo "📋 Step 3: Update Container App image"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+if [ "$USE_REVISION_COPY" = "true" ]; then
+  echo "Strategy: Revision Copy (bypasses old image validation)"
+  echo ""
+  
+  # Get current revision name
+  CURRENT_REVISION=$(az containerapp revision list -n "$APP_NAME" -g "$RG" --query "[0].name" -o tsv 2>/dev/null || true)
+  
+  if [ -n "$CURRENT_REVISION" ]; then
+    echo "  Current revision: $CURRENT_REVISION"
+    echo "  Creating new revision with updated image..."
+    echo ""
+    
+    az containerapp revision copy \
+      -n "$APP_NAME" \
+      -g "$RG" \
+      --from-revision "$CURRENT_REVISION" \
+      --image "$NEW_IMG"
+    
+    echo ""
+    echo "✅ Revision copy completed successfully"
+  else
+    echo "  ⚠️  Could not determine current revision"
+    echo "  Falling back to direct update..."
+    echo ""
+    
+    az containerapp update \
+      -n "$APP_NAME" \
+      -g "$RG" \
+      --image "$NEW_IMG"
+    
+    echo ""
+    echo "✅ Direct update completed successfully"
+  fi
+else
+  echo "Strategy: Direct Update (old image exists in ACR)"
+  echo ""
+  
+  az containerapp update \
+    -n "$APP_NAME" \
+    -g "$RG" \
+    --image "$NEW_IMG"
+  
+  echo ""
+  echo "✅ Direct update completed successfully"
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🎉 Container App image update complete!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+exit 0
