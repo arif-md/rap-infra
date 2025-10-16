@@ -159,13 +159,27 @@ else
       echo "  → Commit tag: $COMMIT_TAG"
       
       # Query ACR for this specific tag (much faster than listing all manifests)
+      # Try full hash first
       TAG_EXISTS=$(az acr repository show-tags -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?@=='$COMMIT_TAG'] | [0]" -o tsv 2>/dev/null || true)
       
       if [ -n "$TAG_EXISTS" ]; then
-        echo "  ✅ Found image by commit tag (fast check succeeded)"
+        echo "  ✅ Found image by full commit tag"
         IMAGE_EXISTS=true
       else
-        echo "  ⚠️  Commit tag not found in ACR"
+        # If full hash not found, try short hash (first 7-12 characters)
+        # ACR tags may use short commit hashes (e.g., 56a1641fcafc instead of full 56a1641fcafce07eb66636bdc2c21dcadf81760a)
+        SHORT_COMMIT="${COMMIT_TAG:0:12}"
+        echo "  ⚠️  Full commit tag not found, trying short form: $SHORT_COMMIT"
+        
+        # Use starts_with filter to find tags beginning with short hash
+        TAG_EXISTS=$(az acr repository show-tags -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?starts_with(@, '$SHORT_COMMIT')] | [0]" -o tsv 2>/dev/null || true)
+        
+        if [ -n "$TAG_EXISTS" ]; then
+          echo "  ✅ Found image by short commit tag: $TAG_EXISTS"
+          IMAGE_EXISTS=true
+        else
+          echo "  ⚠️  Commit tag not found in ACR (tried both full and short forms)"
+        fi
       fi
       echo ""
     fi
