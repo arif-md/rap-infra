@@ -389,14 +389,28 @@ jobs:
             get_commit_from_labels() {
               local reg="$1" repo="$2" dig="$3"
               if [ -z "$dig" ]; then echo "[debug] No digest provided" >&2; echo ""; return 0; fi
-              echo "[debug] Getting ACR token for registry: $reg" >&2
-              local tok
-              tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-              if [ -z "$tok" ]; then echo "[debug] Failed to get ACR token" >&2; echo ""; return 0; fi
-              echo "[debug] ACR token obtained successfully" >&2
-              local base="https://${reg}.azurecr.io/v2/${repo}"
-              echo "[debug] Fetching manifest from: $base/manifests/$dig" >&2
-              local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+              echo "[debug] Getting ACR refresh token for registry: $reg" >&2
+              local refresh
+              refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+              if [ -z "$refresh" ]; then echo "[debug] Failed to get ACR refresh token" >&2; echo ""; return 0; fi
+              echo "[debug] ACR refresh token obtained successfully" >&2
+              
+              # Exchange refresh token for access token with repository scope
+              local base="https://${reg}.azurecr.io"
+              echo "[debug] Exchanging for access token with repository scope: $repo:pull" >&2
+              local access
+              access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+                --data-urlencode "grant_type=refresh_token" \
+                --data-urlencode "service=${reg}.azurecr.io" \
+                --data-urlencode "scope=repository:${repo}:pull" \
+                --data-urlencode "refresh_token=${refresh}" \
+                "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+              if [ -z "$access" ]; then echo "[debug] Failed to exchange for access token" >&2; echo ""; return 0; fi
+              echo "[debug] Access token obtained successfully" >&2
+              
+              local v2base="$base/v2/${repo}"
+              echo "[debug] Fetching manifest from: $v2base/manifests/$dig" >&2
+              local mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$v2base/manifests/$dig" 2>/dev/null || true)
               if [ -z "$mf" ]; then echo "[debug] Failed to fetch manifest" >&2; echo ""; return 0; fi
               echo "[debug] Manifest fetched successfully" >&2
               local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
@@ -404,13 +418,13 @@ jobs:
               if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
                 echo "[debug] Multi-arch manifest detected, fetching first child" >&2
                 local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-                [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+                [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$child" 2>/dev/null || true)
               fi
               local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
               if [ -z "$cfg" ]; then echo "[debug] No config digest found in manifest" >&2; echo ""; return 0; fi
               echo "[debug] Config digest: $cfg" >&2
-              echo "[debug] Fetching config blob from: $base/blobs/$cfg" >&2
-              local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+              echo "[debug] Fetching config blob from: $v2base/blobs/$cfg" >&2
+              local cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/blobs/$cfg" 2>/dev/null || true)
               if [ -z "$cfgJson" ]; then echo "[debug] Failed to fetch config blob" >&2; echo ""; return 0; fi
               echo "[debug] Config blob fetched successfully" >&2
               local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
