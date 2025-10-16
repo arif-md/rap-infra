@@ -492,10 +492,26 @@ jobs:
               CURRENT_PATH="${CURRENT_IMG#*/}"
               CURRENT_REPO="${CURRENT_PATH%@*}"
               CURRENT_DIGEST="${CURRENT_IMG#*@}"
-              echo "Checking if currently deployed digest exists in ACR: $CURRENT_DIGEST"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "🔍 ACR Deletion Resilience Check"
+              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+              echo "Currently deployed image:"
+              echo "  Full: $CURRENT_IMG"
+              echo "  Registry: $CURRENT_REG"
+              echo "  Repository: $CURRENT_REPO"
+              echo "  Digest: ${CURRENT_DIGEST:0:19}..."
+              echo ""
               
               # First check if repository exists
-              REPO_EXISTS=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>/dev/null || true)
+              echo "→ Checking if repository exists: az acr repository show -n '$CURRENT_REG' --repository '$CURRENT_REPO'"
+              REPO_CHECK_OUTPUT=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>&1 || true)
+              REPO_EXISTS=$(echo "$REPO_CHECK_OUTPUT" | head -n 1 | grep -v "ERROR" || true)
+              echo "  Result: '${REPO_EXISTS}'"
+              if echo "$REPO_CHECK_OUTPUT" | grep -q "ERROR"; then
+                echo "  Error details: $REPO_CHECK_OUTPUT"
+              fi
+              echo ""
+              
               if [ -z "$REPO_EXISTS" ]; then
                 echo "Currently deployed repository not found in ACR (repository may have been deleted)."
                 echo "Using 'az containerapp revision copy' to force new revision with new image."
