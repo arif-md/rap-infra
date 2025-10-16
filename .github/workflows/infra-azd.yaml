@@ -384,37 +384,65 @@ jobs:
           NEW_SHA=""
           if echo "$DOMAIN" | grep -q ".azurecr.io$"; then
             REG_NAME=$(echo "$DOMAIN" | sed 's/\\.azurecr\\.io$//')
+            echo "[debug] Attempting to read OCI labels from ACR: $REG_NAME, repo: $REPO_NAME, digest: $DIGEST"
             get_commit_from_labels() {
               local reg="$1" repo="$2" dig="$3"
-              if [ -z "$dig" ]; then echo ""; return 0; fi
+              if [ -z "$dig" ]; then echo "[debug] No digest provided" >&2; echo ""; return 0; fi
+              echo "[debug] Getting ACR token for registry: $reg" >&2
               local tok
               tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-              [ -z "$tok" ] && { echo ""; return 0; }
+              if [ -z "$tok" ]; then echo "[debug] Failed to get ACR token" >&2; echo ""; return 0; fi
+              echo "[debug] ACR token obtained successfully" >&2
               local base="https://${reg}.azurecr.io/v2/${repo}"
+              echo "[debug] Fetching manifest from: $base/manifests/$dig" >&2
               local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
-              [ -z "$mf" ] && { echo ""; return 0; }
+              if [ -z "$mf" ]; then echo "[debug] Failed to fetch manifest" >&2; echo ""; return 0; fi
+              echo "[debug] Manifest fetched successfully" >&2
               local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
+              echo "[debug] Manifest mediaType: $media" >&2
               if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
+                echo "[debug] Multi-arch manifest detected, fetching first child" >&2
                 local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
                 [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
               fi
               local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
-              [ -z "$cfg" ] && { echo ""; return 0; }
+              if [ -z "$cfg" ]; then echo "[debug] No config digest found in manifest" >&2; echo ""; return 0; fi
+              echo "[debug] Config digest: $cfg" >&2
+              echo "[debug] Fetching config blob from: $base/blobs/$cfg" >&2
               local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
-              [ -z "$cfgJson" ] && { echo ""; return 0; }
+              if [ -z "$cfgJson" ]; then echo "[debug] Failed to fetch config blob" >&2; echo ""; return 0; fi
+              echo "[debug] Config blob fetched successfully" >&2
               local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
+              if [ -n "$rev" ]; then
+                echo "[debug] Found org.opencontainers.image.revision: $rev" >&2
+              else
+                echo "[debug] Label org.opencontainers.image.revision not found or empty" >&2
+                echo "[debug] Available labels:" >&2
+                printf '%s' "$cfgJson" | jq -r '.config.Labels // {}' >&2
+              fi
               printf '%s' "$rev"
             }
             NEW_SHA=$(get_commit_from_labels "$REG_NAME" "$REPO_NAME" "$DIGEST")
+            if [ -n "$NEW_SHA" ]; then
+              echo "✓ Successfully extracted commit SHA from OCI labels: $NEW_SHA"
+            else
+              echo "⚠ Could not extract commit SHA from OCI labels"
+            fi
           fi
           echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
           if [ -z "$DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
           TAG_ARGS=("raptor.lastDigest=${DIGEST}")
-          if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
+          if [ -n "$NEW_SHA" ]; then 
+            TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}")
+            echo "Will set tags: raptor.lastDigest=${DIGEST}, raptor.lastCommit=${NEW_SHA}"
+          else
+            echo "Will set tags: raptor.lastDigest=${DIGEST} (no commit SHA available)"
+          fi
           az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
             --resource-type "Microsoft.App/containerApps" \
             --is-incremental \
             --tags "${TAG_ARGS[@]}" >/dev/null || true
+          echo "✓ Container App tags updated"
 
       - name: Prepare promotion target
         if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
