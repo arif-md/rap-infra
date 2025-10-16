@@ -535,20 +535,29 @@ jobs:
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
-            local tok
-            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            [ -z "$tok" ] && { echo ""; return 0; }
-            local base="https://${reg}.azurecr.io/v2/${repo}"
-            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            local refresh
+            refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$refresh" ] && { echo ""; return 0; }
+            local base="https://${reg}.azurecr.io"
+            local access
+            access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "grant_type=refresh_token" \
+              --data-urlencode "service=${reg}.azurecr.io" \
+              --data-urlencode "scope=repository:${repo}:pull" \
+              --data-urlencode "refresh_token=${refresh}" \
+              "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+            [ -z "$access" ] && { echo ""; return 0; }
+            local v2base="$base/v2/${repo}"
+            local mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$v2base/manifests/$dig" 2>/dev/null || true)
             [ -z "$mf" ] && { echo ""; return 0; }
             local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
             if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
               local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$child" 2>/dev/null || true)
             fi
             local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
             [ -z "$cfg" ] && { echo ""; return 0; }
-            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/blobs/$cfg" 2>/dev/null || true)
             [ -z "$cfgJson" ] && { echo ""; return 0; }
             local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
             printf '%s' "$rev"
@@ -971,20 +980,29 @@ jobs:
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
-            local tok
-            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            [ -z "$tok" ] && { echo ""; return 0; }
-            local base="https://${reg}.azurecr.io/v2/${repo}"
-            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            local refresh
+            refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$refresh" ] && { echo ""; return 0; }
+            local base="https://${reg}.azurecr.io"
+            local access
+            access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "grant_type=refresh_token" \
+              --data-urlencode "service=${reg}.azurecr.io" \
+              --data-urlencode "scope=repository:${repo}:pull" \
+              --data-urlencode "refresh_token=${refresh}" \
+              "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+            [ -z "$access" ] && { echo ""; return 0; }
+            local v2base="$base/v2/${repo}"
+            local mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$v2base/manifests/$dig" 2>/dev/null || true)
             [ -z "$mf" ] && { echo ""; return 0; }
             local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
             if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
               local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$child" 2>/dev/null || true)
             fi
             local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
             [ -z "$cfg" ] && { echo ""; return 0; }
-            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/blobs/$cfg" 2>/dev/null || true)
             [ -z "$cfgJson" ] && { echo ""; return 0; }
             local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
             printf '%s' "$rev"
@@ -1407,20 +1425,29 @@ jobs:
           get_commit_from_labels() {
             local reg="$1" repo="$2" dig="$3"
             if [ -z "$dig" ]; then echo ""; return 0; fi
-            local tok
-            tok=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
-            [ -z "$tok" ] && { echo ""; return 0; }
-            local base="https://${reg}.azurecr.io/v2/${repo}"
-            local mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$base/manifests/$dig" 2>/dev/null || true)
+            local refresh
+            refresh=$(az acr login -n "$reg" --expose-token -o tsv --query accessToken 2>/dev/null || true)
+            [ -z "$refresh" ] && { echo ""; return 0; }
+            local base="https://${reg}.azurecr.io"
+            local access
+            access=$(curl -fsSL -H 'Content-Type: application/x-www-form-urlencoded' \
+              --data-urlencode "grant_type=refresh_token" \
+              --data-urlencode "service=${reg}.azurecr.io" \
+              --data-urlencode "scope=repository:${repo}:pull" \
+              --data-urlencode "refresh_token=${refresh}" \
+              "$base/oauth2/token" 2>/dev/null | jq -r '.access_token // empty')
+            [ -z "$access" ] && { echo ""; return 0; }
+            local v2base="$base/v2/${repo}"
+            local mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' "$v2base/manifests/$dig" 2>/dev/null || true)
             [ -z "$mf" ] && { echo ""; return 0; }
             local media=$(printf '%s' "$mf" | jq -r '.mediaType // empty')
             if [ "$media" = "application/vnd.oci.image.index.v1+json" ] || [ "$media" = "application/vnd.docker.distribution.manifest.list.v2+json" ]; then
               local child=$(printf '%s' "$mf" | jq -r '.manifests[0].digest // empty')
-              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $tok" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$base/manifests/$child" 2>/dev/null || true)
+              [ -n "$child" ] && mf=$(curl -fsSL -H "Authorization: Bearer $access" -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$v2base/manifests/$child" 2>/dev/null || true)
             fi
             local cfg=$(printf '%s' "$mf" | jq -r '.config.digest // empty')
             [ -z "$cfg" ] && { echo ""; return 0; }
-            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $tok" "$base/blobs/$cfg" 2>/dev/null || true)
+            local cfgJson=$(curl -fsSL -H "Authorization: Bearer $access" "$v2base/blobs/$cfg" 2>/dev/null || true)
             [ -z "$cfgJson" ] && { echo ""; return 0; }
             local rev=$(printf '%s' "$cfgJson" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty')
             printf '%s' "$rev"
