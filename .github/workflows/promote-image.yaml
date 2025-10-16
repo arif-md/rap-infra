@@ -79,7 +79,7 @@ jobs:
     name: Prepare & Notify (test)
     if: ${{ needs.plan.outputs.run_test == 'true' }}
     needs: plan
-    environment: preflight
+    environment: test-notify
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -548,7 +548,7 @@ jobs:
     name: Prepare & Notify (train)
     if: ${{ needs.plan.outputs.run_train == 'true' }}
     needs: [plan, after-test]
-    environment: preflight
+    environment: train-notify
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -984,7 +984,7 @@ jobs:
     name: Prepare & Notify (prod)
     if: ${{ needs.plan.outputs.run_prod == 'true' }}
     needs: [plan, after-train]
-    environment: preflight
+    environment: prod-notify
     runs-on: ubuntu-latest
     permissions:
       id-token: write
