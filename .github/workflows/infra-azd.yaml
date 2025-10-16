@@ -383,7 +383,8 @@ jobs:
           # Attempt to resolve commit from OCI labels when image is in ACR
           NEW_SHA=""
           if echo "$DOMAIN" | grep -q ".azurecr.io$"; then
-            REG_NAME=$(echo "$DOMAIN" | sed 's/\.azurecr\.io$//')
+            # Strip .azurecr.io suffix using bash parameter expansion (more reliable than sed)
+            REG_NAME="${DOMAIN%.azurecr.io}"
             echo "[debug] Attempting to read OCI labels from ACR: $REG_NAME, repo: $REPO_NAME, digest: $DIGEST"
             get_commit_from_labels() {
               local reg="$1" repo="$2" dig="$3"
