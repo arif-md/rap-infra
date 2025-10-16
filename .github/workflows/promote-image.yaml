@@ -79,8 +79,8 @@ jobs:
     name: Prepare & Notify (test)
     if: ${{ needs.plan.outputs.run_test == 'true' }}
     needs: plan
-    environment: test-notify
     runs-on: ubuntu-latest
+    environment: preflight
     permissions:
       id-token: write
       contents: read
@@ -135,9 +135,28 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV='${{ env.TARGET_ENV }}'
-          # Prefer explicitly configured values from the GitHub Environment; fall back to conventional names
-          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
-          RG='${{ vars.AZURE_RESOURCE_GROUP || '' }}'
+          # Try environment-specific variables first (e.g., AZURE_ACR_NAME_TEST, AZURE_RESOURCE_GROUP_TEST)
+          # Fall back to generic variables, then conventional names
+          ACR_NAME=""
+          RG=""
+          case "${TARGET_ENV^^}" in
+            DEV)
+              ACR_NAME='${{ vars.AZURE_ACR_NAME_DEV || vars.AZURE_ACR_NAME || '' }}'
+              RG='${{ vars.AZURE_RESOURCE_GROUP_DEV || vars.AZURE_RESOURCE_GROUP || '' }}'
+              ;;
+            TEST)
+              ACR_NAME='${{ vars.AZURE_ACR_NAME_TEST || vars.AZURE_ACR_NAME || '' }}'
+              RG='${{ vars.AZURE_RESOURCE_GROUP_TEST || vars.AZURE_RESOURCE_GROUP || '' }}'
+              ;;
+            TRAIN)
+              ACR_NAME='${{ vars.AZURE_ACR_NAME_TRAIN || vars.AZURE_ACR_NAME || '' }}'
+              RG='${{ vars.AZURE_RESOURCE_GROUP_TRAIN || vars.AZURE_RESOURCE_GROUP || '' }}'
+              ;;
+            PROD)
+              ACR_NAME='${{ vars.AZURE_ACR_NAME_PROD || vars.AZURE_ACR_NAME || '' }}'
+              RG='${{ vars.AZURE_RESOURCE_GROUP_PROD || vars.AZURE_RESOURCE_GROUP || '' }}'
+              ;;
+          esac
           if [ -z "$RG" ]; then RG="rg-raptor-${TARGET_ENV}"; fi
           SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
@@ -548,8 +567,8 @@ jobs:
     name: Prepare & Notify (train)
     if: ${{ needs.plan.outputs.run_train == 'true' }}
     needs: [plan, after-test]
-    environment: train-notify
     runs-on: ubuntu-latest
+    environment: preflight
     permissions:
       id-token: write
       contents: read
@@ -604,8 +623,16 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV='${{ env.TARGET_ENV }}'
+          # Try environment-specific variable first (e.g., AZURE_RESOURCE_GROUP_TRAIN)
+          # Fall back to generic AZURE_RESOURCE_GROUP, then conventional name
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
-          RG='${{ vars.AZURE_RESOURCE_GROUP || '' }}'
+          RG=""
+          case "${TARGET_ENV^^}" in
+            DEV)   RG='${{ vars.AZURE_RESOURCE_GROUP_DEV || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            TEST)  RG='${{ vars.AZURE_RESOURCE_GROUP_TEST || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            TRAIN) RG='${{ vars.AZURE_RESOURCE_GROUP_TRAIN || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            PROD)  RG='${{ vars.AZURE_RESOURCE_GROUP_PROD || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+          esac
           if [ -z "$RG" ]; then RG="rg-raptor-${TARGET_ENV}"; fi
           SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)
@@ -984,8 +1011,8 @@ jobs:
     name: Prepare & Notify (prod)
     if: ${{ needs.plan.outputs.run_prod == 'true' }}
     needs: [plan, after-train]
-    environment: prod-notify
     runs-on: ubuntu-latest
+    environment: preflight
     permissions:
       id-token: write
       contents: read
@@ -1040,8 +1067,16 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_ENV='${{ env.TARGET_ENV }}'
+          # Try environment-specific variable first (e.g., AZURE_RESOURCE_GROUP_PROD)
+          # Fall back to generic AZURE_RESOURCE_GROUP, then conventional name
           ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
-          RG='${{ vars.AZURE_RESOURCE_GROUP || '' }}'
+          RG=""
+          case "${TARGET_ENV^^}" in
+            DEV)   RG='${{ vars.AZURE_RESOURCE_GROUP_DEV || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            TEST)  RG='${{ vars.AZURE_RESOURCE_GROUP_TEST || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            TRAIN) RG='${{ vars.AZURE_RESOURCE_GROUP_TRAIN || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+            PROD)  RG='${{ vars.AZURE_RESOURCE_GROUP_PROD || vars.AZURE_RESOURCE_GROUP || '' }}' ;;
+          esac
           if [ -z "$RG" ]; then RG="rg-raptor-${TARGET_ENV}"; fi
           SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           LOC=$(az group show -n "$RG" ${SUB:+--subscription "$SUB"} --query location -o tsv 2>/dev/null || true)

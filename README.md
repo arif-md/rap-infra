@@ -3,7 +3,14 @@
 ## Prerequisites
 - Azure CLI (az) 2.61.0 or newer (required for Deployment Stacks alpha)
 - Azure Developer CLI (azd)
-- Docker Desktop (optional; not required when deploying a prebuilt image)
+- Docker Desktop (optional; not required when deploying a 2) Add the token as a secret
+	- In the infra repo (this repository): Settings → Secrets and variables → Actions → New repository secret
+	- Name: `FRONTEND_REPO_READ_TOKEN`
+	- Value: paste the token
+	- Since this is defined at repository level, it's accessible to all jobs across all environments.
+
+3) Verify
+	- Trigger a promotion to `test`. In the job summary and the approval email, the "List of changes" section should include a commit list/table instead of being empty. image)
 
 Windows install (PowerShell):
 
@@ -149,33 +156,107 @@ Tip
 	- `az account show --output table`
 	- `azd env list`
 
-## Image promotion (dev → test → prod)
+## Image promotion (dev → test → train → prod)
 
 We promote the exact built image by digest to higher environments to avoid drift.
 
-- The frontend workflow builds and pushes an image to the dev ACR and produces an image by digest, for example: `ngraptordev.azurecr.io/raptor/frontend-dev@sha256:...`.
+**Base environment (default: dev)**
+- The frontend workflow builds and pushes an image to the base environment's ACR (configured via `DEFAULT_GITHUB_ENV` repository variable, defaults to `dev`)
+- It produces an image by digest, for example: `ngraptordev.azurecr.io/raptor/frontend-dev@sha256:...`
+- The image is automatically deployed to the base environment
 - It dispatches two events to this repo:
-	- `frontend-image-pushed` → triggers infra deploy for the current environment.
-	- `frontend-image-promote` → triggers `.github/workflows/promote-image.yaml` to promote to `test` then `prod`.
+	- `frontend-image-pushed` → triggers infra deploy for the base environment
+	- `frontend-image-promote` → triggers `.github/workflows/promote-image.yaml` to promote to higher environments (`test` → `train` → `prod`)
+
+**Promotion flow**
+Images flow from the base environment through progressive stages: base → test → train → prod. To change the base environment (e.g., from `dev` to `staging`), update the repository variable `DEFAULT_GITHUB_ENV`.
 
 What promotion does per environment:
 
 1) Uses OIDC to login to Azure and azd.
 2) Imports the manifest by digest into the target environment ACR repo using `az acr import` (no rebuild):
-	 - Source: the `image@digest` from the dev build
+	 - Source: the `image@digest` from the source environment build
 	 - Target: `<AZURE_ACR_NAME_<ENV>>.azurecr.io/raptor/frontend-<env>:promoted-<runId>`
 3) Deploys by digest in that environment by setting `SERVICE_FRONTEND_IMAGE_NAME` to `<acr>.azurecr.io/raptor/frontend-<env>@<digest>` and forcing `SKIP_ACR_PULL_ROLE_ASSIGNMENT=false`.
 
 Approvals
 
-- Jobs are bound to environment scopes (`dev`, `test`, and later `prod`). Configure required reviewers in GitHub Environments to enforce manual approvals before each stage runs. For now, set approvals on `test`; `prod` can be enabled later.
+- Jobs are bound to environment scopes for deployment (`test`, `train`, `prod`). Configure required reviewers in GitHub Environments to enforce manual approvals before each promotion stage runs.
+- The notification jobs (`prepare-and-notify-*`) run without environment scope and use repository-level federated identity, so they don't require additional federated identity credentials or approval gates.
 
 Required variables/secrets
 
-- Environment-scoped variables (define these in each GitHub Environment):
-	- dev: `AZURE_ACR_NAME=ngraptordev`, `AZURE_RESOURCE_GROUP=rg-raptor-dev`
-	- test: `AZURE_ACR_NAME=ngraptortest`, `AZURE_RESOURCE_GROUP=rg-raptor-test`
-- Environment secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` must exist for each environment (`dev`, `test`, and later `prod`).
+**Repository-level secrets** (shared across all jobs and environments):
+- `AZURE_SUBSCRIPTION_ID` - Azure subscription ID
+- `AZURE_TENANT_ID` - Azure AD tenant ID  
+- `AZURE_CLIENT_ID` - Service principal client ID for OIDC authentication
+- `FRONTEND_REPO_READ_TOKEN` - (Optional) PAT for reading commits from private frontend repo
+- Email notification secrets (optional):
+  - `MAIL_SERVER` - SMTP server hostname
+  - `MAIL_PORT` - SMTP port (default 587)
+  - `MAIL_FROM` - Sender email address
+  - `MAIL_TO` - Recipient email address(es)
+  - `MAIL_USERNAME` - SMTP authentication username
+  - `MAIL_PASSWORD` - SMTP authentication password
+
+**Repository-level variables**:
+- `DEFAULT_GITHUB_ENV` - (Optional) Specifies the base environment for initial image deployment (default: `dev`). When a frontend image is pushed to ACR, it's automatically deployed to this environment first, then promoted to higher environments (test → train → prod). Change this value to use a different base environment.
+
+**Preflight environment variables** (used by notification jobs to query current deployments):
+- `AZURE_ACR_NAME_DEV` - ACR name for dev environment (e.g., `ngraptordev`)
+- `AZURE_ACR_NAME_TEST` - ACR name for test environment (e.g., `ngraptortest`)
+- `AZURE_ACR_NAME_TRAIN` - ACR name for train environment (e.g., `ngraptortrain`)
+- `AZURE_ACR_NAME_PROD` - ACR name for prod environment (e.g., `ngraptorprod`)
+- `AZURE_RESOURCE_GROUP_DEV` - Resource group for dev environment (e.g., `rg-raptor-dev`)
+- `AZURE_RESOURCE_GROUP_TEST` - Resource group for test environment (e.g., `rg-raptor-test`)
+- `AZURE_RESOURCE_GROUP_TRAIN` - Resource group for train environment (e.g., `rg-raptor-test` or `rg-raptor-train`)
+- `AZURE_RESOURCE_GROUP_PROD` - Resource group for prod environment (e.g., `rg-raptor-prod`)
+
+**Note:** The notification jobs use the `preflight` environment to access these configuration variables without requiring separate federated identities per environment.
+
+**Environment-specific configuration** (define in each GitHub Environment):
+
+For the preflight environment (used by notification jobs):
+- `preflight`: Configure the 8 environment-specific variables listed above (AZURE_ACR_NAME_* and AZURE_RESOURCE_GROUP_*)
+
+For deployment environments (configure with protection rules/required reviewers):
+- `dev`: Optionally add required reviewers for approval gate
+- `test`: Add required reviewers for approval gate
+- `train`: Add required reviewers for approval gate
+- `prod`: Add required reviewers for approval gate
+
+**Federated Identity Setup**
+
+The workflow uses OIDC (OpenID Connect) for secure authentication to Azure without storing credentials. You need to configure federated identity credentials in Azure:
+
+1. **Preflight environment federated identity** (for notification jobs):
+   - Subject identifier: `repo:arif-md/rap-infra:environment:preflight`
+   - Used by: `prepare-and-notify-*` jobs that generate release notes and send emails
+
+2. **Environment-specific federated identities** (for deployment jobs):
+   - `dev` environment: `repo:arif-md/rap-infra:environment:dev`
+   - `test` environment: `repo:arif-md/rap-infra:environment:test`
+   - `train` environment: `repo:arif-md/rap-infra:environment:train`
+   - `prod` environment: `repo:arif-md/rap-infra:environment:prod`
+   - Used by: `promote-to-*` jobs that actually deploy to Azure
+
+This approach requires only 5 federated identity credentials total (1 for preflight + 4 for deployments).
+
+**Why separate notification and deployment jobs?**
+
+The workflow uses a two-phase approach per environment:
+1. `prepare-and-notify-{env}` job (uses `preflight` environment, no approval needed)
+   - Uses preflight federated identity
+   - Accesses environment-specific configuration variables
+   - Captures current deployment state
+   - Generates release notes with commit changelog
+   - Sends email notification
+2. `promote-to-{env}` job (uses `{env}` environment, requires approval if configured)
+   - Uses environment-specific federated identity
+   - Waits for manual approval
+   - Executes actual deployment
+
+This design allows stakeholders to receive release notes and review changes immediately, then approve the deployment when ready, without blocking the notification phase.
 
 Optional (recommended for private frontend repo): FRONTEND_REPO_READ_TOKEN
 
