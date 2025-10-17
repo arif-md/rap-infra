@@ -191,35 +191,31 @@ else
     if [ "$IMAGE_EXISTS" = "false" ]; then
       echo "  Method 2: Check by digest (fallback - slower)"
       
-      # First check if repository exists
-      echo "  → Checking repository existence..."
-      REPO_CHECK_OUTPUT=$(az acr repository show -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "name" -o tsv 2>&1 || true)
-      REPO_EXISTS=$(echo "$REPO_CHECK_OUTPUT" | head -n 1 | grep -v "ERROR\|error" | grep -v "^$" || true)
+      # Skip repository existence check - it often fails due to permission issues
+      # Go straight to manifest checking which is more reliable
+      echo "  → Checking digest in manifest list..."
       
-      if echo "$REPO_CHECK_OUTPUT" | grep -iq "ERROR"; then
-        echo "  ⚠️  Cannot verify repository (may lack ACR data-plane permissions)"
-        echo "  Raw output: $REPO_CHECK_OUTPUT"
-        echo "  → Will use revision copy as safe default"
-        USE_REVISION_COPY=true
-      elif [ -z "$REPO_EXISTS" ]; then
-        echo "  ❌ Repository deleted from ACR"
+      DIGEST_CHECK_OUTPUT=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>&1 || true)
+      
+      # Check for errors in output
+      if echo "$DIGEST_CHECK_OUTPUT" | grep -iq "ERROR\|MANIFEST_UNKNOWN\|not found"; then
+        # Either repository doesn't exist or digest doesn't exist - both cases need revision copy
+        if echo "$DIGEST_CHECK_OUTPUT" | grep -iq "MANIFEST_UNKNOWN\|not found"; then
+          echo "  ❌ Repository or digest not found in ACR"
+        else
+          echo "  ⚠️  Cannot verify digest (may lack ACR data-plane permissions)"
+        fi
         echo "  → Will use revision copy to bypass validation"
         USE_REVISION_COPY=true
+      elif [ -n "$DIGEST_CHECK_OUTPUT" ] && [ "$DIGEST_CHECK_OUTPUT" != "null" ]; then
+        # Found the digest
+        echo "  ✅ Digest exists in ACR"
+        IMAGE_EXISTS=true
       else
-        echo "  ✅ Repository exists"
-        
-        # Check if specific digest exists in manifests
-        echo "  → Checking digest in manifest list..."
-        DIGEST_EXISTS=$(az acr repository show-manifests -n "$CURRENT_REG" --repository "$CURRENT_REPO" --query "[?digest=='$CURRENT_DIGEST'].digest | [0]" -o tsv 2>/dev/null || true)
-        
-        if [ -z "$DIGEST_EXISTS" ]; then
-          echo "  ❌ Digest not found in ACR (image deleted)"
-          echo "  → Will use revision copy to bypass validation"
-          USE_REVISION_COPY=true
-        else
-          echo "  ✅ Digest exists in ACR"
-          IMAGE_EXISTS=true
-        fi
+        # Empty result means digest not found
+        echo "  ❌ Digest not found in ACR (image may have been deleted)"
+        echo "  → Will use revision copy to bypass validation"
+        USE_REVISION_COPY=true
       fi
       echo ""
     fi
