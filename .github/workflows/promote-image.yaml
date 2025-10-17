@@ -1,5 +1,10 @@
 name: Infra - Promote Image to Higher Environments
 
+# Service configuration - change these when duplicating for other services (backend, api, etc.)
+env:
+  SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
+  SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
+
 on:
   workflow_dispatch:
     inputs:
@@ -37,7 +42,13 @@ jobs:
             SRC_REPO='${{ inputs.sourceRepo }}'
           fi
           if [ -z "$SRC_IMAGE" ]; then echo "No source image provided" >&2; exit 1; fi
-          if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ vars.FRONTEND_REPO }}'; fi
+          # SERVICE_KEY_UPPER for variable name lookup (e.g., FRONTEND_REPO)
+          SERVICE_KEY_UPPER=$(echo "${{ env.SERVICE_KEY }}" | tr '[:lower:]' '[:upper:]')
+          REPO_VAR="${SERVICE_KEY_UPPER}_REPO"
+          if [ -z "$SRC_REPO" ]; then 
+            # Try service-specific repo variable (e.g., FRONTEND_REPO)
+            SRC_REPO=$(printf '%s' '${{ toJson(vars) }}' | jq -r ".[\"$REPO_VAR\"] // empty")
+          fi
           if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ github.repository }}'; fi
           echo "srcImage=$SRC_IMAGE" >> "$GITHUB_OUTPUT"
           echo "srcRepo=$SRC_REPO" >> "$GITHUB_OUTPUT"
@@ -50,9 +61,11 @@ jobs:
           SRC_IMAGE='${{ steps.resolve.outputs.srcImage }}'
           PATH_PART="${SRC_IMAGE#*/}"
           REPO_PART="${PATH_PART%@*}"
-          # Expect repo like raptor/frontend-<env>
-          if echo "$REPO_PART" | grep -qE 'frontend-(dev|test|train|prod)'; then
-            BASE_ENV=$(printf '%s' "$REPO_PART" | sed -nE 's@.*frontend-((dev|test|train|prod)).*@\1@p')
+          SERVICE_KEY="${{ env.SERVICE_KEY }}"
+          # Expect repo like raptor/{service-key}-<env>
+          PATTERN="${SERVICE_KEY}-(dev|test|train|prod)"
+          if echo "$REPO_PART" | grep -qE "$PATTERN"; then
+            BASE_ENV=$(printf '%s' "$REPO_PART" | sed -nE "s@.*${SERVICE_KEY}-((dev|test|train|prod)).*@\1@p")
           else
             # Fallback: default to 'dev'
             BASE_ENV=dev

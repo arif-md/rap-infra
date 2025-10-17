@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
     env:
+      # Service configuration - change these when duplicating for other services (backend, api, etc.)
+      SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
+      SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
+      
       # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
       AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
@@ -142,18 +146,21 @@ jobs:
         run: |
           set -euo pipefail
           REGISTRY="${AZURE_ACR_NAME}.azurecr.io"
-          REPO="raptor/frontend-${AZURE_ENV_NAME}"
+          REPO="raptor/${SERVICE_KEY}-${AZURE_ENV_NAME}"
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          
           echo "Looking for latest digest in ACR: $REGISTRY/$REPO"
           DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
           if [ -n "$DIGEST" ]; then
             IMAGE="$REGISTRY/$REPO@$DIGEST"
             echo "Found image in ACR: $IMAGE"
-            azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMAGE"
+            azd env set "$IMAGE_VAR" "$IMAGE"
             azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
           else
             FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
             echo "No image found in ACR for repo '$REPO'. Using fallback: $FALLBACK"
-            azd env set SERVICE_FRONTEND_IMAGE_NAME "$FALLBACK"
+            azd env set "$IMAGE_VAR" "$FALLBACK"
             azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
           fi
 
@@ -165,11 +172,16 @@ jobs:
 
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
+        shell: bash
         run: |
+          set -euo pipefail
           IMG='${{ github.event.client_payload.image }}'
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          
           if [ -n "$IMG" ]; then
             echo "Using pre-built image: $IMG"
-            azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMG"
+            azd env set "$IMAGE_VAR" "$IMG"
             DOMAIN="${IMG%%/*}"
             if [ "$DOMAIN" = "${AZURE_ACR_NAME}.azurecr.io" ]; then
               azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
@@ -182,10 +194,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME || true)
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          
+          IMG=$(azd env get-value "$IMAGE_VAR" || true)
           SKIP=$(azd env get-value SKIP_ACR_PULL_ROLE_ASSIGNMENT || echo true)
           if [ -z "$IMG" ]; then
-            echo "SERVICE_FRONTEND_IMAGE_NAME is not set; nothing to validate."
+            echo "$IMAGE_VAR is not set; nothing to validate."
             exit 0
           fi
           DOMAIN="${IMG%%/*}"
@@ -207,9 +222,9 @@ jobs:
         run: |
           set -euo pipefail
           
-          # Use generalized deployment script for frontend service
+          # Use generalized deployment script
           chmod +x scripts/deploy-service-image.sh
-          ./scripts/deploy-service-image.sh frontend "${AZURE_ENV_NAME}"
+          ./scripts/deploy-service-image.sh "$SERVICE_KEY" "${AZURE_ENV_NAME}"
 
       - name: azd up (provision + deploy)
         if: steps.fastpath.outputs.didFastPath != 'true'
@@ -220,8 +235,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CONFIGURED_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME || true)
-          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-${SERVICE_SUFFIX}" | tr '[:upper:]' '[:lower:]')
+          
+          CONFIGURED_IMG=$(azd env get-value "$IMAGE_VAR" || true)
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           DEPLOYED_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           echo "configuredImage=$CONFIGURED_IMG" >> $GITHUB_OUTPUT
@@ -229,7 +247,7 @@ jobs:
           echo "Configured image: ${CONFIGURED_IMG:-'(not set)'}"
           echo "Deployed image:   ${DEPLOYED_IMG:-'(unavailable)'}"
           {
-            echo "### Deployed image"
+            echo "### Deployed image ($SERVICE_KEY)"
             echo
             echo "- Configured: ${CONFIGURED_IMG:-'(not set)'}"
             echo "- Deployed: ${DEPLOYED_IMG:-'(unavailable)'}"
@@ -240,7 +258,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-${SERVICE_SUFFIX}" | tr '[:upper:]' '[:lower:]')
           RG="$AZURE_RESOURCE_GROUP"
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
