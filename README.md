@@ -7,7 +7,7 @@ azd up
 
 **What happens during `azd up`:**
 1. **Pre-provision hooks run automatically**:
-   - `resolve-images.ps1`/`.sh` - Validates/resolves container images from ACR (auto-recovery for stale digests)
+   - `resolve-images.ps1`/`.sh` - Validates/resolves container images from ACR (auto-recovery for sta- Where it's used: `.github/workflows/promote-frontend.yaml` and `.github/workflows/promote-backend.yaml` in the `prepare-and-notify` job. If the secret is not provided, the workflow falls back to the default token (which usually cannot read a different private repo), and the commit table may be empty—though the compare link will still work for authorized viewers.e digests)
    - `ensure-acr.ps1`/`.sh` - Ensures Azure Container Registry exists
 2. **Bicep deployment executes** with resolved images
 3. **Services are provisioned** to Azure Container Apps
@@ -188,7 +188,7 @@ We promote the exact built image by digest to higher environments to avoid drift
 - The image is automatically deployed to the base environment
 - It dispatches two events to this repo:
 	- `frontend-image-pushed` → triggers infra deploy for the base environment
-	- `frontend-image-promote` → triggers `.github/workflows/promote-image.yaml` to promote to higher environments (`test` → `train` → `prod`)
+	- `frontend-image-promote` → triggers `.github/workflows/promote-frontend.yaml` to promote to higher environments (`test` → `train` → `prod`)
 
 **Promotion flow**
 Images flow from the base environment through progressive stages: base → test → train → prod. To change the base environment (e.g., from `dev` to `staging`), update the repository variable `DEFAULT_GITHUB_ENV`.

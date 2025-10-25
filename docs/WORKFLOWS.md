@@ -429,64 +429,50 @@ AZURE_ACR_NAME: ngraptorprod
 
 ## Migration from Generic Workflows
 
-### Why Migrate?
+### ✅ Migration Complete (October 25, 2025)
 
-The original generic workflows (`infra-azd.yaml`, `promote-image.yaml`) used parameterization to handle multiple services. While flexible, this approach had downsides:
+The generic workflows (`infra-azd.yaml`, `promote-image.yaml`) have been **removed** to prevent duplicate workflow runs.
 
+**What was removed:**
+- ❌ `.github/workflows/infra-azd.yaml` (deprecated generic deployment)
+- ❌ `.github/workflows/promote-image.yaml` (deprecated generic promotion)
+
+**What remains (active):**
+- ✅ `.github/workflows/deploy-frontend.yaml`
+- ✅ `.github/workflows/deploy-backend.yaml`
+- ✅ `.github/workflows/promote-frontend.yaml`
+- ✅ `.github/workflows/promote-backend.yaml`
+
+### Why We Migrated
+
+The original generic workflows had these downsides:
+
+❌ **Duplicate runs** - Both generic and service-specific workflows triggered  
 ❌ Complex conditional logic  
 ❌ Single point of failure for all services  
 ❌ Difficult to trace which service is deploying  
 ❌ Shared secrets increase security risk  
 ❌ Path filters trigger on any service change  
 
-### Migration Steps
+### Benefits of Service-Specific Workflows
 
-**If you're still using generic workflows:**
+✅ **No duplicate runs** - Each event triggers exactly one workflow  
+✅ Clear service ownership  
+✅ Independent deployment cycles  
+✅ Service-specific secrets  
+✅ Cleaner workflow history  
+✅ Better observability  
 
-1. **Update application repos** to dispatch to service-specific workflows:
-   ```yaml
-   # Change from:
-   event-type: frontend-image-pushed
-   
-   # No change needed - service-specific workflows use same event types
-   ```
+### For New Services
 
-2. **Verify GitHub secrets** are configured per service:
-   ```bash
-   gh secret set FRONTEND_REPO_READ_TOKEN
-   gh secret set BACKEND_REPO_READ_TOKEN
-   ```
-
-3. **Test service-specific workflows** manually:
-   ```bash
-   # Trigger frontend deployment
-   gh workflow run deploy-frontend.yaml
-   
-   # Trigger backend deployment
-   gh workflow run deploy-backend.yaml
-   ```
-
-4. **Monitor first automated run** to ensure dispatch events route correctly
-
-5. **Optional: Disable generic workflows** by removing them or adding condition:
-   ```yaml
-   # Add to infra-azd.yaml
-   if: false  # Disabled in favor of service-specific workflows
-   ```
-
-### Rollback Plan
-
-If issues arise, generic workflows are still available:
-
-1. Re-enable `infra-azd.yaml` and `promote-image.yaml` (remove deprecation notice)
-2. Update app repos to dispatch to generic workflows
-3. Keep service-specific workflows for reference
+When adding a new service, copy and modify the existing service-specific workflows. See "Adding a New Service" section above for the complete 11-step process.
 
 ---
 
 ## Troubleshooting
 
 ### Common Issues
+
 
 #### Workflow Not Triggering
 
