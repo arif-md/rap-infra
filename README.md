@@ -1,4 +1,26 @@
-# Provision the infrastructure and deploy the services
+# Provision the infrastructure and deploy## Provision and deploy
+
+```
+azd auth login
+azd up
+```
+
+**What happens during `azd up`:**
+1. **Pre-provision hooks run automatically**:
+   - `resolve-images.ps1`/`.sh` - Validates/resolves container images from ACR (auto-recovery for stale digests)
+   - `ensure-acr.ps1`/`.sh` - Ensures Azure Container Registry exists
+2. **Bicep deployment executes** with resolved images
+3. **Services are provisioned** to Azure Container Apps
+
+> 💡 **Automatic Image Resolution**: If configured image digests are missing or stale (e.g., after deleting resources), the hook automatically resolves the latest image from ACR or falls back to a public placeholder. See [docs/IMAGE-RESOLUTION.md](./docs/IMAGE-RESOLUTION.md) for details.
+
+After a successful deploy, get the frontend URL:
+
+```
+azd env get-value frontendFqdn
+```
+
+In CI, the workflow prints the URL in the job logs as "Frontend URL: https://…", adds it to the job summary under "Deployment endpoints," and exposes it as `frontendFqdn` output.
 
 ## Prerequisites
 - Azure CLI (az) 2.61.0 or newer (required for Deployment Stacks alpha)
@@ -432,3 +454,10 @@ When both NEW and PREV commit SHAs are resolved from the image labels and they d
 - Fallbacks
 	- If the API call fails (rate limit, permissions, etc.), the email still includes the digest delta and a clickable compare link.
 	- The workflow logs will include a brief diagnostic line with the HTTP status if fetching commits fails.
+
+## Documentation
+
+- **[IMAGE-RESOLUTION.md](./docs/IMAGE-RESOLUTION.md)** - Automatic image resolution feature (handles stale digests, ACR queries, fallback images)
+- **[WORKFLOWS.md](./docs/WORKFLOWS.md)** - Service-specific workflow guide (deployment, promotion, adding new services)
+- **[ARCHITECTURE-STRATEGIES.md](./docs/ARCHITECTURE-STRATEGIES.md)** - Multi-service infrastructure patterns and evolution paths
+

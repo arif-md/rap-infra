@@ -1,21 +1,4 @@
-# ⚠️ DEPRECATED: This generic workflow is kept for reference only.
-# Use service-specific workflows instead:
-#   - .github/workflows/deploy-frontend.yaml
-#   - .github/workflows/deploy-backend.yaml
-#
-# Service-specific workflows provide:
-#   ✓ Clear ownership and reduced complexity
-#   ✓ Independent deployment triggers
-#   ✓ Better path filtering (only deploy when relevant files change)
-#   ✓ Service-specific outputs (frontendFqdn, backendFqdn)
-#
-# To add a new service:
-#   1. Copy deploy-frontend.yaml → deploy-{service}.yaml
-#   2. Update SERVICE_KEY and SERVICE_SUFFIX
-#   3. Update repository_dispatch type
-#   4. Update path filters and outputs
-
-name: Infra - Provision and Deploy (azd) [DEPRECATED]
+name: Deploy Frontend Service
 
 on:
   workflow_dispatch:
@@ -30,7 +13,7 @@ on:
       - 'azure.yaml'
       - 'main.bicep'
       - 'main.parameters.json'
-      - 'app/**'
+      - 'app/frontend-angular.bicep'
       - 'modules/**'
       - 'shared/**'
       - 'scripts/**'
@@ -42,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
     env:
-      # Service configuration - change these when duplicating for other services (backend, api, etc.)
+      # Frontend service configuration
       SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
       SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
       

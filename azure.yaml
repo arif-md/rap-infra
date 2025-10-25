@@ -14,10 +14,14 @@ hooks:
   preprovision:
     windows:
       shell: pwsh
-      run: ./scripts/ensure-acr.ps1
+      run: |
+        ./scripts/resolve-images.ps1
+        ./scripts/ensure-acr.ps1
       interactive: false
     posix:
       shell: sh
-      run: ./scripts/ensure-acr.sh
+      run: |
+        ./scripts/resolve-images.sh
+        ./scripts/ensure-acr.sh
       interactive: false
 

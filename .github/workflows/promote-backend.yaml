@@ -1,36 +1,18 @@
-# ⚠️ DEPRECATED: This generic workflow is kept for reference only.
-# Use service-specific workflows instead:
-#   - .github/workflows/promote-frontend.yaml
-#   - .github/workflows/promote-backend.yaml
-#
-# Service-specific workflows provide:
-#   ✓ Clear ownership and reduced complexity
-#   ✓ Independent promotion triggers
-#   ✓ Service-specific secrets (FRONTEND_REPO_READ_TOKEN, BACKEND_REPO_READ_TOKEN)
-#   ✓ Service-specific outputs (frontendFqdn, backendFqdn)
-#
-# To add a new service:
-#   1. Copy promote-frontend.yaml → promote-{service}.yaml
-#   2. Update SERVICE_KEY and SERVICE_SUFFIX
-#   3. Update repository_dispatch type ({service}-image-promote)
-#   4. Replace FRONTEND_REPO_READ_TOKEN with {SERVICE}_REPO_READ_TOKEN
-#   5. Replace frontendFqdn with {service}Fqdn
+name: Promote Backend Image
 
-name: Infra - Promote Image to Higher Environments [DEPRECATED]
-
-# Service configuration - change these when duplicating for other services (backend, api, etc.)
+# Backend service configuration
 env:
-  SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
-  SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
+  SERVICE_KEY: backend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
+  SERVICE_SUFFIX: be                 # Used for: {env}-rap-{suffix}
 
 on:
   workflow_dispatch:
     inputs:
       image:
-        description: "Full image with digest (e.g., myacr.azurecr.io/raptor/frontend-dev@sha256:...)"
+        description: "Full image with digest (e.g., myacr.azurecr.io/raptor/backend-dev@sha256:...)"
         required: true
   repository_dispatch:
-    types: [ frontend-image-promote ]
+    types: [ backend-image-promote ]
 
 jobs:
   plan:
@@ -119,7 +101,7 @@ jobs:
       TARGET_ENV: test
       SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
       SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
-      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
+      BACKEND_REPO_READ_TOKEN: ${{ secrets.BACKEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
       MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
@@ -237,7 +219,7 @@ jobs:
           PREV_IMAGE: ${{ steps.current.outputs.image }}
           PREV_DIGEST: ${{ steps.current.outputs.digest }}
           COMMITS_TABLE_LIMIT: ${{ vars.COMMITS_TABLE_LIMIT || 50 }}
-          FRONTEND_REPO_READ_TOKEN: ${{ env.FRONTEND_REPO_READ_TOKEN }}
+          BACKEND_REPO_READ_TOKEN: ${{ env.BACKEND_REPO_READ_TOKEN }}
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -528,7 +510,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RAW=$(azd env get-value frontendFqdn 2>/dev/null || true)
+          RAW=$(azd env get-value backendFqdn 2>/dev/null || true)
           FQDN=$(printf '%s' "$RAW" | tr -d '\r' | head -n1)
           if printf '%s' "$FQDN" | grep -qi '^error:'; then FQDN=""; fi
           if [ -z "$FQDN" ]; then
@@ -540,11 +522,11 @@ jobs:
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
             FQDN=$(printf '%s' "$CA_FQDN" | tr -d '\r' | head -n1)
             if [ -n "$FQDN" ]; then
-              azd env set frontendFqdn "$FQDN" >/dev/null || true
+              azd env set backendFqdn "$FQDN" >/dev/null || true
             fi
           fi
           if [ -n "$FQDN" ]; then
-            echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+            echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
             echo "Frontend URL: https://$FQDN"
           else
             echo "Frontend URL not available"
@@ -597,7 +579,7 @@ jobs:
       TARGET_ENV: train
       SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
       SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
-      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
+      BACKEND_REPO_READ_TOKEN: ${{ secrets.BACKEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
       MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
@@ -703,7 +685,7 @@ jobs:
           PREV_IMAGE: ${{ steps.current.outputs.image }}
           PREV_DIGEST: ${{ steps.current.outputs.digest }}
           COMMITS_TABLE_LIMIT: ${{ vars.COMMITS_TABLE_LIMIT || 50 }}
-          FRONTEND_REPO_READ_TOKEN: ${{ env.FRONTEND_REPO_READ_TOKEN }}
+          BACKEND_REPO_READ_TOKEN: ${{ env.BACKEND_REPO_READ_TOKEN }}
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -954,7 +936,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RAW=$(azd env get-value frontendFqdn 2>/dev/null || true)
+          RAW=$(azd env get-value backendFqdn 2>/dev/null || true)
           FQDN=$(printf '%s' "$RAW" | tr -d '\r' | head -n1)
           if printf '%s' "$FQDN" | grep -qi '^error:'; then FQDN=""; fi
           if [ -z "$FQDN" ]; then
@@ -966,11 +948,11 @@ jobs:
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
             FQDN=$(printf '%s' "$CA_FQDN" | tr -d '\r' | head -n1)
             if [ -n "$FQDN" ]; then
-              azd env set frontendFqdn "$FQDN" >/dev/null || true
+              azd env set backendFqdn "$FQDN" >/dev/null || true
             fi
           fi
           if [ -n "$FQDN" ]; then
-            echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+            echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
             echo "Frontend URL: https://$FQDN"
           else
             echo "Frontend URL not available"
@@ -1031,7 +1013,7 @@ jobs:
       TARGET_ENV: prod
       SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
       SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
-      FRONTEND_REPO_READ_TOKEN: ${{ secrets.FRONTEND_REPO_READ_TOKEN }}
+      BACKEND_REPO_READ_TOKEN: ${{ secrets.BACKEND_REPO_READ_TOKEN }}
       MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
       MAIL_PORT: ${{ secrets.MAIL_PORT }}
       MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
@@ -1137,7 +1119,7 @@ jobs:
           PREV_IMAGE: ${{ steps.current.outputs.image }}
           PREV_DIGEST: ${{ steps.current.outputs.digest }}
           COMMITS_TABLE_LIMIT: ${{ vars.COMMITS_TABLE_LIMIT || 50 }}
-          FRONTEND_REPO_READ_TOKEN: ${{ env.FRONTEND_REPO_READ_TOKEN }}
+          BACKEND_REPO_READ_TOKEN: ${{ env.BACKEND_REPO_READ_TOKEN }}
           BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -1380,7 +1362,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RAW=$(azd env get-value frontendFqdn 2>/dev/null || true)
+          RAW=$(azd env get-value backendFqdn 2>/dev/null || true)
           FQDN=$(printf '%s' "$RAW" | tr -d '\r' | head -n1)
           if printf '%s' "$FQDN" | grep -qi '^error:'; then FQDN=""; fi
           if [ -z "$FQDN" ]; then
@@ -1392,11 +1374,11 @@ jobs:
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
             FQDN=$(printf '%s' "$CA_FQDN" | tr -d '\r' | head -n1)
             if [ -n "$FQDN" ]; then
-              azd env set frontendFqdn "$FQDN" >/dev/null || true
+              azd env set backendFqdn "$FQDN" >/dev/null || true
             fi
           fi
           if [ -n "$FQDN" ]; then
-            echo "frontendFqdn=$FQDN" >> $GITHUB_OUTPUT
+            echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
             echo "Frontend URL: https://$FQDN"
           else
             echo "Frontend URL not available"

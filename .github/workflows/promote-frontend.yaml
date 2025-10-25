@@ -1,24 +1,6 @@
-# ⚠️ DEPRECATED: This generic workflow is kept for reference only.
-# Use service-specific workflows instead:
-#   - .github/workflows/promote-frontend.yaml
-#   - .github/workflows/promote-backend.yaml
-#
-# Service-specific workflows provide:
-#   ✓ Clear ownership and reduced complexity
-#   ✓ Independent promotion triggers
-#   ✓ Service-specific secrets (FRONTEND_REPO_READ_TOKEN, BACKEND_REPO_READ_TOKEN)
-#   ✓ Service-specific outputs (frontendFqdn, backendFqdn)
-#
-# To add a new service:
-#   1. Copy promote-frontend.yaml → promote-{service}.yaml
-#   2. Update SERVICE_KEY and SERVICE_SUFFIX
-#   3. Update repository_dispatch type ({service}-image-promote)
-#   4. Replace FRONTEND_REPO_READ_TOKEN with {SERVICE}_REPO_READ_TOKEN
-#   5. Replace frontendFqdn with {service}Fqdn
+name: Promote Frontend Image
 
-name: Infra - Promote Image to Higher Environments [DEPRECATED]
-
-# Service configuration - change these when duplicating for other services (backend, api, etc.)
+# Frontend service configuration
 env:
   SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
   SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
