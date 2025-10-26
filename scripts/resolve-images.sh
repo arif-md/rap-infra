@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Pre-provision hook: Resolve container images from ACR or fallback to public images
 # This ensures azd up works even if the configured image digest is stale/missing
+#
+# BEHAVIOR:
+#   - If image is already set with a valid digest, keeps it (workflow-configured images)
+#   - If image is missing or invalid, queries ACR for latest
+#   - Falls back to public image if ACR repository is empty
+#
+# This script is used by BOTH:
+#   - Local azd up (resolves latest image automatically)
+#   - GitHub Actions workflows (keeps workflow-set images, resolves only if missing)
 
 set -euo pipefail
-
-# Skip in GitHub Actions - workflows handle their own image resolution
-if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
-  echo "ℹ️  Running in GitHub Actions - skipping automatic image resolution"
-  echo "   (Workflows handle image resolution explicitly)"
-  exit 0
-fi
 
 echo "🔍 Resolving container images from ACR..."
 
@@ -35,34 +37,39 @@ resolve_service_image() {
   echo ""
   echo "📦 Resolving ${SERVICE_KEY} image..."
   
-  # Check if current image is valid (exists in ACR)
+  # Check if current image is already set with a digest
   CURRENT_IMAGE=$(azd env get-value "$IMAGE_VAR" 2>/dev/null || echo "")
   
   if [ -z "$CURRENT_IMAGE" ] || echo "$CURRENT_IMAGE" | grep -q "ERROR:"; then
     echo "   No current image configured for ${SERVICE_KEY}"
     # Will attempt to resolve from ACR below
   elif [[ "$CURRENT_IMAGE" == *"@sha256:"* ]]; then
-      CURRENT_DIGEST="${CURRENT_IMAGE#*@}"
-      ACR_FROM_IMAGE="${CURRENT_IMAGE%%/*}"
-      
-      # Only validate if image is from the expected ACR
-      if [[ "$ACR_FROM_IMAGE" == "$REGISTRY" ]]; then
-        echo "   Current image: $CURRENT_IMAGE"
-        echo "   Validating digest in ACR..."
-        
-        # Try to get manifest for this specific digest
-        if az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" --query "[?digest=='$CURRENT_DIGEST']" -o tsv 2>/dev/null | grep -q .; then
-          echo "   ✅ Current image digest is valid in ACR"
-          return 0
-        else
-          echo "   ⚠️  Current image digest not found in ACR, will resolve latest..."
-        fi
-      else
-        echo "   Current image is from different registry or public image: $CURRENT_IMAGE"
-        return 0
-      fi
+    # Image already has a digest - trust it (workflow-configured or previously resolved)
+    echo "   ✓ Image already configured with digest: $CURRENT_IMAGE"
+    echo "     Keeping existing image (no validation needed)"
+    
+    # Set SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether image is from our ACR
+    DOMAIN="${CURRENT_IMAGE%%/*}"
+    if [ "$DOMAIN" = "$REGISTRY" ]; then
+      echo "     Image is from configured ACR - enabling ACR pull role assignment"
+      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+    else
+      echo "     Image is from external registry - skipping ACR pull role assignment"
+      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+    fi
+    return 0
   elif [ -n "$CURRENT_IMAGE" ]; then
+    # Has an image but not a digest (e.g., tag-based)
     echo "   Current image is not a digest reference: $CURRENT_IMAGE"
+    echo "   Keeping tag-based image reference"
+    
+    # Set SKIP flag for tag-based images too
+    DOMAIN="${CURRENT_IMAGE%%/*}"
+    if [ "$DOMAIN" = "$REGISTRY" ]; then
+      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+    else
+      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+    fi
     return 0
   fi
   

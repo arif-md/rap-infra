@@ -139,37 +139,6 @@ jobs:
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Resolve image from ACR (fallback to public)
-        # Only do this for direct runs (push/manual). For repository_dispatch we always use the provided image.
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          set -euo pipefail
-          REGISTRY="${AZURE_ACR_NAME}.azurecr.io"
-          REPO="raptor/${SERVICE_KEY}-${AZURE_ENV_NAME}"
-          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
-          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
-          
-          echo "Looking for latest digest in ACR: $REGISTRY/$REPO"
-          DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
-          if [ -n "$DIGEST" ]; then
-            IMAGE="$REGISTRY/$REPO@$DIGEST"
-            echo "Found image in ACR: $IMAGE"
-            azd env set "$IMAGE_VAR" "$IMAGE"
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-          else
-            FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
-            echo "No image found in ACR for repo '$REPO'. Using fallback: $FALLBACK"
-            azd env set "$IMAGE_VAR" "$FALLBACK"
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-          fi
-
-      - name: Ensure ACR exists (preprovision)
-        shell: bash
-        run: |
-          chmod +x ./scripts/ensure-acr.sh
-          ./scripts/ensure-acr.sh
-
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed'
         shell: bash
@@ -180,15 +149,16 @@ jobs:
           IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
           
           if [ -n "$IMG" ]; then
-            echo "Using pre-built image: $IMG"
+            echo "Using pre-built image from repository_dispatch: $IMG"
             azd env set "$IMAGE_VAR" "$IMG"
-            DOMAIN="${IMG%%/*}"
-            if [ "$DOMAIN" = "${AZURE_ACR_NAME}.azurecr.io" ]; then
-              azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-            else
-              azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-            fi
+            # The resolve-images.sh hook will keep this digest-based image
           fi
+
+      # NOTE: Image resolution is now handled by scripts/resolve-images.sh preprovision hook
+      # This runs automatically during 'azd up' and will:
+      #   - Keep any workflow-set digest-based images (from repository_dispatch above)
+      #   - Resolve latest image from ACR if no image is configured
+      #   - Fall back to public image if ACR repository is empty
 
       - name: Validate image vs ACR binding (guard)
         shell: bash

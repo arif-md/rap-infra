@@ -1,14 +1,16 @@
 # Pre-provision hook: Resolve container images from ACR or fallback to public images
 # This ensures azd up works even if the configured image digest is stale/missing
+#
+# BEHAVIOR:
+#   - If image is already set with a valid digest, keeps it (workflow-configured images)
+#   - If image is missing or invalid, queries ACR for latest
+#   - Falls back to public image if ACR repository is empty
+#
+# This script is used by BOTH:
+#   - Local azd up (resolves latest image automatically)
+#   - GitHub Actions workflows (keeps workflow-set images, resolves only if missing)
 
 $ErrorActionPreference = 'Stop'
-
-# Skip in GitHub Actions - workflows handle their own image resolution
-if ($env:GITHUB_ACTIONS -eq 'true') {
-    Write-Host "ℹ️  Running in GitHub Actions - skipping automatic image resolution" -ForegroundColor Cyan
-    Write-Host "   (Workflows handle image resolution explicitly)" -ForegroundColor Gray
-    exit 0
-}
 
 Write-Host "🔍 Resolving container images from ACR..." -ForegroundColor Cyan
 
@@ -37,7 +39,7 @@ function Resolve-ServiceImage {
     Write-Host ""
     Write-Host "📦 Resolving $ServiceKey image..." -ForegroundColor Cyan
     
-    # Check if current image is valid (exists in ACR)
+    # Check if current image is already set with a digest
     $CURRENT_IMAGE = azd env get-value $IMAGE_VAR 2>$null
     
     if ([string]::IsNullOrEmpty($CURRENT_IMAGE) -or $CURRENT_IMAGE -match 'ERROR:') {
@@ -45,28 +47,32 @@ function Resolve-ServiceImage {
         # Will attempt to resolve from ACR below
     }
     elseif ($CURRENT_IMAGE -match '@sha256:') {
-            $CURRENT_DIGEST = ($CURRENT_IMAGE -split '@')[1]
-            $ACR_FROM_IMAGE = ($CURRENT_IMAGE -split '/')[0]
-            
-            # Only validate if image is from the expected ACR
-            if ($ACR_FROM_IMAGE -eq $REGISTRY) {
-                Write-Host "   Current image: $CURRENT_IMAGE" -ForegroundColor Gray
-                Write-Host "   Validating digest in ACR..." -ForegroundColor Gray
-                
-                # Try to get manifest for this specific digest
-                $manifestCheck = az acr repository show-manifests -n $AZURE_ACR_NAME --repository $REPO --query "[?digest=='$CURRENT_DIGEST']" -o tsv 2>$null
-                if (-not [string]::IsNullOrEmpty($manifestCheck)) {
-                    Write-Host "   ✅ Current image digest is valid in ACR" -ForegroundColor Green
-                    return
-                } else {
-                    Write-Host "   ⚠️  Current image digest not found in ACR, will resolve latest..." -ForegroundColor Yellow
-                }
-            } else {
-                Write-Host "   Current image is from different registry or public image: $CURRENT_IMAGE" -ForegroundColor Gray
-                return
-            }
+        # Image already has a digest - trust it (workflow-configured or previously resolved)
+        Write-Host "   ✓ Image already configured with digest: $CURRENT_IMAGE" -ForegroundColor Green
+        Write-Host "     Keeping existing image (no validation needed)" -ForegroundColor Gray
+        
+        # Set SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether image is from our ACR
+        $DOMAIN = $CURRENT_IMAGE -replace '/.*', ''
+        if ($DOMAIN -eq $REGISTRY) {
+            Write-Host "     Image is from configured ACR - enabling ACR pull role assignment" -ForegroundColor Gray
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+        } else {
+            Write-Host "     Image is from external registry - skipping ACR pull role assignment" -ForegroundColor Gray
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+        }
+        return
     } else {
+        # Has an image but not a digest (e.g., tag-based)
         Write-Host "   Current image is not a digest reference: $CURRENT_IMAGE" -ForegroundColor Gray
+        Write-Host "   Keeping tag-based image reference" -ForegroundColor Gray
+        
+        # Set SKIP flag for tag-based images too
+        $DOMAIN = $CURRENT_IMAGE -replace '/.*', ''
+        if ($DOMAIN -eq $REGISTRY) {
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+        } else {
+            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+        }
         return
     }
     
