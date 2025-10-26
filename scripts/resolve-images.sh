@@ -4,6 +4,13 @@
 
 set -euo pipefail
 
+# Skip in GitHub Actions - workflows handle their own image resolution
+if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
+  echo "ℹ️  Running in GitHub Actions - skipping automatic image resolution"
+  echo "   (Workflows handle image resolution explicitly)"
+  exit 0
+fi
+
 echo "🔍 Resolving container images from ACR..."
 
 # Get environment variables from azd

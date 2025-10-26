@@ -3,6 +3,13 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Skip in GitHub Actions - workflows handle their own image resolution
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    Write-Host "ℹ️  Running in GitHub Actions - skipping automatic image resolution" -ForegroundColor Cyan
+    Write-Host "   (Workflows handle image resolution explicitly)" -ForegroundColor Gray
+    exit 0
+}
+
 Write-Host "🔍 Resolving container images from ACR..." -ForegroundColor Cyan
 
 # Get environment variables from azd
