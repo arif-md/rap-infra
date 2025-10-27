@@ -47,29 +47,11 @@ resolve_service_image() {
     # Image already has a digest - trust it (workflow-configured or previously resolved)
     echo "   ✓ Image already configured with digest: $CURRENT_IMAGE"
     echo "     Keeping existing image (no validation needed)"
-    
-    # Set SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether image is from our ACR
-    DOMAIN="${CURRENT_IMAGE%%/*}"
-    if [ "$DOMAIN" = "$REGISTRY" ]; then
-      echo "     Image is from configured ACR - enabling ACR pull role assignment"
-      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-    else
-      echo "     Image is from external registry - skipping ACR pull role assignment"
-      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-    fi
     return 0
   elif [ -n "$CURRENT_IMAGE" ]; then
     # Has an image but not a digest (e.g., tag-based)
     echo "   Current image is not a digest reference: $CURRENT_IMAGE"
     echo "   Keeping tag-based image reference"
-    
-    # Set SKIP flag for tag-based images too
-    DOMAIN="${CURRENT_IMAGE%%/*}"
-    if [ "$DOMAIN" = "$REGISTRY" ]; then
-      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-    else
-      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-    fi
     return 0
   fi
   
@@ -81,18 +63,38 @@ resolve_service_image() {
     NEW_IMAGE="$REGISTRY/$REPO@$DIGEST"
     echo "   ✅ Found latest image in ACR: $NEW_IMAGE"
     azd env set "$IMAGE_VAR" "$NEW_IMAGE"
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
   else
     echo "   ⚠️  No images found in ACR repository '$REPO'"
     echo "   ℹ️  Using fallback public image: $FALLBACK_IMAGE"
     azd env set "$IMAGE_VAR" "$FALLBACK_IMAGE"
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
   fi
 }
 
 # Resolve images for all services
 resolve_service_image "frontend"
 resolve_service_image "backend"
+
+# Determine SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether ANY service uses ACR
+# If at least one service uses ACR, we need the role assignment
+FRONTEND_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || echo "")
+BACKEND_IMG=$(azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>/dev/null || echo "")
+
+ANY_ACR_IMAGE=false
+if [[ "$FRONTEND_IMG" == *"$REGISTRY"* ]]; then
+  ANY_ACR_IMAGE=true
+fi
+if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
+  ANY_ACR_IMAGE=true
+fi
+
+echo ""
+if [ "$ANY_ACR_IMAGE" = "true" ]; then
+  echo "ℹ️  At least one service uses ACR - enabling ACR pull role assignment"
+  azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+else
+  echo "ℹ️  All services use public/external images - skipping ACR pull role assignment"
+  azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+fi
 
 echo ""
 echo "✅ Image resolution complete"

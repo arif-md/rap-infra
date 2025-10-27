@@ -50,29 +50,11 @@ function Resolve-ServiceImage {
         # Image already has a digest - trust it (workflow-configured or previously resolved)
         Write-Host "   ✓ Image already configured with digest: $CURRENT_IMAGE" -ForegroundColor Green
         Write-Host "     Keeping existing image (no validation needed)" -ForegroundColor Gray
-        
-        # Set SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether image is from our ACR
-        $DOMAIN = $CURRENT_IMAGE -replace '/.*', ''
-        if ($DOMAIN -eq $REGISTRY) {
-            Write-Host "     Image is from configured ACR - enabling ACR pull role assignment" -ForegroundColor Gray
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-        } else {
-            Write-Host "     Image is from external registry - skipping ACR pull role assignment" -ForegroundColor Gray
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-        }
         return
     } else {
         # Has an image but not a digest (e.g., tag-based)
         Write-Host "   Current image is not a digest reference: $CURRENT_IMAGE" -ForegroundColor Gray
         Write-Host "   Keeping tag-based image reference" -ForegroundColor Gray
-        
-        # Set SKIP flag for tag-based images too
-        $DOMAIN = $CURRENT_IMAGE -replace '/.*', ''
-        if ($DOMAIN -eq $REGISTRY) {
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
-        } else {
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
-        }
         return
     }
     
@@ -84,18 +66,39 @@ function Resolve-ServiceImage {
         $NEW_IMAGE = "$REGISTRY/$REPO@$DIGEST"
         Write-Host "   ✅ Found latest image in ACR: $NEW_IMAGE" -ForegroundColor Green
         azd env set $IMAGE_VAR $NEW_IMAGE
-        azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
     } else {
         Write-Host "   ⚠️  No images found in ACR repository '$REPO'" -ForegroundColor Yellow
         Write-Host "   ℹ️  Using fallback public image: $FALLBACK_IMAGE" -ForegroundColor Cyan
         azd env set $IMAGE_VAR $FALLBACK_IMAGE
-        azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
     }
 }
 
 # Resolve images for all services
 Resolve-ServiceImage -ServiceKey "frontend"
 Resolve-ServiceImage -ServiceKey "backend"
+
+# Determine SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether ANY service uses ACR
+# If at least one service uses ACR, we need the role assignment
+$frontendImg = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
+$backendImg = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
+
+$anyAcrImage = $false
+if (-not [string]::IsNullOrEmpty($frontendImg) -and $frontendImg -match "$REGISTRY") {
+    $anyAcrImage = $true
+}
+if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
+    $anyAcrImage = $true
+}
+
+if ($anyAcrImage) {
+    Write-Host ""
+    Write-Host "ℹ️  At least one service uses ACR - enabling ACR pull role assignment" -ForegroundColor Cyan
+    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+} else {
+    Write-Host ""
+    Write-Host "ℹ️  All services use public/external images - skipping ACR pull role assignment" -ForegroundColor Cyan
+    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+}
 
 Write-Host ""
 Write-Host "✅ Image resolution complete" -ForegroundColor Green

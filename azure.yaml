@@ -16,12 +16,14 @@ hooks:
       shell: pwsh
       run: |
         ./scripts/resolve-images.ps1
+        ./scripts/validate-acr-binding.ps1
         ./scripts/ensure-acr.ps1
       interactive: false
     posix:
       shell: sh
       run: |
         ./scripts/resolve-images.sh
+        ./scripts/validate-acr-binding.sh
         ./scripts/ensure-acr.sh
       interactive: false
 

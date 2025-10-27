@@ -1,0 +1,37 @@
+Initialize bicep provider
+
+Packaging services (azd package)
+
+
+Provisioning Azure resources (azd provision)
+Provisioning Azure resources can take some time.
+
+Initialize bicep provider
+Reading subscription and location from environment...
+Subscription: NexGen Dev/Test (5b489d19-6e0a-45bd-be65-d7d1c40af428)
+Location: East US 2
+
+
+  WARNING: Feature 'deployment.stacks' is in alpha stage.
+  To learn more about alpha features and their support, visit https://aka.ms/azd-feature-stages.
+
+Creating a deployment plan
+Comparing deployment state
+Creating/Updating resources
+  You can view detailed progress in the Azure Portal:
+  https://portal.azure.com/#view/HubsExtension/DeploymentDetailsBlade/~/overview/id/%2Fsubscriptions%2F5b489d19-6e0a-45bd-be65-d7d1c40af428%2FresourceGroups%2Frg-raptor-dev%2Fproviders%2FMicrosoft.Resources%2Fdeployments%2Fazd-stack-dev-25102701f1u5q
+
+  (Γ£ô) Done: Log Analytics workspace: log-joxmsmejwm55e (22.663s)
+  (Γ£ô) Done: Application Insights: appi-joxmsmejwm55e (431ms)
+  (Γ£ô) Done: Portal dashboard: dash-joxmsmejwm55e (2.581s)
+  (Γ£ô) Done: Container Apps Environment: cae-joxmsmejwm55e (2m25.74s)
+  (Γ£ô) Done: Container App: dev-rap-fe (16.395s)
+
+Deploying services (azd deploy)
+
+
+SUCCESS: Your up workflow to provision and deploy to Azure completed in 6 minutes 32 seconds.
+WARNING: your version of azd is out of date, you have 1.19.0 and the latest version is 1.20.2
+
+To update to the latest version, run:
+winget upgrade Microsoft.Azd
