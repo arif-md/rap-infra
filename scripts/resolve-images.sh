@@ -7,6 +7,8 @@
 #   - If image is missing or invalid, queries ACR for latest
 #   - Falls back to public image if ACR repository is empty
 #
+# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT
+#
 # This script is used by BOTH:
 #   - Local azd up (resolves latest image automatically)
 #   - GitHub Actions workflows (keeps workflow-set images, resolves only if missing)
