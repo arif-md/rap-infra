@@ -4,10 +4,12 @@ param tags object = {}
 
 param identityName string
 param containerRegistryName string
+param containerRegistryResourceGroup string = resourceGroup().name
 param containerAppsEnvironmentName string
 param applicationInsightsName string
 param allowedOrigins array
 param exists bool
+param skipAcrPullRoleAssignment bool = false
 @secure()
 param appDefinition object
 
@@ -39,7 +41,9 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' existing
   name: applicationInsightsName
 }
 
-resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+// Backend uses fetchLatestImage module which prevents compile-time image checks
+// Rely on SKIP flag set by resolve-images script based on actual image used
+resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipAcrPullRoleAssignment) {
   scope: containerRegistry
   name: guid(subscription().id, resourceGroup().id, identity.id, 'acrPullRole')
   properties: {
@@ -80,12 +84,13 @@ resource app 'Microsoft.App/containerApps@2023-05-02-preview' = {
           ])
         }
       }
-      registries: [
+      // Only configure registry if we're actually using ACR (conditional based on SKIP flag)
+      registries: !skipAcrPullRoleAssignment ? [
         {
           server: '${containerRegistryName}.azurecr.io'
           identity: identity.id
         }
-      ]
+      ] : []
       secrets: union([
       ],
       map(secrets, secret => {

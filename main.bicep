@@ -20,8 +20,11 @@ param acrName string = ''
 @description('Optional override for ACR resource group (when ACR is in a different RG)')
 param acrResourceGroupOverride string = ''
 
-@description('Skip creating AcrPull role assignment for the frontend identity (useful for local runs without RBAC)')
-param skipAcrPullRoleAssignment bool = true
+@description('Skip creating AcrPull role assignment for frontend (useful for local runs without RBAC)')
+param skipFrontendAcrPullRoleAssignment bool = true
+
+@description('Skip creating AcrPull role assignment for backend (useful for local runs without RBAC)')
+param skipBackendAcrPullRoleAssignment bool = true
 
 @description('vCPU allocation for frontend container app (integer, default 1)')
 param frontendCpu int = 1
@@ -106,8 +109,8 @@ module frontend 'app/frontend-angular.bicep' = {
   containerRegistryResourceGroup: acrResourceGroup
     // Use provided image (from env via parameters file) or default placeholder
     image: frontendImage
-  // Allow toggling AcrPull role assignment
-  skipAcrPullRoleAssignment: skipAcrPullRoleAssignment
+  // Allow toggling AcrPull role assignment per service
+  skipAcrPullRoleAssignment: skipFrontendAcrPullRoleAssignment
     // Compute sizing (exposed as parameters)
     cpu: frontendCpu
     memory: frontendMemory
@@ -125,6 +128,31 @@ module frontend 'app/frontend-angular.bicep' = {
     tags: tags
   }
 }
+
+// Backend Azure Functions Container App
+module backend 'app/backend-azure-functions.bicep' = {
+  name: 'backendApp'
+  dependsOn: [
+    containerAppsEnvironment
+  ]
+  params: {
+    name: '${namePrefix}-backend'
+    location: location
+    identityName: '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
+    containerRegistryName: resolvedAcrName
+    containerRegistryResourceGroup: acrResourceGroup
+    containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
+    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
+    allowedOrigins: ['*']  // Allow all origins for dev environment
+    exists: false
+    skipAcrPullRoleAssignment: skipBackendAcrPullRoleAssignment
+    appDefinition: {
+      settings: []
+    }
+    tags: tags
+  }
+}
+
 // Useful outputs for azd and diagnostics
 // Derive login server from the provided ACR name to avoid cross-RG coupling
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'

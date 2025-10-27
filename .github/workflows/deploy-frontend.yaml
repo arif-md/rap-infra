@@ -166,9 +166,10 @@ jobs:
           set -euo pipefail
           SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
           IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          SKIP_VAR="SKIP_${SERVICE_KEY_UPPER}_ACR_PULL_ROLE_ASSIGNMENT"
           
           IMG=$(azd env get-value "$IMAGE_VAR" || true)
-          SKIP=$(azd env get-value SKIP_ACR_PULL_ROLE_ASSIGNMENT || echo true)
+          SKIP=$(azd env get-value "$SKIP_VAR" || echo true)
           if [ -z "$IMG" ]; then
             echo "$IMAGE_VAR is not set; nothing to validate."
             exit 0
@@ -176,14 +177,14 @@ jobs:
           DOMAIN="${IMG%%/*}"
           ACR_DOMAIN="${AZURE_ACR_NAME}.azurecr.io"
           if [ "$DOMAIN" = "$ACR_DOMAIN" ] && [ "$SKIP" = "true" ]; then
-            echo "Inconsistent configuration: Image is from ACR ($ACR_DOMAIN) but SKIP_ACR_PULL_ROLE_ASSIGNMENT=true. Set SKIP=false or use a public image." >&2
+            echo "Inconsistent configuration: Image is from ACR ($ACR_DOMAIN) but $SKIP_VAR=true. Set SKIP=false or use a public image." >&2
             exit 1
           fi
           if [ "$DOMAIN" != "$ACR_DOMAIN" ] && [ "$SKIP" = "false" ]; then
-            echo "Inconsistent configuration: Image is NOT from ACR ($DOMAIN) but SKIP_ACR_PULL_ROLE_ASSIGNMENT=false. Set SKIP=true or use an ACR image." >&2
+            echo "Inconsistent configuration: Image is NOT from ACR ($DOMAIN) but $SKIP_VAR=false. Set SKIP=true or use an ACR image." >&2
             exit 1
           fi
-          echo "Image/ACR binding validation passed."
+          echo "Image/ACR binding validation passed for $SERVICE_KEY."
 
       - name: Fast image-only update (skip provision when possible)
         if: (github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed') || github.event_name == 'workflow_dispatch'

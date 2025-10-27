@@ -77,27 +77,30 @@ function Resolve-ServiceImage {
 Resolve-ServiceImage -ServiceKey "frontend"
 Resolve-ServiceImage -ServiceKey "backend"
 
-# Determine SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether ANY service uses ACR
-# If at least one service uses ACR, we need the role assignment
+# Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
+# Each service has independent control over whether to create ACR role assignment
+Write-Host ""
+Write-Host "🔧 Setting per-service ACR pull role assignment flags..." -ForegroundColor Cyan
+
 $frontendImg = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
 $backendImg = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
 
-$anyAcrImage = $false
+# Frontend: SKIP if image doesn't use ACR
 if (-not [string]::IsNullOrEmpty($frontendImg) -and $frontendImg -match "$REGISTRY") {
-    $anyAcrImage = $true
-}
-if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
-    $anyAcrImage = $true
+    Write-Host "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+} else {
+    Write-Host "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
+    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
 }
 
-if ($anyAcrImage) {
-    Write-Host ""
-    Write-Host "ℹ️  At least one service uses ACR - enabling ACR pull role assignment" -ForegroundColor Cyan
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+# Backend: SKIP if image doesn't use ACR
+if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
+    Write-Host "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
 } else {
-    Write-Host ""
-    Write-Host "ℹ️  All services use public/external images - skipping ACR pull role assignment" -ForegroundColor Cyan
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+    Write-Host "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
+    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
 }
 
 Write-Host ""

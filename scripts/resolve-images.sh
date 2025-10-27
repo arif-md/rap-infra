@@ -74,27 +74,32 @@ resolve_service_image() {
 resolve_service_image "frontend"
 resolve_service_image "backend"
 
-# Determine SKIP_ACR_PULL_ROLE_ASSIGNMENT based on whether ANY service uses ACR
-# If at least one service uses ACR, we need the role assignment
+# Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
+# Each service has independent control over whether to create ACR role assignment
+echo ""
+echo "🔧 Setting per-service ACR pull role assignment flags..."
+
 FRONTEND_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || echo "")
 BACKEND_IMG=$(azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>/dev/null || echo "")
 
-ANY_ACR_IMAGE=false
+# Frontend: SKIP if image doesn't use ACR
 if [[ "$FRONTEND_IMG" == *"$REGISTRY"* ]]; then
-  ANY_ACR_IMAGE=true
-fi
-if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
-  ANY_ACR_IMAGE=true
+  echo "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+  azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+else
+  echo "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true"
+  azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
 fi
 
-echo ""
-if [ "$ANY_ACR_IMAGE" = "true" ]; then
-  echo "ℹ️  At least one service uses ACR - enabling ACR pull role assignment"
-  azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+# Backend: SKIP if image doesn't use ACR
+if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
+  echo "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+  azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
 else
-  echo "ℹ️  All services use public/external images - skipping ACR pull role assignment"
-  azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true
+  echo "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true"
+  azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
 fi
 
 echo ""
 echo "✅ Image resolution complete"
+
