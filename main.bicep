@@ -136,7 +136,7 @@ module backend 'app/backend-azure-functions.bicep' = {
     containerAppsEnvironment
   ]
   params: {
-    name: '${namePrefix}-backend'
+    name: '${namePrefix}-be'
     location: location
     identityName: '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
     containerRegistryName: resolvedAcrName
