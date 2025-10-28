@@ -11,12 +11,13 @@ on:
     branches: [ main ]
     paths:
       - 'azure.yaml'
-      - 'main.bicep'
-      - 'main.parameters.json'
       - 'app/frontend-angular.bicep'
-      - 'modules/**'
-      - 'shared/**'
       - 'scripts/**'
+      # Shared infrastructure changes handled by workflow_dispatch or manual coordination
+      # - 'main.bicep'           # Excluded: triggers both frontend and backend
+      # - 'main.parameters.json' # Excluded: triggers both frontend and backend  
+      # - 'modules/**'           # Excluded: triggers both frontend and backend
+      # - 'shared/**'            # Excluded: triggers both frontend and backend
   repository_dispatch:
     types: [ frontend-image-pushed ]
 
