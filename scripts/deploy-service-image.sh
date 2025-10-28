@@ -155,15 +155,32 @@ echo ""
 
 echo "✅ Pre-flight checks..."
 
-# Check 1: Image must be in digest form
+# Check 1: Image digest requirement (strict for ACR, flexible for public)
 DIGEST_PART="${IMG#*@}"
+IMAGE_DOMAIN="${IMG%%/*}"
+
 if [ "$IMG" = "$DIGEST_PART" ]; then
-  echo "⚠️  Image is not in digest form (no @sha256:...)"
-  echo "Cannot fast-path; full provision required."
-  echo "didFastPath=false" >> "${GITHUB_OUTPUT:-/dev/stdout}"
-  exit 1
+  # No digest found
+  if [ "$IMAGE_DOMAIN" = "$ACR_DOMAIN" ]; then
+    # ACR images MUST use digest for immutability and traceability
+    echo "❌ ACR image must be in digest form (@sha256:...)" >&2
+    echo "  Image: $IMG" >&2
+    echo "  ACR images require digest-based deployment for:" >&2
+    echo "  - Immutability (ensure exact version deployed)" >&2
+    echo "  - Traceability (track commits via OCI labels)" >&2
+    echo "  - Promotion workflows (dev → test → prod)" >&2
+    echo "Cannot fast-path; full provision required." >&2
+    echo "didFastPath=false" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+    exit 1
+  else
+    # Public images can use tags (we don't control them)
+    echo "⚠️  Public image is using tag-based reference (no digest)"
+    echo "  Image: $IMG"
+    echo "  This is acceptable for public images, but digest form is recommended."
+  fi
+else
+  echo "  ✓ Image is in digest form: ${DIGEST_PART:0:20}..."
 fi
-echo "  ✓ Image is in digest form"
 
 # Check 2: Container App must exist
 if ! az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
