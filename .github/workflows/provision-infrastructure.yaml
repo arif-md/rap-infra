@@ -1,0 +1,212 @@
+name: Provision Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      targetEnv:
+        description: "GitHub Environment name to run under (e.g., dev/test/train/prod)"
+        required: false
+        default: "dev"
+  push:
+    branches: [ main ]
+    paths:
+      - 'main.bicep'
+      - 'main.parameters.json'
+      - 'modules/**'
+      - 'shared/**'
+      - '!app/**'  # Exclude app-specific Bicep files
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+    env:
+      # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP }}
+    permissions:
+      id-token: write   # for OIDC
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Azure Developer CLI (preferred)
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
+        run: |
+          if ! command -v azd >/dev/null 2>&1; then
+            echo "setup-azd failed; installing via script"
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          echo "Authenticating azd using GitHub OIDC provider"
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: "Sanity: environment variables (resolved)"
+        shell: bash
+        run: |
+          echo "Using GitHub Environment: ${{ job.environment.name }}"
+          echo "AZURE_ENV_NAME=$AZURE_ENV_NAME"
+          echo "AZURE_RESOURCE_GROUP=$AZURE_RESOURCE_GROUP"
+          echo "AZURE_ACR_NAME=$AZURE_ACR_NAME"
+          echo "AZURE_ACR_RESOURCE_GROUP=$AZURE_ACR_RESOURCE_GROUP"
+
+      - name: Enable azd alpha features (deployment stacks)
+        run: azd config set alpha.deployment.stacks on
+
+      - name: Ensure AZURE_ENV_NAME default
+        run: |
+          if [ -z "$AZURE_ENV_NAME" ]; then
+            NAME="${GITHUB_REF_NAME:-dev}"
+            SAFE=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            echo "AZURE_ENV_NAME=$SAFE" >> $GITHUB_ENV
+            echo "Using fallback AZURE_ENV_NAME: $SAFE"
+          else
+            echo "Using provided AZURE_ENV_NAME: $AZURE_ENV_NAME"
+          fi
+
+      - name: Prepare azd environment
+        run: |
+          azd env new $AZURE_ENV_NAME --no-prompt || true
+          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
+          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
+          if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "$AZURE_ACR_RESOURCE_GROUP"
+          fi
+          RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
+          if [ -n "$RG_LOC" ]; then
+            echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
+          else
+            echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
+          fi
+          azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Ensure ACR exists (preprovision)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-acr.sh
+          ./scripts/ensure-acr.sh
+
+      - name: Resolve images (preprovision)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/resolve-images.sh
+          ./scripts/resolve-images.sh
+
+      - name: Validate image vs ACR binding (guard)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/validate-acr-binding.sh
+          ./scripts/validate-acr-binding.sh
+
+      - name: Provision infrastructure (azd provision)
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🏗️  Provisioning shared infrastructure and all services"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "This workflow provisions:"
+          echo "  - Azure Container Registry (if not exists)"
+          echo "  - Container Apps Environment"
+          echo "  - Log Analytics Workspace"
+          echo "  - Application Insights"
+          echo "  - Frontend Container App (dev-rap-fe)"
+          echo "  - Backend Container App (dev-rap-be)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          azd provision --no-prompt --environment "$AZURE_ENV_NAME"
+
+      - name: Show deployment summary
+        if: success()
+        shell: bash
+        run: |
+          echo "✅ Infrastructure provisioning completed successfully!"
+          echo ""
+          echo "📊 Deployed Resources:"
+          
+          # Get Container Apps
+          APPS=$(az containerapp list -g "$AZURE_RESOURCE_GROUP" --query "[].{Name:name,Status:properties.provisioningState,Fqdn:properties.configuration.ingress.fqdn}" -o tsv 2>/dev/null || true)
+          
+          if [ -n "$APPS" ]; then
+            echo ""
+            echo "Container Apps:"
+            echo "$APPS" | while IFS=$'\t' read -r name status fqdn; do
+              echo "  - $name"
+              echo "    Status: $status"
+              if [ -n "$fqdn" ] && [ "$fqdn" != "null" ]; then
+                echo "    URL: https://$fqdn"
+              fi
+            done
+          fi
+          
+          # Get ACR
+          ACR_INFO=$(az acr show -n "$AZURE_ACR_NAME" -g "${AZURE_ACR_RESOURCE_GROUP:-$AZURE_RESOURCE_GROUP}" --query "{Name:name,LoginServer:loginServer,Sku:sku.name}" -o tsv 2>/dev/null || true)
+          if [ -n "$ACR_INFO" ]; then
+            echo ""
+            echo "Container Registry:"
+            echo "$ACR_INFO" | while IFS=$'\t' read -r name login sku; do
+              echo "  - $name ($sku)"
+              echo "    Login Server: $login"
+            done
+          fi
+          
+          {
+            echo "### 🏗️ Infrastructure Provisioning Complete"
+            echo ""
+            echo "**Environment**: $AZURE_ENV_NAME"
+            echo "**Resource Group**: $AZURE_RESOURCE_GROUP"
+            echo ""
+            if [ -n "$APPS" ]; then
+              echo "**Container Apps**:"
+              echo "$APPS" | while IFS=$'\t' read -r name status fqdn; do
+                echo "- **$name**: $status"
+                if [ -n "$fqdn" ] && [ "$fqdn" != "null" ]; then
+                  echo "  - URL: https://$fqdn"
+                fi
+              done
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Infrastructure provisioning failed!"
+          echo "Check the logs above for error details."
+          echo ""
+          echo "Common issues:"
+          echo "  - Deployment stack in non-terminal state (another deployment running)"
+          echo "  - Invalid Bicep configuration"
+          echo "  - Missing permissions"
+          echo "  - Resource quota limits"
