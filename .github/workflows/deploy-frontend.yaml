@@ -183,6 +183,7 @@ jobs:
       - name: Fast image-only update (skip provision when possible)
         if: (github.event_name == 'repository_dispatch' && github.event.action == 'frontend-image-pushed') || github.event_name == 'workflow_dispatch'
         id: fastpath
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
