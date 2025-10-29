@@ -68,11 +68,24 @@ ACR_DOMAIN="$5"
 # PREREQUISITE CHECKS
 # ============================================================================
 
-# Validate new image is digest-based
+# Validate new image format (strict for ACR, flexible for public)
 DIGEST_PART="${NEW_IMG#*@}"
+IMAGE_DOMAIN="${NEW_IMG%%/*}"
+
 if [ "$NEW_IMG" = "$DIGEST_PART" ]; then
-  echo "❌ Error: Image must be in digest format (image@sha256:...)" >&2
-  exit 1
+  # No digest found - check if it's an ACR image
+  if [ "$IMAGE_DOMAIN" = "$ACR_DOMAIN" ]; then
+    # ACR images MUST use digest for immutability and traceability
+    echo "❌ Error: ACR image must be in digest format (image@sha256:...)" >&2
+    echo "  Image: $NEW_IMG" >&2
+    echo "  ACR images require digest-based deployment for immutability and promotion workflows" >&2
+    exit 1
+  else
+    # Public images can use tags
+    echo "⚠️  Warning: Public image using tag-based reference (no digest)" >&2
+    echo "  Image: $NEW_IMG" >&2
+    echo "  This is acceptable for public images, but digest form is recommended for consistency." >&2
+  fi
 fi
 
 # Verify Container App exists
