@@ -1,8 +1,8 @@
 # RAP Infrastructure Project Guide
 
 <!-- 
-MAINTENANCE GUIDE:
-- Last updated: October 15, 2025
+MAINTENANCE GUIDE:Extract image metadata from OCI labelsExtract image metadata from OCI labels
+- Last updated: October 29, 2025
 - Update triggers: When you modify architecture, add modules, change workflows, or introduce new patterns
 - Update method: Ask Copilot "Update copilot-instructions.md based on recent changes" or edit manually
 - Full refresh: Quarterly or after major refactoring - ask "Re-analyze and update copilot-instructions.md"
