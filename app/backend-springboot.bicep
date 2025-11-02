@@ -51,6 +51,18 @@ param maxReplicas int = 10
 @description('Enable session affinity (sticky sessions)')
 param enableSessionAffinity bool = false
 
+@description('Enable SQL Database connection')
+param enableSqlDatabase bool = false
+
+@description('SQL Server FQDN')
+param sqlServerFqdn string = ''
+
+@description('SQL Database name')
+param sqlDatabaseName string = ''
+
+@description('SQL admin login username')
+param sqlAdminLogin string = ''
+
 // Existing (shared) resources
 resource cai 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppsEnvironmentName
@@ -91,8 +103,28 @@ var appInsightsEnv = (enableAppInsights && !empty(applicationInsightsName)) ? [
   }
 ] : []
 
-// Combine base env + optional App Insights + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appInsightsEnv, envVars)
+// SQL Database env vars (if enabled) - using Azure AD managed identity authentication
+var sqlEnv = enableSqlDatabase ? [
+  {
+    name: 'SPRING_DATASOURCE_URL'
+    value: 'jdbc:sqlserver://${sqlServerFqdn}:1433;database=${sqlDatabaseName};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;authentication=ActiveDirectoryMSI;'
+  }
+  {
+    name: 'SPRING_DATASOURCE_DRIVER_CLASS_NAME'
+    value: 'com.microsoft.sqlserver.jdbc.SQLServerDriver'
+  }
+  {
+    name: 'SQL_SERVER_FQDN'
+    value: sqlServerFqdn
+  }
+  {
+    name: 'SQL_DATABASE_NAME'
+    value: sqlDatabaseName
+  }
+] : []
+
+// Combine base env + optional App Insights + SQL + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, envVars)
 
 module backend '../modules/containerApp.bicep' = {
   name: 'backendContainer'

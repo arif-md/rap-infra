@@ -53,6 +53,22 @@ param backendCpu int = 1
 ])
 param backendMemory string = '2Gi'
 
+@description('Enable Azure SQL Database')
+param enableSqlDatabase bool = true
+
+@description('SQL Server administrator login')
+param sqlAdminLogin string = 'sqladmin'
+
+@description('SQL Server administrator password')
+@secure()
+param sqlAdminPassword string
+
+@description('SQL Database SKU name')
+param sqlDatabaseSku string = 'Basic'
+
+@description('SQL Database tier')
+param sqlDatabaseTier string = 'Basic'
+
 @description('Tags to apply to all resources')
 param tags object = {
   environment: environmentName
@@ -66,6 +82,9 @@ var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
 var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
+var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
+var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
+var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
@@ -95,6 +114,39 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
   }
 }
 
+// Virtual Network for Container Apps and Private Endpoints
+module vnet 'shared/vnet.bicep' = if (enableSqlDatabase) {
+  name: 'vnet'
+  params: {
+    name: vnetName
+    location: location
+    tags: tags
+    addressPrefix: '10.0.0.0/16'
+    subnets: [
+      {
+        name: 'container-apps-subnet'
+        addressPrefix: '10.0.0.0/23'
+        delegation: 'Microsoft.App/environments'
+      }
+      {
+        name: 'private-endpoints-subnet'
+        addressPrefix: '10.0.2.0/24'
+        privateEndpointNetworkPolicies: 'Disabled'
+      }
+    ]
+  }
+}
+
+// Private DNS Zone for SQL Server private endpoints
+module sqlPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableSqlDatabase) {
+  name: 'sql-private-dns-zone'
+  params: {
+    zoneName: 'privatelink${environment().suffixes.sqlServerHostname}'
+    vnetId: vnet.outputs.vnetId
+    tags: tags
+  }
+}
+
 module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5' = {
   name: 'container-apps-environment'
   params: {
@@ -102,6 +154,28 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
     name: '${abbrs.appManagedEnvironments}${resourceToken}'
     location: location
     zoneRedundant: false
+    // VNet integration for Container Apps (if SQL is enabled)
+    infrastructureSubnetId: enableSqlDatabase ? vnet!.outputs.containerAppsSubnetId : null
+    internal: enableSqlDatabase
+  }
+}
+
+// Azure SQL Database with private endpoint and managed identity
+module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
+  name: 'sql-database'
+  params: {
+    sqlServerName: sqlServerName
+    sqlDatabaseName: sqlDatabaseName
+    location: location
+    tags: tags
+    administratorLogin: sqlAdminLogin
+    administratorPassword: sqlAdminPassword
+    skuName: sqlDatabaseSku
+    skuTier: sqlDatabaseTier
+    enablePrivateEndpoint: true
+    privateEndpointSubnetId: vnet!.outputs.privateEndpointsSubnetId
+    privateDnsZoneId: sqlPrivateDnsZone!.outputs.privateDnsZoneId
+    allowAzureServices: false  // Use private endpoint only
   }
 }
 
@@ -175,6 +249,11 @@ module backend 'app/backend-springboot.bicep' = {
     // Replicas configuration
     minReplicas: 1
     maxReplicas: 10
+    // SQL connection configuration (if SQL is enabled)
+    enableSqlDatabase: enableSqlDatabase
+    sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
+    sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
+    sqlAdminLogin: sqlAdminLogin
     // Optional env vars (can be extended later)
     envVars: [
       {
@@ -195,6 +274,8 @@ module backend 'app/backend-springboot.bicep' = {
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
 output backendFqdn string = backend.outputs.fqdn
+output sqlServerFqdn string = enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
+output sqlDatabaseName string = enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

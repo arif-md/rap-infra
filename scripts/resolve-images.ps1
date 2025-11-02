@@ -1,18 +1,37 @@
 # Pre-provision hook: Resolve container images from ACR or fallback to public images
 # This ensures azd up works even if the configured image digest is stale/missing
 #
+# USAGE:
+#   .\resolve-images.ps1 [service-name]
+#
+# PARAMETERS:
+#   service-name (optional) - Specific service to resolve (e.g., "frontend", "backend")
+#                             If omitted, resolves ALL services
+#
 # BEHAVIOR:
 #   - If image is already set with a valid digest, keeps it (workflow-configured images)
 #   - If image is missing or invalid, queries ACR for latest
 #   - Falls back to public image if ACR repository is empty
 #
-# This script is used by BOTH:
-#   - Local azd up (resolves latest image automatically)
-#   - GitHub Actions workflows (keeps workflow-set images, resolves only if missing)
+# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT
+#
+# This script is used by:
+#   - Local azd up: .\resolve-images.ps1 (resolves all services)
+#   - provision-infrastructure workflow: .\resolve-images.ps1 (resolves all services)
+#   - deploy-frontend workflow: .\resolve-images.ps1 frontend (resolves only frontend)
+#   - deploy-backend workflow: .\resolve-images.ps1 backend (resolves only backend)
+
+param(
+    [string]$TargetService = ""
+)
 
 $ErrorActionPreference = 'Stop'
 
-Write-Host "🔍 Resolving container images from ACR..." -ForegroundColor Cyan
+if ($TargetService) {
+    Write-Host "🔍 Resolving container image for service: $TargetService" -ForegroundColor Cyan
+} else {
+    Write-Host "🔍 Resolving container images for all services from ACR..." -ForegroundColor Cyan
+}
 
 # Get environment variables from azd
 $AZURE_ENV_NAME = azd env get-value AZURE_ENV_NAME 2>$null
@@ -73,9 +92,14 @@ function Resolve-ServiceImage {
     }
 }
 
-# Resolve images for all services
-Resolve-ServiceImage -ServiceKey "frontend"
-Resolve-ServiceImage -ServiceKey "backend"
+# Resolve images for all services or specific service
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "frontend") {
+    Resolve-ServiceImage -ServiceKey "frontend"
+}
+
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
+    Resolve-ServiceImage -ServiceKey "backend"
+}
 
 # Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
 # Each service has independent control over whether to create ACR role assignment
@@ -86,22 +110,30 @@ $frontendImg = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
 $backendImg = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
 
 # Frontend: SKIP if image doesn't use ACR
-if (-not [string]::IsNullOrEmpty($frontendImg) -and $frontendImg -match "$REGISTRY") {
-    Write-Host "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
-    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
-} else {
-    Write-Host "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
-    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "frontend") {
+    if (-not [string]::IsNullOrEmpty($frontendImg) -and $frontendImg -match "$REGISTRY") {
+        Write-Host "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+        azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+    } else {
+        Write-Host "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
+        azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+    }
 }
 
 # Backend: SKIP if image doesn't use ACR
-if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
-    Write-Host "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
-    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
-} else {
-    Write-Host "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
-    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
+    if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
+        Write-Host "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+        azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+    } else {
+        Write-Host "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
+        azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+    }
 }
 
 Write-Host ""
-Write-Host "✅ Image resolution complete" -ForegroundColor Green
+if ($TargetService) {
+    Write-Host "✅ Image resolution complete for service: $TargetService" -ForegroundColor Green
+} else {
+    Write-Host "✅ Image resolution complete for all services" -ForegroundColor Green
+}

@@ -175,14 +175,14 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x scripts/resolve-images.sh
-          ./scripts/resolve-images.sh
+          ./scripts/resolve-images.sh backend
 
       - name: Validate image vs ACR binding (guard)
         shell: bash
         run: |
           set -euo pipefail
           chmod +x scripts/validate-acr-binding.sh
-          ./scripts/validate-acr-binding.sh
+          ./scripts/validate-acr-binding.sh backend
 
       - name: Fast image-only update (skip provision when possible)
         if: (github.event_name == 'repository_dispatch' && github.event.action == 'backend-image-pushed') || github.event_name == 'workflow_dispatch'

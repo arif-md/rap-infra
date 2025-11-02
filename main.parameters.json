@@ -23,6 +23,21 @@
       "backendImage": {
         "value": "${SERVICE_BACKEND_IMAGE_NAME}"
       },
+      "enableSqlDatabase": {
+        "value": "${ENABLE_SQL_DATABASE=true}"
+      },
+      "sqlAdminLogin": {
+        "value": "${SQL_ADMIN_LOGIN=sqladmin}"
+      },
+      "sqlAdminPassword": {
+        "value": "${SQL_ADMIN_PASSWORD}"
+      },
+      "sqlDatabaseSku": {
+        "value": "${SQL_DATABASE_SKU=Basic}"
+      },
+      "sqlDatabaseTier": {
+        "value": "${SQL_DATABASE_TIER=Basic}"
+      },
       "backendAzureFunctionsExists": {
         "value": "${SERVICE_BACKEND_AZURE_FUNCTIONS_RESOURCE_EXISTS=false}"
       },

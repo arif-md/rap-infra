@@ -2,6 +2,13 @@
 # Pre-provision hook: Resolve container images from ACR or fallback to public images
 # This ensures azd up works even if the configured image digest is stale/missing
 #
+# USAGE:
+#   ./resolve-images.sh [service-name]
+#
+# PARAMETERS:
+#   service-name (optional) - Specific service to resolve (e.g., "frontend", "backend")
+#                             If omitted, resolves ALL services
+#
 # BEHAVIOR:
 #   - If image is already set with a valid digest, keeps it (workflow-configured images)
 #   - If image is missing or invalid, queries ACR for latest
@@ -9,13 +16,22 @@
 #
 # Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT
 #
-# This script is used by BOTH:
-#   - Local azd up (resolves latest image automatically)
-#   - GitHub Actions workflows (keeps workflow-set images, resolves only if missing)
+# This script is used by:
+#   - Local azd up: ./resolve-images.sh (resolves all services)
+#   - provision-infrastructure workflow: ./resolve-images.sh (resolves all services)
+#   - deploy-frontend workflow: ./resolve-images.sh frontend (resolves only frontend)
+#   - deploy-backend workflow: ./resolve-images.sh backend (resolves only backend)
 
 set -euo pipefail
 
-echo "🔍 Resolving container images from ACR..."
+# Parse optional service parameter
+TARGET_SERVICE="${1:-}"
+
+if [ -n "$TARGET_SERVICE" ]; then
+  echo "🔍 Resolving container image for service: $TARGET_SERVICE"
+else
+  echo "🔍 Resolving container images for all services from ACR..."
+fi
 
 # Get environment variables from azd
 AZURE_ENV_NAME=$(azd env get-value AZURE_ENV_NAME 2>/dev/null || echo "")
@@ -72,9 +88,14 @@ resolve_service_image() {
   fi
 }
 
-# Resolve images for all services
-resolve_service_image "frontend"
-resolve_service_image "backend"
+# Resolve images for all services or specific service
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "frontend" ]; then
+  resolve_service_image "frontend"
+fi
+
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "backend" ]; then
+  resolve_service_image "backend"
+fi
 
 # Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
 # Each service has independent control over whether to create ACR role assignment
@@ -85,23 +106,31 @@ FRONTEND_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || echo
 BACKEND_IMG=$(azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>/dev/null || echo "")
 
 # Frontend: SKIP if image doesn't use ACR
-if [[ "$FRONTEND_IMG" == *"$REGISTRY"* ]]; then
-  echo "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false"
-  azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
-else
-  echo "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true"
-  azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "frontend" ]; then
+  if [[ "$FRONTEND_IMG" == *"$REGISTRY"* ]]; then
+    echo "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+  else
+    echo "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true"
+    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+  fi
 fi
 
 # Backend: SKIP if image doesn't use ACR
-if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
-  echo "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false"
-  azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
-else
-  echo "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true"
-  azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "backend" ]; then
+  if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
+    echo "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+  else
+    echo "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true"
+    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+  fi
 fi
 
 echo ""
-echo "✅ Image resolution complete"
+if [ -n "$TARGET_SERVICE" ]; then
+  echo "✅ Image resolution complete for service: $TARGET_SERVICE"
+else
+  echo "✅ Image resolution complete for all services"
+fi
 
