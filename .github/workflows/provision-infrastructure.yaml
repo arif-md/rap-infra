@@ -20,6 +20,9 @@ jobs:
   provision:
     runs-on: ubuntu-latest
     environment: ${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+    concurrency:
+      group: azure-deployment-${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+      cancel-in-progress: false
     env:
       # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
       AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}

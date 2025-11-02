@@ -25,6 +25,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+    concurrency:
+      group: azure-deployment-${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+      cancel-in-progress: false
     env:
       # Backend service configuration
       SERVICE_KEY: backend               # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
