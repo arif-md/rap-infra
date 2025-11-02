@@ -124,6 +124,27 @@ paths:
 
 This ensures deployments trigger when the new template changes.
 
+### 6. Concurrency Controls
+
+**Files Modified**: 
+- `infra/.github/workflows/provision-infrastructure.yaml`
+- `infra/.github/workflows/deploy-backend.yaml`
+- `infra/.github/workflows/deploy-frontend.yaml`
+
+**Added Concurrency Group**:
+```yaml
+concurrency:
+  group: azure-deployment-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+```
+
+**Purpose**: Prevents `DeploymentStackInNonTerminalState` errors when multiple workflows modify the same Azure deployment stack simultaneously. Workflows queue instead of running concurrently, ensuring sequential deployments.
+
+**Behavior**: 
+- When multiple workflows trigger (e.g., large commits touching both main.bicep and app/*.bicep), they queue and run in order
+- Environment isolation: Different environments (dev/test/train/prod) can deploy simultaneously
+- See [WORKFLOWS.md](./WORKFLOWS.md#concurrency-controls) for detailed explanation
+
 ### 6. Documentation
 
 **Created**:
@@ -140,6 +161,7 @@ Both documents cover:
 - Monitoring and logging
 - Troubleshooting guide
 - AVM compliance verification
+- **Concurrency controls** for preventing deployment conflicts
 
 ### 7. Abbreviations
 
@@ -320,6 +342,9 @@ az containerapp show -n dev-rap-be -g rg-raptor-dev --query properties.configura
 1. `infra/main.bicep` - Added backend parameters and module
 2. `infra/main.parameters.json` - Added backendImage parameter
 3. `infra/.github/workflows/deploy-backend.yaml` - Updated bicep path reference
+4. `infra/.github/workflows/provision-infrastructure.yaml` - Added concurrency control
+5. `infra/.github/workflows/deploy-frontend.yaml` - Added concurrency control
+6. `infra/docs/WORKFLOWS.md` - Added comprehensive concurrency documentation
 
 ### Removed (Deprecated)
 - `infra/app/backend-azure-functions.bicep` - Replaced by backend-springboot.bicep

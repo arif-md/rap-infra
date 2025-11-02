@@ -1,7 +1,7 @@
 # Service-Specific Workflows Guide
 
-> **Document Version**: 1.0  
-> **Last Updated**: October 21, 2025  
+> **Document Version**: 1.1  
+> **Last Updated**: November 2, 2025  
 > **Purpose**: Guide for using and maintaining service-specific GitHub Actions workflows
 
 ---
@@ -10,12 +10,13 @@
 
 1. [Overview](#overview)
 2. [Current Workflows](#current-workflows)
-3. [Architecture](#architecture)
-4. [Adding a New Service](#adding-a-new-service)
-5. [Configuration Requirements](#configuration-requirements)
-6. [Workflow Behavior](#workflow-behavior)
-7. [Migration from Generic Workflows](#migration-from-generic-workflows)
-8. [Troubleshooting](#troubleshooting)
+3. [Concurrency Controls](#concurrency-controls)
+4. [Architecture](#architecture)
+5. [Adding a New Service](#adding-a-new-service)
+6. [Configuration Requirements](#configuration-requirements)
+7. [Workflow Behavior](#workflow-behavior)
+8. [Migration from Generic Workflows](#migration-from-generic-workflows)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -145,6 +146,172 @@ SERVICE_SUFFIX: be
 ```
 dev → test → train → prod
 ```
+
+---
+
+## Concurrency Controls
+
+### Overview
+
+All deployment workflows use **shared concurrency groups** to prevent simultaneous modifications to Azure deployment stacks. This prevents `DeploymentStackInNonTerminalState` errors when multiple workflows try to update infrastructure concurrently.
+
+### Configuration
+
+Each workflow includes:
+
+```yaml
+concurrency:
+  group: azure-deployment-${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+  cancel-in-progress: false
+```
+
+### How It Works
+
+**Concurrency Group**: `azure-deployment-{environment}`
+
+All workflows deploying to the **same environment** share the same concurrency group:
+- `azure-deployment-dev` - Dev environment deployments
+- `azure-deployment-test` - Test environment deployments  
+- `azure-deployment-train` - Train environment deployments
+- `azure-deployment-prod` - Prod environment deployments
+
+**Workflows Sharing Concurrency Groups:**
+1. `provision-infrastructure.yaml` - Core infrastructure provisioning
+2. `deploy-frontend.yaml` - Frontend service deployment
+3. `deploy-backend.yaml` - Backend service deployment
+
+### Behavior
+
+**`cancel-in-progress: false`** means workflows **queue** instead of canceling:
+
+```
+Timeline Example (dev environment):
+─────────────────────────────────────
+T0: Deploy Backend starts
+    → Acquires lock: azure-deployment-dev
+    → Runs: azd up (updates deployment stack)
+
+T1: Provision Infrastructure triggered
+    → Tries to acquire: azure-deployment-dev
+    → Status: QUEUED (waits for Deploy Backend)
+
+T2: Deploy Frontend triggered
+    → Tries to acquire: azure-deployment-dev
+    → Status: QUEUED (waits behind Provision Infrastructure)
+
+T3: Deploy Backend completes
+    → Releases lock: azure-deployment-dev
+
+T4: Provision Infrastructure starts
+    → Acquires lock: azure-deployment-dev
+    → Runs: azd up (updates deployment stack)
+
+T5: Provision Infrastructure completes
+    → Releases lock: azure-deployment-dev
+
+T6: Deploy Frontend starts
+    → Acquires lock: azure-deployment-dev
+    → Runs: azd up (updates deployment stack)
+```
+
+### Environment Isolation
+
+Different environments can deploy **simultaneously** because they use different concurrency groups:
+
+✅ **Allowed** (different groups):
+```
+Deploy Backend to dev     (group: azure-deployment-dev)
+  +
+Deploy Frontend to test   (group: azure-deployment-test)
+```
+
+⏸️ **Queued** (same group):
+```
+Deploy Backend to dev          (group: azure-deployment-dev)
+  +
+Provision Infrastructure to dev (group: azure-deployment-dev)
+```
+
+### Why This Design?
+
+1. **Prevents Race Conditions**: Azure deployment stacks are stateful and cannot be modified concurrently
+2. **Ensures Completeness**: Every deployment runs to completion (no cancellations)
+3. **Audit Trail**: Complete logs for all deployments
+4. **Safety First**: Better to queue than risk infrastructure corruption
+
+### Trigger Path Separation
+
+Workflows are designed to trigger on **different file paths** to minimize concurrent runs:
+
+| Workflow | Triggers On |
+|----------|-------------|
+| **Provision Infrastructure** | `main.bicep`, `main.parameters.json`, `modules/**`, `shared/**` |
+| **Deploy Frontend** | `azure.yaml`, `app/frontend-angular.bicep`, `scripts/**` |
+| **Deploy Backend** | `azure.yaml`, `app/backend-springboot.bicep`, `scripts/**` |
+
+**Note**: Shared infrastructure files (`main.bicep`, `modules/**`, `shared/**`) are **excluded** from service deployment workflows to avoid unnecessary triggers.
+
+### When Concurrent Runs Occur
+
+Workflows may still run concurrently when:
+
+1. **Large commits** touch multiple workflow trigger paths
+   ```bash
+   git add main.bicep app/backend-springboot.bicep
+   git commit -m "Add backend service"
+   # Triggers: Provision Infrastructure + Deploy Backend
+   ```
+
+2. **Manual workflow_dispatch** while automated runs are in progress
+
+3. **Repository dispatch events** from image builds overlap with push-triggered runs
+   ```
+   Push to main (changes app/backend-springboot.bicep)
+     → Triggers: Deploy Backend
+   
+   Meanwhile, backend image build completes
+     → Dispatches: backend-image-pushed
+     → Triggers: Deploy Backend (again)
+   
+   Result: Two Deploy Backend runs queued
+   ```
+
+4. **Multiple services** updated in one commit
+   ```bash
+   git add app/frontend-angular.bicep app/backend-springboot.bicep
+   git commit -m "Update both services"
+   # Triggers: Deploy Frontend + Deploy Backend
+   ```
+
+In all these cases, concurrency controls ensure workflows **queue safely** instead of conflicting.
+
+### Monitoring Concurrency
+
+In GitHub Actions UI, you'll see:
+- **Queued** (🟡) - Waiting for concurrency lock
+- **In Progress** (🔵) - Has the lock and running
+- **Completed** (🟢) - Finished successfully
+
+### Troubleshooting
+
+**Symptom**: Workflow queued for a long time
+
+**Cause**: Another workflow is holding the concurrency lock for the same environment
+
+**Solution**:
+1. Check running workflows in the same environment
+2. Wait for the running workflow to complete
+3. Or cancel the blocking workflow if safe to do so
+
+**Symptom**: `DeploymentStackInNonTerminalState` error
+
+**Cause**: Concurrency controls not working (shouldn't happen with current config)
+
+**Solution**:
+1. Verify concurrency group is correctly configured in workflow
+2. Check if you manually bypassed concurrency (e.g., running `azd up` locally during a workflow)
+3. Wait 5-10 minutes for Azure deployment stack to reach terminal state
+4. Retry the workflow
 
 ---
 

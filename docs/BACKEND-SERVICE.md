@@ -104,6 +104,14 @@ azd up --no-prompt --environment $AZURE_ENV_NAME
 - Push to `main` (when backend bicep or scripts change)
 - Repository dispatch: `backend-image-pushed` event
 
+**Concurrency Control**:
+```yaml
+group: azure-deployment-{environment}
+cancel-in-progress: false
+```
+
+All deployment workflows share the same concurrency group per environment. This prevents simultaneous modifications to Azure deployment stacks and avoids `DeploymentStackInNonTerminalState` errors. If multiple workflows are triggered, they queue and run sequentially. See [Concurrency Controls](WORKFLOWS.md#concurrency-controls) for details.
+
 **Key Steps**:
 1. Checkout code
 2. Azure login (OIDC)
