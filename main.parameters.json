@@ -20,6 +20,9 @@
       "frontendImage": {
         "value": "${SERVICE_FRONTEND_IMAGE_NAME}"
       },
+      "backendImage": {
+        "value": "${SERVICE_BACKEND_IMAGE_NAME}"
+      },
       "backendAzureFunctionsExists": {
         "value": "${SERVICE_BACKEND_AZURE_FUNCTIONS_RESOURCE_EXISTS=false}"
       },

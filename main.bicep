@@ -11,7 +11,10 @@ param location string = resourceGroup().location
 @description('Container image (full ACR reference) for frontend (e.g. myacr.azurecr.io/rap-frontend:latest)')
 param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
-/* Removed backendImage and publicHostname parameters for simplicity */
+@description('Container image (full ACR reference) for backend (e.g. myacr.azurecr.io/rap-backend:latest)')
+param backendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
+/* Removed publicHostname parameter for simplicity */
 
 
 @description('Optional ACR name (use existing); when empty, a default is derived from environmentName')
@@ -38,6 +41,18 @@ param frontendCpu int = 1
 ])
 param frontendMemory string = '2Gi'
 
+@description('vCPU allocation for backend container app (integer, default 1)')
+param backendCpu int = 1
+
+@description('Memory allocation for backend container app (valid combos with selected CPU; e.g., 2Gi for 1 vCPU)')
+@allowed([
+  '0.5Gi'
+  '1Gi'
+  '2Gi'
+  '4Gi'
+])
+param backendMemory string = '2Gi'
+
 @description('Tags to apply to all resources')
 param tags object = {
   environment: environmentName
@@ -49,6 +64,8 @@ var resolvedAcrName = !empty(acrName) ? acrName : toLower(replace('${environment
 var acrResourceGroup = empty(acrResourceGroupOverride) ? resourceGroup().name : acrResourceGroupOverride
 var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
+var backendAppName = '${namePrefix}-be'
+var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
 
 var abbrs = loadJsonContent('./abbreviations.json')
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
@@ -129,26 +146,46 @@ module frontend 'app/frontend-angular.bicep' = {
   }
 }
 
-// Backend Azure Functions Container App
-module backend 'app/backend-azure-functions.bicep' = {
+// Backend Spring Boot Container App
+module backend 'app/backend-springboot.bicep' = {
   name: 'backendApp'
   dependsOn: [
     containerAppsEnvironment
   ]
   params: {
-    name: '${namePrefix}-be'
+    name: backendAppName
     location: location
-    identityName: '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
-    containerRegistryName: resolvedAcrName
-    containerRegistryResourceGroup: acrResourceGroup
+    identityName: backendIdentityName
+    // Managed environment name matches what we created above
     containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
-    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
-    allowedOrigins: ['*']  // Allow all origins for dev environment
-    exists: false
+    // ACR name for image pull identity binding
+    containerRegistryName: resolvedAcrName
+    // ACR resource group (for cross-RG role assignment)
+    containerRegistryResourceGroup: acrResourceGroup
+    // Use provided image (from env via parameters file) or default placeholder
+    image: backendImage
+    // Allow toggling AcrPull role assignment per service
     skipAcrPullRoleAssignment: skipBackendAcrPullRoleAssignment
-    appDefinition: {
-      settings: []
-    }
+    // Application Insights name for backend monitoring
+    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
+    enableAppInsights: true
+    // Compute sizing (exposed as parameters)
+    cpu: backendCpu
+    memory: backendMemory
+    // Replicas configuration
+    minReplicas: 1
+    maxReplicas: 10
+    // Optional env vars (can be extended later)
+    envVars: [
+      {
+        name: 'APP_ROLE'
+        value: 'backend'
+      }
+      {
+        name: 'AZURE_ENV_NAME'
+        value: environmentName
+      }
+    ]
     tags: tags
   }
 }
@@ -157,6 +194,7 @@ module backend 'app/backend-azure-functions.bicep' = {
 // Derive login server from the provided ACR name to avoid cross-RG coupling
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
+output backendFqdn string = backend.outputs.fqdn
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

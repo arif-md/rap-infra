@@ -11,7 +11,7 @@ on:
     branches: [ main ]
     paths:
       - 'azure.yaml'
-      - 'app/backend-azure-functions.bicep'
+      - 'app/backend-springboot.bicep'
       - 'scripts/**'
       # Shared infrastructure changes handled by workflow_dispatch or manual coordination
       # - 'main.bicep'           # Excluded: triggers both frontend and backend
