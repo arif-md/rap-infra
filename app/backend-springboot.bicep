@@ -168,4 +168,5 @@ module acrPull '../modules/acrPullRoleAssignment.bicep' = if (!skipAcrPullRoleAs
 output name string = name
 output fqdn string = backend.outputs.fqdn
 output identityResourceId string = uai.id
+output identityPrincipalId string = uai.properties.principalId
 output imageUsed string = image

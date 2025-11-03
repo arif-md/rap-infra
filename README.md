@@ -3,6 +3,7 @@
 ## 📚 Quick Links
 
 - **[SQL Connection Guide](./SQL-CONNECTION-GUIDE.md)** - Complete guide to SQL Database connectivity, authentication, and network modes
+- **[SQL Permissions Automation](./SQL-PERMISSIONS-AUTOMATION.md)** - How managed identity SQL permissions are automatically configured
 - **[VNet Integration Guide](./VNET-INTEGRATION-GUIDE.md)** - How to switch between public access and private endpoint modes
 - **[Image Resolution](./docs/IMAGE-RESOLUTION.md)** - Container image resolution and ACR integration
 

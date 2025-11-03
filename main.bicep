@@ -287,6 +287,8 @@ output frontendFqdn string = frontend.outputs.fqdn
 output backendFqdn string = backend.outputs.fqdn
 output sqlServerFqdn string = enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
 output sqlDatabaseName string = enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
+output backendIdentityName string = backendIdentityName
+output backendIdentityPrincipalId string = backend.outputs.identityPrincipalId
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

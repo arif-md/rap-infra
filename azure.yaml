@@ -31,9 +31,7 @@ hooks:
     windows:
       shell: pwsh
       run: |
-        # Convert postprovision.sh to PowerShell or use WSL
-        Write-Host "Post-provision tasks for Windows not yet implemented"
-        Write-Host "Please run manually: bash scripts/postprovision.sh"
+        ./scripts/postprovision.ps1
       interactive: false
     posix:
       shell: sh
