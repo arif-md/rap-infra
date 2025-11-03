@@ -226,7 +226,79 @@ Address:  10.0.2.4  # Private IP in VNet
 
 1. ✅ Backend Container App deployed with managed identity enabled
 2. ✅ SQL Database deployed
-3. ✅ `spring-cloud-azure-starter-jdbc-mssql` dependency in `pom.xml`
+3. ✅ `azure-identity` and `mssql-jdbc` dependencies in `pom.xml`
+
+### How Managed Identity Authentication Works
+
+When the backend connects to SQL Database using managed identity, the authentication flow involves:
+
+1. **User-Assigned Managed Identity**: Created in Bicep (`infra/app/backend-springboot.bicep`)
+2. **AZURE_CLIENT_ID Environment Variable**: Points the Azure SDK to the correct identity
+3. **MSSQL JDBC Driver**: Uses `authentication=ActiveDirectoryMSI` mode
+4. **Azure Identity SDK**: Retrieves access token from Azure Instance Metadata Service (IMDS)
+5. **SQL Database**: Validates the token and grants access based on database roles
+
+#### Why AZURE_CLIENT_ID is Required
+
+Azure Container Apps can have multiple managed identities attached:
+- **System-assigned identity** (one per container app)
+- **User-assigned identities** (multiple can be attached)
+
+The `AZURE_CLIENT_ID` environment variable tells the Azure Identity SDK **which specific managed identity to use** for authentication.
+
+**Configuration in Bicep:**
+```bicep
+// Backend Container App environment variables
+var baseEnvArray = [
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: uai.properties.clientId  // Points to user-assigned identity's client ID
+  }
+  // ... other variables
+]
+```
+
+**How it's used:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Spring Boot App                                                  │
+│ ├─ Connection String: authentication=ActiveDirectoryMSI         │
+│ └─ MSSQL JDBC Driver                                             │
+│    └─ Azure Identity SDK (DefaultAzureCredential)                │
+│       └─ Checks AZURE_CLIENT_ID environment variable            │
+│          └─ Uses ManagedIdentityCredential with that client ID   │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Azure Instance Metadata Service (IMDS)                          │
+│ ├─ Endpoint: http://169.254.169.254/metadata/identity/oauth2    │
+│ ├─ Receives request with client_id parameter                    │
+│ └─ Returns access token for SQL Database resource               │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Azure SQL Database                                               │
+│ ├─ Validates access token                                       │
+│ ├─ Maps token to database user (created via SQL commands)       │
+│ └─ Grants permissions based on database roles                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Without AZURE_CLIENT_ID:**
+```
+❌ Error: [Managed Identity] Error Message: Unable to load the proper Managed Identity
+❌ The Azure SDK doesn't know which identity to use
+❌ Authentication fails
+```
+
+**With AZURE_CLIENT_ID:**
+```
+✅ Azure SDK uses the specified user-assigned managed identity
+✅ Gets access token from IMDS
+✅ Successfully authenticates to SQL Database
+```
 
 ### Step 1: Get Backend Managed Identity Name
 

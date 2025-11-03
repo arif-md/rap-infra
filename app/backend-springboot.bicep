@@ -93,6 +93,10 @@ var baseEnvArray = [
     name: 'SERVER_PORT'
     value: '8080'
   }
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: uai.properties.clientId
+  }
 ]
 
 // App Insights env vars (if enabled)
