@@ -108,10 +108,11 @@ var appInsightsEnv = (enableAppInsights && !empty(applicationInsightsName)) ? [
 ] : []
 
 // SQL Database env vars (if enabled) - using Azure AD managed identity authentication
+// For user-assigned managed identity, msiClientId parameter is REQUIRED in Container Apps
 var sqlEnv = enableSqlDatabase ? [
   {
     name: 'SPRING_DATASOURCE_URL'
-    value: 'jdbc:sqlserver://${sqlServerFqdn}:1433;database=${sqlDatabaseName};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;authentication=ActiveDirectoryMSI;'
+    value: 'jdbc:sqlserver://${sqlServerFqdn}:1433;database=${sqlDatabaseName};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;authentication=ActiveDirectoryMSI;msiClientId=${uai.properties.clientId};'
   }
   {
     name: 'SPRING_DATASOURCE_DRIVER_CLASS_NAME'
