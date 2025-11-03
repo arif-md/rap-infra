@@ -66,6 +66,12 @@ param sqlAdminLogin string = 'sqladmin'
 @secure()
 param sqlAdminPassword string
 
+@description('Azure AD admin object ID (for SQL Server Azure AD admin)')
+param sqlAzureAdAdminObjectId string = ''
+
+@description('Azure AD admin login name (display name or email)')
+param sqlAzureAdAdminLogin string = ''
+
 @description('SQL Database SKU name')
 param sqlDatabaseSku string = 'Basic'
 
@@ -175,6 +181,9 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
     tags: tags
     administratorLogin: sqlAdminLogin
     administratorPassword: sqlAdminPassword
+    // Azure AD admin configuration (for managed identity authentication)
+    azureAdAdminObjectId: sqlAzureAdAdminObjectId
+    azureAdAdminLogin: sqlAzureAdAdminLogin
     skuName: sqlDatabaseSku
     skuTier: sqlDatabaseTier
     // Use private endpoint only if VNet integration is enabled

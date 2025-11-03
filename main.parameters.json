@@ -35,6 +35,12 @@
       "sqlAdminPassword": {
         "value": "${SQL_ADMIN_PASSWORD}"
       },
+      "sqlAzureAdAdminObjectId": {
+        "value": "${SQL_AZURE_AD_ADMIN_OBJECT_ID=}"
+      },
+      "sqlAzureAdAdminLogin": {
+        "value": "${SQL_AZURE_AD_ADMIN_LOGIN=}"
+      },
       "sqlDatabaseSku": {
         "value": "${SQL_DATABASE_SKU=Basic}"
       },
