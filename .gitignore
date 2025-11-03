@@ -1,0 +1,12 @@
+# Bicep compiled ARM templates (auto-generated from .bicep files)
+*.json
+!main.parameters.json
+!abbreviations.json
+
+# Azure Developer CLI
+.azure/
+
+# Environment files
+.env
+*.env.local
+*.env.*.local

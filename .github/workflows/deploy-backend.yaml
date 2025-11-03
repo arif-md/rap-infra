@@ -142,6 +142,18 @@ jobs:
           fi
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Set SQL Admin Password - Required because 'azd up' provisions ALL infrastructure from main.bicep
+          # Even though this is the "backend deployment" workflow, azd up runs the complete Bicep deployment
+          # which includes SQL Server (a @secure() parameter requiring a value in non-interactive mode).
+          # Note: Backend application uses passwordless managed identity auth, not this admin password.
+          if [ -n "${{ secrets.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ secrets.SQL_ADMIN_PASSWORD }}"
+          elif [ -n "${{ vars.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ vars.SQL_ADMIN_PASSWORD }}"
+          else
+            echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
+          fi
 
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'backend-image-pushed'

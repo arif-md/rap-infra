@@ -114,6 +114,17 @@ jobs:
           fi
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Set SQL Admin Password - Required for SQL Server resource in main.bicep
+          # This is a @secure() Bicep parameter that requires a value in non-interactive mode (--no-prompt).
+          # Used only for SQL Server admin account; backend application uses passwordless managed identity.
+          if [ -n "${{ secrets.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ secrets.SQL_ADMIN_PASSWORD }}"
+          elif [ -n "${{ vars.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ vars.SQL_ADMIN_PASSWORD }}"
+          else
+            echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
