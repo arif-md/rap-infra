@@ -26,6 +26,9 @@
       "enableSqlDatabase": {
         "value": "${ENABLE_SQL_DATABASE=true}"
       },
+      "enableVnetIntegration": {
+        "value": "${ENABLE_VNET_INTEGRATION=false}"
+      },
       "sqlAdminLogin": {
         "value": "${SQL_ADMIN_LOGIN=sqladmin}"
       },

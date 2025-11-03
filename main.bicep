@@ -56,6 +56,9 @@ param backendMemory string = '2Gi'
 @description('Enable Azure SQL Database')
 param enableSqlDatabase bool = true
 
+@description('Enable VNet integration for Container Apps and SQL Private Endpoints (requires Microsoft.ContainerService provider)')
+param enableVnetIntegration bool = false
+
 @description('SQL Server administrator login')
 param sqlAdminLogin string = 'sqladmin'
 
@@ -115,7 +118,8 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
 }
 
 // Virtual Network for Container Apps and Private Endpoints
-module vnet 'shared/vnet.bicep' = if (enableSqlDatabase) {
+// Only deploy if VNet integration is enabled
+module vnet 'shared/vnet.bicep' = if (enableVnetIntegration) {
   name: 'vnet'
   params: {
     name: vnetName
@@ -138,7 +142,7 @@ module vnet 'shared/vnet.bicep' = if (enableSqlDatabase) {
 }
 
 // Private DNS Zone for SQL Server private endpoints
-module sqlPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableSqlDatabase) {
+module sqlPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableVnetIntegration && enableSqlDatabase) {
   name: 'sql-private-dns-zone'
   params: {
     zoneName: 'privatelink${environment().suffixes.sqlServerHostname}'
@@ -154,10 +158,11 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
     name: '${abbrs.appManagedEnvironments}${resourceToken}'
     location: location
     zoneRedundant: false
-    // VNet integration for Container Apps (if SQL is enabled)
-    infrastructureSubnetId: enableSqlDatabase ? vnet!.outputs.containerAppsSubnetId : null
-    internal: enableSqlDatabase
+    // VNet integration controlled by enableVnetIntegration parameter
+    infrastructureSubnetId: enableVnetIntegration ? vnet.outputs.containerAppsSubnetId : null
+    internal: enableVnetIntegration
   }
+  dependsOn: enableVnetIntegration ? [vnet] : []
 }
 
 // Azure SQL Database with private endpoint and managed identity
@@ -172,11 +177,17 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
     administratorPassword: sqlAdminPassword
     skuName: sqlDatabaseSku
     skuTier: sqlDatabaseTier
-    enablePrivateEndpoint: true
-    privateEndpointSubnetId: vnet!.outputs.privateEndpointsSubnetId
-    privateDnsZoneId: sqlPrivateDnsZone!.outputs.privateDnsZoneId
-    allowAzureServices: false  // Use private endpoint only
+    // Use private endpoint only if VNet integration is enabled
+    enablePrivateEndpoint: enableVnetIntegration
+    privateEndpointSubnetId: enableVnetIntegration ? vnet.outputs.privateEndpointsSubnetId : ''
+    privateDnsZoneId: enableVnetIntegration ? sqlPrivateDnsZone.outputs.privateDnsZoneId : ''
+    // Allow Azure services when NOT using private endpoints
+    allowAzureServices: !enableVnetIntegration
   }
+  dependsOn: enableVnetIntegration ? [
+    vnet
+    sqlPrivateDnsZone
+  ] : []
 }
 
 

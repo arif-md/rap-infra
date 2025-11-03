@@ -39,7 +39,7 @@ param collation string = 'SQL_Latin1_General_CP1_CI_AS'
 param maxSizeBytes int = 2147483648
 
 @description('Subnet ID for private endpoint')
-param privateEndpointSubnetId string
+param privateEndpointSubnetId string = ''
 
 @description('Enable private endpoint')
 param enablePrivateEndpoint bool = true

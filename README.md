@@ -1,4 +1,16 @@
-# Provision the infrastructure and deploy## Provision and deploy
+# Infrastructure Documentation
+
+## 📚 Quick Links
+
+- **[SQL Connection Guide](./SQL-CONNECTION-GUIDE.md)** - Complete guide to SQL Database connectivity, authentication, and network modes
+- **[VNet Integration Guide](./VNET-INTEGRATION-GUIDE.md)** - How to switch between public access and private endpoint modes
+- **[Image Resolution](./docs/IMAGE-RESOLUTION.md)** - Container image resolution and ACR integration
+
+---
+
+# Provision the infrastructure and deploy
+
+## Provision and deploy
 
 ```
 azd auth login
