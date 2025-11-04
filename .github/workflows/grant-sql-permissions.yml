@@ -85,13 +85,16 @@ jobs:
           echo "  SQL Database: $SQL_DATABASE"
           echo "  Backend Identity: $BACKEND_IDENTITY"
 
-      - name: Install sqlcmd
+      - name: Install SQL tools and Python dependencies
         run: |
+          # Install SQL Server ODBC Driver
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
           curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
           sudo apt-get update
-          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
-          echo "/opt/mssql-tools18/bin" >> $GITHUB_PATH
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+          
+          # Install Python pyodbc
+          pip3 install pyodbc
 
       - name: Add temporary firewall rule
         id: firewall
