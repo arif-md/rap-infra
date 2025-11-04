@@ -320,19 +320,19 @@ output sqlPermissionScript string = enableSqlDatabase ? '''
 -- ========================================
 
 -- Create user for backend managed identity
-CREATE USER [${backendIdentityName}] FROM EXTERNAL PROVIDER;
+CREATE USER [${backendIdentity.outputs.identityName}] FROM EXTERNAL PROVIDER;
 GO
 
 -- Grant read permissions
-ALTER ROLE db_datareader ADD MEMBER [${backendIdentityName}];
+ALTER ROLE db_datareader ADD MEMBER [${backendIdentity.outputs.identityName}];
 GO
 
 -- Grant write permissions
-ALTER ROLE db_datawriter ADD MEMBER [${backendIdentityName}];
+ALTER ROLE db_datawriter ADD MEMBER [${backendIdentity.outputs.identityName}];
 GO
 
 -- Grant DDL permissions (for Flyway migrations)
-ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentityName}];
+ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentity.outputs.identityName}];
 GO
 
 -- Verify the user was created
@@ -341,7 +341,7 @@ SELECT
     type_desc as UserType,
     create_date as CreatedDate
 FROM sys.database_principals 
-WHERE name = '${backendIdentityName}';
+WHERE name = '${backendIdentity.outputs.identityName}';
 GO
 
 -- ========================================
