@@ -26,6 +26,9 @@ param azureAdAdminObjectId string = ''
 @description('Azure AD admin login name')
 param azureAdAdminLogin string = ''
 
+@description('Azure AD admin principal type (User, Group, or Application for service principals)')
+param azureAdAdminPrincipalType string = 'Application'
+
 @description('SKU name for the SQL Database (e.g., Basic, S0, P1, GP_S_Gen5_2)')
 param skuName string = 'Basic'
 
@@ -66,7 +69,7 @@ resource sqlServer 'Microsoft.Sql/servers@2023-05-01-preview' = {
     publicNetworkAccess: enablePrivateEndpoint ? 'Disabled' : 'Enabled'
     administrators: !empty(azureAdAdminObjectId) ? {
       administratorType: 'ActiveDirectory'
-      principalType: 'User'
+      principalType: azureAdAdminPrincipalType
       login: azureAdAdminLogin
       sid: azureAdAdminObjectId
       tenantId: subscription().tenantId

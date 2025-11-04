@@ -145,6 +145,14 @@ jobs:
             echo "WARNING: SQL_AZURE_AD_ADMIN_LOGIN not set. Using default: sp-raptordev"
             azd env set SQL_AZURE_AD_ADMIN_LOGIN "sp-raptordev"
           fi
+          
+          # Set principal type - "Application" for service principals, "User" for user accounts
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE || '' }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE }}"
+          else
+            echo "Using default principal type: Application (service principal)"
+            azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "Application"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
