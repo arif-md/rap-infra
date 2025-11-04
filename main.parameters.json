@@ -41,6 +41,9 @@
       "sqlAzureAdAdminLogin": {
         "value": "${SQL_AZURE_AD_ADMIN_LOGIN=}"
       },
+      "sqlAzureAdAdminPrincipalType": {
+        "value": "${SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE=Application}"
+      },
       "sqlDatabaseSku": {
         "value": "${SQL_DATABASE_SKU=Basic}"
       },
