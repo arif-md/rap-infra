@@ -166,6 +166,7 @@ jobs:
           python3 << PYTHON_SCRIPT
           import struct
           import pyodbc
+          import sys
           
           # Azure AD access token authentication
           token = "$TOKEN"
@@ -175,28 +176,66 @@ jobs:
           # Connection string with access token
           connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER=$SQL_SERVER_FQDN;DATABASE=$SQL_DATABASE;Encrypt=yes;TrustServerCertificate=no"
           
-          # Read SQL script
-          with open('/tmp/grant-permissions.sql', 'r') as f:
-              sql_script = f.read()
-          
-          # Connect and execute
-          conn = pyodbc.connect(connection_string, attrs_before={1256: token_struct})
-          cursor = conn.cursor()
-          
-          # Execute each batch (split by GO)
-          for batch in sql_script.split('GO'):
-              batch = batch.strip()
-              if batch:
-                  cursor.execute(batch)
-          
-          conn.commit()
-          cursor.close()
-          conn.close()
-          
-          print("✅ SQL permissions granted successfully!")
+          try:
+              # Read SQL script
+              with open('/tmp/grant-permissions.sql', 'r') as f:
+                  sql_script = f.read()
+              
+              # Connect and execute
+              conn = pyodbc.connect(connection_string, attrs_before={1256: token_struct})
+              cursor = conn.cursor()
+              
+              # Execute each batch (split by GO)
+              for batch in sql_script.split('GO'):
+                  batch = batch.strip()
+                  if batch:
+                      print(f"Executing SQL batch...")
+                      try:
+                          cursor.execute(batch)
+                          # Print any messages from SQL Server
+                          while cursor.nextset():
+                              pass
+                      except pyodbc.Error as e:
+                          print(f"❌ SQL Error: {e}")
+                          raise
+              
+              conn.commit()
+              cursor.close()
+              conn.close()
+              
+              print("✅ SQL permissions granted successfully!")
+          except Exception as e:
+              print(f"❌ Failed to grant SQL permissions: {e}")
+              sys.exit(1)
           PYTHON_SCRIPT
           
           echo "✅ SQL permissions granted successfully!"
+
+      - name: Restart backend container app
+        if: success()
+        run: |
+          echo "Restarting backend container app to pick up new SQL permissions..."
+          BACKEND_APP=$(az containerapp list \
+            --resource-group "${{ steps.get-env.outputs.resource_group }}" \
+            --query "[?contains(name, 'backend') || contains(name, 'be')].name" -o tsv | head -n 1)
+          
+          if [ -n "$BACKEND_APP" ]; then
+            echo "Found backend app: $BACKEND_APP"
+            REVISION=$(az containerapp revision list \
+              --name "$BACKEND_APP" \
+              --resource-group "${{ steps.get-env.outputs.resource_group }}" \
+              --query "[0].name" -o tsv)
+            
+            echo "Restarting revision: $REVISION"
+            az containerapp revision restart \
+              --name "$BACKEND_APP" \
+              --resource-group "${{ steps.get-env.outputs.resource_group }}" \
+              --revision "$REVISION"
+            
+            echo "✅ Backend container app restarted successfully!"
+          else
+            echo "⚠️  No backend container app found - skipping restart"
+          fi
 
       - name: Remove firewall rule
         if: always() && steps.firewall.outputs.firewall_rule

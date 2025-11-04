@@ -190,6 +190,32 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
+      - name: Extract SQL permission script
+        if: success()
+        shell: bash
+        run: |
+          echo "Extracting SQL permission script from deployment outputs..."
+          
+          # Get the latest deployment
+          DEPLOYMENT=$(az deployment group list \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query "[0].name" -o tsv)
+          
+          # Get the SQL permission script output
+          SQL_SCRIPT=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT" \
+            --query "properties.outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
+          
+          if [ -n "$SQL_SCRIPT" ] && [ "$SQL_SCRIPT" != "null" ] && [ "$SQL_SCRIPT" != "" ]; then
+            echo "SQL_PERMISSION_SCRIPT<<EOF" >> $GITHUB_ENV
+            echo "$SQL_SCRIPT" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "HAS_SQL_SCRIPT=true" >> $GITHUB_ENV
+          else
+            echo "HAS_SQL_SCRIPT=false" >> $GITHUB_ENV
+          fi
+
       - name: Show deployment summary
         if: success()
         shell: bash
@@ -239,6 +265,39 @@ jobs:
                 fi
               done
             fi
+            
+            # Add SQL permission script if available
+            if [ "$HAS_SQL_SCRIPT" = "true" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "### 🔐 SQL Permissions Setup Required"
+              echo ""
+              echo "**⚠️ MANUAL ACTION NEEDED**: Execute the following SQL script to grant database permissions to the backend managed identity."
+              echo ""
+              echo "**Instructions**:"
+              echo "1. Go to [Azure Portal](https://portal.azure.com)"
+              echo "2. Navigate to SQL Database: \`$AZURE_RESOURCE_GROUP\` resource group"
+              echo "3. Click on the SQL Database"
+              echo "4. Click **Query editor** in the left menu"
+              echo "5. Sign in with **Azure AD** (use the SQL Server Azure AD admin account)"
+              echo "6. Copy and paste the script below"
+              echo "7. Click **Run**"
+              echo ""
+              echo "<details>"
+              echo "<summary>📋 Click to expand SQL Permission Script</summary>"
+              echo ""
+              echo "\`\`\`sql"
+              echo "$SQL_PERMISSION_SCRIPT"
+              echo "\`\`\`"
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "After executing the script, restart the backend container app:"
+              echo "\`\`\`bash"
+              echo "az containerapp revision restart --name <backend-app-name> --resource-group $AZURE_RESOURCE_GROUP"
+              echo "\`\`\`"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Notify on failure
@@ -253,10 +312,14 @@ jobs:
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
 
-  grant-sql-permissions:
-    needs: provision
-    uses: ./.github/workflows/grant-sql-permissions.yml
-    with:
-      environment: ${{ inputs.targetEnv || 'dev' }}
-      resource_group: ${{ needs.provision.outputs.resource_group }}
-    secrets: inherit
+  # SQL permissions are now granted manually via Azure Portal
+  # See the "SQL Database Permissions" section in the provision job summary above
+  # for the generated SQL script and step-by-step instructions
+  #
+  # grant-sql-permissions:
+  #   needs: provision
+  #   uses: ./.github/workflows/grant-sql-permissions.yml
+  #   with:
+  #     environment: ${{ inputs.targetEnv || 'dev' }}
+  #     resource_group: ${{ needs.provision.outputs.resource_group }}
+  #   secrets: inherit
