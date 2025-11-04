@@ -127,6 +127,21 @@ jobs:
           else
             echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
           fi
+          
+          # Set SQL Azure AD Admin - Required for passwordless authentication and managed identity permissions
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID || '' }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID }}"
+          else
+            echo "WARNING: SQL_AZURE_AD_ADMIN_OBJECT_ID not set. Using service principal from AZURE_CLIENT_ID."
+            azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ secrets.AZURE_CLIENT_ID }}"
+          fi
+          
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN || '' }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_LOGIN "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN }}"
+          else
+            echo "WARNING: SQL_AZURE_AD_ADMIN_LOGIN not set. Using default: sp-raptordev"
+            azd env set SQL_AZURE_AD_ADMIN_LOGIN "sp-raptordev"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
