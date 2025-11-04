@@ -196,23 +196,34 @@ jobs:
         run: |
           echo "Extracting SQL permission script from deployment outputs..."
           
-          # Get the latest deployment
-          DEPLOYMENT=$(az deployment group list \
+          # Try to get from deployment stack first (alpha feature)
+          STACK_NAME="$AZURE_ENV_NAME"
+          SQL_SCRIPT=$(az stack group show \
+            --name "$STACK_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --query "[0].name" -o tsv)
+            --query "outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
           
-          # Get the SQL permission script output
-          SQL_SCRIPT=$(az deployment group show \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --name "$DEPLOYMENT" \
-            --query "properties.outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
+          # Fallback to regular deployment if stack query fails
+          if [ -z "$SQL_SCRIPT" ] || [ "$SQL_SCRIPT" = "null" ]; then
+            echo "Stack query failed or returned null, trying regular deployment..."
+            DEPLOYMENT=$(az deployment group list \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query "[0].name" -o tsv)
+            
+            SQL_SCRIPT=$(az deployment group show \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$DEPLOYMENT" \
+              --query "properties.outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
+          fi
           
           if [ -n "$SQL_SCRIPT" ] && [ "$SQL_SCRIPT" != "null" ] && [ "$SQL_SCRIPT" != "" ]; then
+            echo "✅ SQL permission script extracted successfully"
             echo "SQL_PERMISSION_SCRIPT<<EOF" >> $GITHUB_ENV
             echo "$SQL_SCRIPT" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             echo "HAS_SQL_SCRIPT=true" >> $GITHUB_ENV
           else
+            echo "⚠️ No SQL permission script found in deployment outputs"
             echo "HAS_SQL_SCRIPT=false" >> $GITHUB_ENV
           fi
 
