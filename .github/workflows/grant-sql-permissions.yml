@@ -204,4 +204,4 @@ jobs:
           az sql server firewall-rule delete \
             -g ${{ steps.get-env.outputs.resource_group }} \
             -s ${{ steps.get-env.outputs.sql_server }} \
-            -n "${{ steps.firewall_rule }}" || true
+            -n "${{ steps.firewall.outputs.firewall_rule }}" || true
