@@ -113,12 +113,17 @@ jobs:
           SQL_SERVER: ${{ steps.get-env.outputs.sql_server }}
           SQL_DATABASE: ${{ steps.get-env.outputs.sql_database }}
           BACKEND_IDENTITY: ${{ steps.get-env.outputs.backend_identity }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           SQL_SERVER_FQDN="${SQL_SERVER}.database.windows.net"
           
           echo "Granting permissions to managed identity: $BACKEND_IDENTITY"
           
-          # Create SQL script file (to avoid command line length issues)
+          # Get Azure AD access token for SQL Database
+          TOKEN=$(az account get-access-token --resource https://database.windows.net/ --query accessToken -o tsv)
+          
+          # Create SQL script file
           cat > /tmp/grant-permissions.sql << 'EOF'
           IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '$(BACKEND_IDENTITY)')
           BEGIN
@@ -154,10 +159,39 @@ jobs:
           # Replace placeholder with actual identity name
           sed -i "s/\$(BACKEND_IDENTITY)/$BACKEND_IDENTITY/g" /tmp/grant-permissions.sql
           
-          # Execute SQL using Azure AD authentication (interactive mode)
-          # -G enables Azure AD authentication using az cli token
-          /opt/mssql-tools18/bin/sqlcmd -S $SQL_SERVER_FQDN -d $SQL_DATABASE \
-            -G -C -i /tmp/grant-permissions.sql
+          # Use Python with pyodbc to execute SQL (more reliable for Azure AD auth in automation)
+          python3 << PYTHON_SCRIPT
+          import struct
+          import pyodbc
+          
+          # Azure AD access token authentication
+          token = "$TOKEN"
+          token_bytes = token.encode('utf-16-le')
+          token_struct = struct.pack(f'<I{len(token_bytes)}s', len(token_bytes), token_bytes)
+          
+          # Connection string with access token
+          connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER=$SQL_SERVER_FQDN;DATABASE=$SQL_DATABASE;Encrypt=yes;TrustServerCertificate=no"
+          
+          # Read SQL script
+          with open('/tmp/grant-permissions.sql', 'r') as f:
+              sql_script = f.read()
+          
+          # Connect and execute
+          conn = pyodbc.connect(connection_string, attrs_before={1256: token_struct})
+          cursor = conn.cursor()
+          
+          # Execute each batch (split by GO)
+          for batch in sql_script.split('GO'):
+              batch = batch.strip()
+              if batch:
+                  cursor.execute(batch)
+          
+          conn.commit()
+          cursor.close()
+          conn.close()
+          
+          print("✅ SQL permissions granted successfully!")
+          PYTHON_SCRIPT
           
           echo "✅ SQL permissions granted successfully!"
 
