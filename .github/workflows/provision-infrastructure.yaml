@@ -20,6 +20,8 @@ jobs:
   provision:
     runs-on: ubuntu-latest
     environment: ${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+    outputs:
+      resource_group: ${{ env.AZURE_RESOURCE_GROUP }}
     concurrency:
       group: azure-deployment-${{ inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
       cancel-in-progress: false
@@ -230,4 +232,5 @@ jobs:
     uses: ./.github/workflows/grant-sql-permissions.yml
     with:
       environment: ${{ inputs.targetEnv || 'dev' }}
+      resource_group: ${{ needs.provision.outputs.resource_group }}
     secrets: inherit

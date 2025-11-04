@@ -7,10 +7,17 @@ on:
         description: 'Environment name (dev, staging, prod)'
         required: true
         default: 'dev'
+      resource_group:
+        description: 'Azure resource group name (optional, will auto-discover if not provided)'
+        required: false
   workflow_call:
     inputs:
       environment:
         description: 'Environment name'
+        required: true
+        type: string
+      resource_group:
+        description: 'Azure resource group name'
         required: true
         type: string
 
@@ -37,11 +44,17 @@ jobs:
       - name: Get Azure environment variables
         id: get-env
         run: |
-          # Get resource group and SQL server info from Azure
-          RESOURCE_GROUP=$(az group list --query "[?contains(name, 'rg-raptor-${{ inputs.environment }}')].name" -o tsv | head -n 1)
-          if [ -z "$RESOURCE_GROUP" ]; then
-            echo "❌ Resource group not found for environment ${{ inputs.environment }}"
-            exit 1
+          # Use provided resource group or auto-discover
+          if [ -n "${{ inputs.resource_group }}" ]; then
+            RESOURCE_GROUP="${{ inputs.resource_group }}"
+            echo "Using provided resource group: $RESOURCE_GROUP"
+          else
+            RESOURCE_GROUP=$(az group list --query "[?contains(name, 'rg-raptor-${{ inputs.environment }}')].name" -o tsv | head -n 1)
+            if [ -z "$RESOURCE_GROUP" ]; then
+              echo "❌ Resource group not found for environment ${{ inputs.environment }}"
+              exit 1
+            fi
+            echo "Auto-discovered resource group: $RESOURCE_GROUP"
           fi
           echo "resource_group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
           
