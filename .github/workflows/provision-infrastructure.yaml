@@ -197,7 +197,7 @@ jobs:
           echo "Extracting SQL permission script from deployment outputs..."
           
           # Try to get from deployment stack first (alpha feature)
-          STACK_NAME="$AZURE_ENV_NAME"
+          STACK_NAME="azd-stack-$AZURE_ENV_NAME"
           SQL_SCRIPT=$(az stack group show \
             --name "$STACK_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
