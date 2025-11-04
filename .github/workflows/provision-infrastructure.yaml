@@ -128,6 +128,9 @@ jobs:
             echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
           fi
           
+          echo "DEBUG: SQL_AZURE_AD_ADMIN_OBJECT_ID : ${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID || '' }}"
+          echo "DEBUG: SQL_AZURE_AD_ADMIN_LOGIN : ${{ vars.SQL_AZURE_AD_ADMIN_LOGIN || '' }}"
+          
           # Set SQL Azure AD Admin - Required for passwordless authentication and managed identity permissions
           if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID || '' }}" ]; then
             azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID }}"
