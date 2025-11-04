@@ -27,14 +27,17 @@ hooks:
         ./scripts/ensure-acr.sh
       interactive: false
   
-  postprovision:
-    windows:
-      shell: pwsh
-      run: |
-        ./scripts/postprovision.ps1
-      interactive: false
-    posix:
-      shell: sh
-      run: |
-        ./scripts/postprovision.sh
-      interactive: false
+  # Postprovision hooks disabled - SQL permissions now handled by:
+  # - Local dev: Manual grant via Azure Portal Query Editor (one-time)
+  # - GitHub Actions: Automated via grant-sql-permissions.yml workflow
+  # postprovision:
+  #   windows:
+  #     shell: pwsh
+  #     run: |
+  #       ./scripts/postprovision.ps1
+  #     interactive: false
+  #   posix:
+  #     shell: sh
+  #     run: |
+  #       ./scripts/postprovision.sh
+  #     interactive: false

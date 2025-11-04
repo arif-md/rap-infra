@@ -224,3 +224,10 @@ jobs:
           echo "  - Invalid Bicep configuration"
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
+
+  grant-sql-permissions:
+    needs: provision
+    uses: ./.github/workflows/grant-sql-permissions.yml
+    with:
+      environment: ${{ inputs.targetEnv || 'dev' }}
+    secrets: inherit
