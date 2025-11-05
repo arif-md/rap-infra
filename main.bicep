@@ -304,35 +304,40 @@ output backendIdentityName string = backendIdentityName
 output backendIdentityPrincipalId string = backend.outputs.identityPrincipalId
 
 // SQL permission grant script for manual execution via Azure Portal
-output sqlPermissionScript string = enableSqlDatabase ? '''
+output sqlPermissionScript string = enableSqlDatabase ? replace(replace('''
 -- ========================================
 -- SQL Permissions for Backend Managed Identity
 -- ========================================
 -- Execute this script in Azure Portal Query Editor after deployment
--- Connect to database: ${sqlDatabase!.outputs.sqlDatabaseName}
+-- Connect to database: __DATABASE_NAME__
+--
+-- IMPORTANT: Replace the variable placeholder below with the actual value:
+-- Variable: backendIdentityName
+-- Value: __IDENTITY_VALUE__
 --
 -- Instructions:
--- 1. Go to Azure Portal > SQL Database > ${sqlDatabase!.outputs.sqlDatabaseName}
+-- 1. Go to Azure Portal > SQL Database > __DATABASE_NAME__
 -- 2. Click "Query editor" in left menu
 -- 3. Sign in with Azure AD (use the SQL Server Azure AD admin account)
--- 4. Copy and paste this entire script
--- 5. Click "Run"
+-- 4. Copy this entire script
+-- 5. Replace ${backendIdentityName} with the value shown above
+-- 6. Click "Run"
 -- ========================================
 
 -- Create user for backend managed identity
-CREATE USER [${backendIdentity.outputs.identityName}] FROM EXTERNAL PROVIDER;
+CREATE USER [${backendIdentityName}] FROM EXTERNAL PROVIDER;
 GO
 
 -- Grant read permissions
-ALTER ROLE db_datareader ADD MEMBER [${backendIdentity.outputs.identityName}];
+ALTER ROLE db_datareader ADD MEMBER [${backendIdentityName}];
 GO
 
 -- Grant write permissions
-ALTER ROLE db_datawriter ADD MEMBER [${backendIdentity.outputs.identityName}];
+ALTER ROLE db_datawriter ADD MEMBER [${backendIdentityName}];
 GO
 
 -- Grant DDL permissions (for Flyway migrations)
-ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentity.outputs.identityName}];
+ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentityName}];
 GO
 
 -- Verify the user was created
@@ -341,13 +346,13 @@ SELECT
     type_desc as UserType,
     create_date as CreatedDate
 FROM sys.database_principals 
-WHERE name = '${backendIdentity.outputs.identityName}';
+WHERE name = '${backendIdentityName}';
 GO
 
 -- ========================================
 -- Script execution complete!
 -- ========================================
-''' : ''
+''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__IDENTITY_VALUE__', backendIdentityName) : ''
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
