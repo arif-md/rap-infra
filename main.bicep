@@ -81,6 +81,41 @@ param sqlDatabaseSku string = 'Basic'
 @description('SQL Database tier')
 param sqlDatabaseTier string = 'Basic'
 
+@description('OIDC Provider Authorization Endpoint URL')
+param oidcAuthorizationEndpoint string = ''
+
+@description('OIDC Provider Token Endpoint URL')
+param oidcTokenEndpoint string = ''
+
+@description('OIDC Provider User Info Endpoint URL')
+param oidcUserInfoEndpoint string = ''
+
+@description('OIDC Provider JWK Set URI')
+param oidcJwkSetUri string = ''
+
+@description('OIDC Client ID')
+param oidcClientId string = ''
+
+@description('OIDC Client Secret (will be stored in Key Vault)')
+@secure()
+param oidcClientSecret string = ''
+
+@description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
+@secure()
+param jwtSecret string = ''
+
+@description('JWT Issuer (default: raptor-app)')
+param jwtIssuer string = 'raptor-app'
+
+@description('JWT Access Token Expiration in Minutes (default: 15)')
+param jwtAccessTokenExpirationMinutes int = 15
+
+@description('JWT Refresh Token Expiration in Days (default: 7)')
+param jwtRefreshTokenExpirationDays int = 7
+
+@description('CORS Allowed Origins (comma-separated)')
+param corsAllowedOrigins string = ''
+
 @description('Tags to apply to all resources')
 param tags object = {
   environment: environmentName
@@ -123,6 +158,27 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
     applicationInsightsDashboardName: '${abbrs.portalDashboards}${resourceToken}'
     location: location
     tags: tags
+  }
+}
+
+// Key Vault for storing secrets (OIDC client secret, JWT secret)
+module keyVault 'shared/keyvault.bicep' = {
+  name: 'keyVault'
+  params: {
+    name: '${abbrs.keyVaultVaults}${resourceToken}'
+    location: location
+    tags: tags
+    principalId: '' // No principal by default; backend identity will be granted access via access policy
+    secrets: [
+      {
+        name: 'oidc-client-secret'
+        value: oidcClientSecret
+      }
+      {
+        name: 'jwt-secret'
+        value: jwtSecret
+      }
+    ]
   }
 }
 
@@ -278,6 +334,22 @@ module backend 'app/backend-springboot.bicep' = {
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
     sqlAdminLogin: sqlAdminLogin
+    // Key Vault configuration for OIDC and JWT secrets
+    keyVaultName: keyVault.outputs.name
+    keyVaultEndpoint: keyVault.outputs.endpoint
+    // OIDC configuration
+    oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
+    oidcTokenEndpoint: oidcTokenEndpoint
+    oidcUserInfoEndpoint: oidcUserInfoEndpoint
+    oidcJwkSetUri: oidcJwkSetUri
+    oidcClientId: oidcClientId
+    // JWT configuration
+    jwtIssuer: jwtIssuer
+    jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
+    jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
+    // CORS and Frontend URL
+    corsAllowedOrigins: corsAllowedOrigins
+    frontendUrl: 'https://${frontend.outputs.fqdn}'
     // Optional env vars (can be extended later)
     envVars: [
       {

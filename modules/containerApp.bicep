@@ -25,6 +25,22 @@ param minReplicas int = 1
 param maxReplicas int = 3
 param acrLoginServer string
 
+@description('Key Vault name for secret references (optional)')
+param keyVaultName string = ''
+
+@description('Key Vault endpoint URI (e.g., https://myvault.vault.azure.net/)')
+param keyVaultEndpoint string = ''
+
+@description('Secrets to create from Key Vault (array of { name: secretName })')
+param keyVaultSecrets array = []
+
+// Build secrets array for Container App from Key Vault references
+var secrets = [for secret in keyVaultSecrets: {
+  name: secret.name
+  keyVaultUrl: '${keyVaultEndpoint}secrets/${secret.name}'
+  identity: userAssignedIdentity
+}]
+
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: name
   location: location
@@ -64,7 +80,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       dapr: {
         enabled: false
       }
-      secrets: []
+      secrets: secrets
       /*runtime: {
         containerAppRuntimePlatform: {
           osType: 'Linux'

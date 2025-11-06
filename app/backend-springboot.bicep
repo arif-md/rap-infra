@@ -63,6 +63,30 @@ param sqlDatabaseName string = ''
 @description('SQL admin login username')
 param sqlAdminLogin string = ''
 
+@description('Key Vault name for secrets (OIDC client secret, JWT secret)')
+param keyVaultName string = ''
+
+@description('Key Vault endpoint URI (e.g., https://myvault.vault.azure.net/)')
+param keyVaultEndpoint string = ''
+
+@description('OIDC Configuration')
+param oidcAuthorizationEndpoint string = ''
+param oidcTokenEndpoint string = ''
+param oidcUserInfoEndpoint string = ''
+param oidcJwkSetUri string = ''
+param oidcClientId string = ''
+
+@description('JWT Configuration')
+param jwtIssuer string = 'raptor-app'
+param jwtAccessTokenExpirationMinutes int = 15
+param jwtRefreshTokenExpirationDays int = 7
+
+@description('CORS Configuration')
+param corsAllowedOrigins string = ''
+
+@description('Frontend URL for redirects')
+param frontendUrl string = ''
+
 // Existing (shared) resources
 resource cai 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppsEnvironmentName
@@ -128,14 +152,103 @@ var sqlEnv = enableSqlDatabase ? [
   }
 ] : []
 
-// Combine base env + optional App Insights + SQL + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, envVars)
+// OIDC env vars (if OIDC is configured)
+var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
+  {
+    name: 'OIDC_AUTHORIZATION_ENDPOINT'
+    value: oidcAuthorizationEndpoint
+  }
+  {
+    name: 'OIDC_TOKEN_ENDPOINT'
+    value: oidcTokenEndpoint
+  }
+  {
+    name: 'OIDC_USER_INFO_ENDPOINT'
+    value: oidcUserInfoEndpoint
+  }
+  {
+    name: 'OIDC_JWK_SET_URI'
+    value: oidcJwkSetUri
+  }
+  {
+    name: 'OIDC_CLIENT_ID'
+    value: oidcClientId
+  }
+  {
+    name: 'OIDC_CLIENT_SECRET'
+    secretRef: 'oidc-client-secret'
+  }
+] : []
+
+// JWT env vars (if Key Vault is configured)
+var jwtEnv = !empty(keyVaultName) ? [
+  {
+    name: 'JWT_SECRET'
+    secretRef: 'jwt-secret'
+  }
+  {
+    name: 'JWT_ISSUER'
+    value: jwtIssuer
+  }
+  {
+    name: 'JWT_ACCESS_TOKEN_EXPIRATION_MINUTES'
+    value: string(jwtAccessTokenExpirationMinutes)
+  }
+  {
+    name: 'JWT_REFRESH_TOKEN_EXPIRATION_DAYS'
+    value: string(jwtRefreshTokenExpirationDays)
+  }
+] : []
+
+// CORS and Frontend URL env vars
+var corsEnv = !empty(corsAllowedOrigins) ? [
+  {
+    name: 'CORS_ALLOWED_ORIGINS'
+    value: corsAllowedOrigins
+  }
+  {
+    name: 'FRONTEND_URL'
+    value: frontendUrl
+  }
+] : []
+
+// Combine base env + optional App Insights + SQL + OIDC + JWT + CORS + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, jwtEnv, corsEnv, envVars)
+
+// Key Vault secrets to reference (if Key Vault is configured)
+var kvSecrets = !empty(keyVaultName) ? [
+  { name: 'oidc-client-secret' }
+  { name: 'jwt-secret' }
+] : []
+
+// Reference existing Key Vault
+resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = if (!empty(keyVaultName)) {
+  name: keyVaultName
+}
+
+// Grant backend identity access to Key Vault secrets
+resource kvAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2022-07-01' = if (!empty(keyVaultName)) {
+  name: 'add'
+  parent: keyVault
+  properties: {
+    accessPolicies: [
+      {
+        tenantId: subscription().tenantId
+        objectId: uai.properties.principalId
+        permissions: {
+          secrets: ['get', 'list']
+        }
+      }
+    ]
+  }
+}
 
 module backend '../modules/containerApp.bicep' = {
   name: 'backendContainer'
   // Ensure role assignment is in place before the app tries to pull the image
   dependsOn: [
     acrPull
+    kvAccessPolicy
   ]
   params: {
     name: name
@@ -154,6 +267,10 @@ module backend '../modules/containerApp.bicep' = {
     minReplicas: minReplicas
     maxReplicas: maxReplicas    
     envVars: combinedEnv
+    // Key Vault configuration for secret references
+    keyVaultName: keyVaultName
+    keyVaultEndpoint: keyVaultEndpoint
+    keyVaultSecrets: kvSecrets
     tags: union(tags, {
       'azd-service-name': 'backend'
     })
