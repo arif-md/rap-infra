@@ -1,10 +1,15 @@
-# OIDC Configuration for Azure Deployment
+# OIDC Configuration Guide
 
-This guide explains how to configure OIDC authentication for the RAP application when deploying to Azure Container Apps.
+This guide explains how to configure OIDC authentication for the RAP application in both **local development** (Docker with Keycloak) and **Azure deployment** (Container Apps with external custom OIDC provider).
 
 ## Overview
 
-The infrastructure uses **Azure Key Vault** to securely store sensitive OIDC and JWT secrets. The backend Container App is granted access to retrieve these secrets at runtime.
+The RAP application uses **explicit OIDC endpoint configuration** to support flexible authentication across environments:
+
+- **Local Development**: Uses Docker-based Keycloak with split-horizon DNS (localhost:9090 for browser, keycloak:9090 for backend container)
+- **Azure Production**: Uses external custom OIDC provider (hosted outside Azure) with unified HTTPS endpoints
+
+The infrastructure uses **Azure Key Vault** to securely store sensitive OIDC and JWT secrets. The backend Container App is granted access to retrieve these secrets at runtime via managed identity.
 
 ## Architecture
 
@@ -36,25 +41,61 @@ The infrastructure uses **Azure Key Vault** to securely store sensitive OIDC and
 └─────────────────────┘
 ```
 
-## Required Environment Variables
+## Configuration by Environment
 
-Before deploying with `azd up`, you must set the following environment variables:
+### Local Development (Docker Compose)
 
-### OIDC Provider Configuration
+Local development uses Keycloak running in Docker with **explicit endpoint configuration** to solve Docker networking constraints.
 
-```powershell
-# Set OIDC endpoints (example for Keycloak)
-azd env set OIDC_AUTHORIZATION_ENDPOINT "https://your-keycloak.com/realms/your-realm/protocol/openid-connect/auth"
-azd env set OIDC_TOKEN_ENDPOINT "https://your-keycloak.com/realms/your-realm/protocol/openid-connect/token"
-azd env set OIDC_USER_INFO_ENDPOINT "https://your-keycloak.com/realms/your-realm/protocol/openid-connect/userinfo"
-azd env set OIDC_JWK_SET_URI "https://your-keycloak.com/realms/your-realm/protocol/openid-connect/certs"
+**Why explicit endpoints?** In Docker, the backend container cannot use `localhost:9090` to reach Keycloak because `localhost` refers to the container itself. We use separate URLs:
+- **Authorization endpoint**: `http://localhost:9090` (for browser redirects)
+- **Backend-to-Keycloak endpoints**: `http://keycloak:9090` (internal Docker network)
 
-# Set OIDC client credentials
-azd env set OIDC_CLIENT_ID "raptor-app-client"
-azd env set OIDC_CLIENT_SECRET "your-client-secret-from-oidc-provider"
+**Configuration in `.env` file:**
+```properties
+# OIDC Provider Issuer URI - Leave EMPTY to use explicit endpoints
+OIDC_PROVIDER_ISSUER_URI=
+
+# Explicit OIDC endpoints (required for Docker networking)
+OIDC_AUTHORIZATION_ENDPOINT=http://localhost:9090/realms/raptor/protocol/openid-connect/auth
+OIDC_TOKEN_ENDPOINT=http://keycloak:9090/realms/raptor/protocol/openid-connect/token
+OIDC_USER_INFO_ENDPOINT=http://keycloak:9090/realms/raptor/protocol/openid-connect/userinfo
+OIDC_JWK_SET_URI=http://keycloak:9090/realms/raptor/protocol/openid-connect/certs
+
+# OIDC client credentials (from Keycloak admin console)
+OIDC_CLIENT_ID=raptor-client
+OIDC_CLIENT_SECRET=QBkqpwoYU8xhFomyxOvUIbhPR2tIoAQt
+
+# CORS and Frontend URLs
+CORS_ALLOWED_ORIGINS=http://localhost:4200,http://localhost:3000
+FRONTEND_URL=http://localhost:4200
 ```
 
-**For Azure AD (Entra ID):**
+**Key Points:**
+- `OIDC_PROVIDER_ISSUER_URI` is intentionally empty to prevent auto-discovery failures
+- Authorization endpoint uses `localhost:9090` so browser can redirect
+- Token/UserInfo/JWK endpoints use `keycloak:9090` for backend-to-Keycloak communication
+- See `backend/.env.example` for complete local configuration
+
+### Azure Deployment (Custom External OIDC Provider)
+
+Azure deployment uses an **external custom OIDC provider** hosted outside of Azure. Since both browser and backend can reach the same HTTPS URL, configuration is simpler.
+
+**Required azd Environment Variables:**
+
+```powershell
+# Set OIDC endpoints (example for custom OIDC provider)
+azd env set OIDC_AUTHORIZATION_ENDPOINT "https://your-oidc-provider.example.com/oauth2/authorize"
+azd env set OIDC_TOKEN_ENDPOINT "https://your-oidc-provider.example.com/oauth2/token"
+azd env set OIDC_USER_INFO_ENDPOINT "https://your-oidc-provider.example.com/oauth2/userinfo"
+azd env set OIDC_JWK_SET_URI "https://your-oidc-provider.example.com/oauth2/jwks"
+
+# Set OIDC client credentials (from your OIDC provider)
+azd env set OIDC_CLIENT_ID "raptor-azure-client"
+azd env set OIDC_CLIENT_SECRET "your-production-client-secret"
+```
+
+**Alternative: Azure AD (Entra ID)** (if you switch to Microsoft's identity platform):
 ```powershell
 azd env set OIDC_AUTHORIZATION_ENDPOINT "https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize"
 azd env set OIDC_TOKEN_ENDPOINT "https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token"
@@ -63,6 +104,12 @@ azd env set OIDC_JWK_SET_URI "https://login.microsoftonline.com/{tenant-id}/disc
 azd env set OIDC_CLIENT_ID "{application-client-id}"
 azd env set OIDC_CLIENT_SECRET "{application-client-secret}"
 ```
+
+**Key Points:**
+- All endpoints use the same base URL (no split-horizon needed)
+- HTTPS endpoints are accessible from both browser and backend Container Apps
+- Use separate OIDC client for production (different client ID and secret from local)
+- Configure redirect URI in your OIDC provider: `https://<backend-fqdn>.azurecontainerapps.io/auth/callback`
 
 ### JWT Configuration
 
@@ -254,6 +301,7 @@ azd up
 **Symptoms:**
 - `/auth/callback` returns 401 or 500
 - Logs show "Invalid token" or "Invalid client"
+- Browser shows CORS errors when redirecting to OIDC provider
 
 **Solution:**
 1. Verify OIDC endpoints are correct:
@@ -270,7 +318,50 @@ azd up
    ```
 
 3. Check OIDC provider redirect URI configuration:
-   - Add: `https://<backend-fqdn>/auth/callback`
+   - **Azure**: Add `https://<backend-fqdn>/auth/callback`
+   - **Local**: Add `http://localhost:8080/auth/callback`
+   - Ensure exact URL match (including protocol and port)
+
+4. Verify OIDC provider allows CORS from your frontend:
+   - **Azure**: Add `https://<frontend-fqdn>` to allowed origins
+   - **Local**: Add `http://localhost:4200` to allowed origins
+
+### Issue: Local Docker - Backend can't connect to Keycloak
+
+**Symptoms:**
+- Backend logs show "Connection refused" to `localhost:9090`
+- Spring Boot fails to start with "Unable to resolve Configuration"
+- Error: `ResourceAccessException: I/O error on GET request for "http://localhost:9090/..."`
+
+**Root Cause:** 
+Backend container's `localhost` refers to the container itself, not the host machine where Keycloak runs.
+
+**Solution:**
+1. Verify `.env` uses explicit endpoint configuration:
+   ```properties
+   OIDC_PROVIDER_ISSUER_URI=
+   OIDC_TOKEN_ENDPOINT=http://keycloak:9090/realms/raptor/protocol/openid-connect/token
+   OIDC_USER_INFO_ENDPOINT=http://keycloak:9090/realms/raptor/protocol/openid-connect/userinfo
+   OIDC_JWK_SET_URI=http://keycloak:9090/realms/raptor/protocol/openid-connect/certs
+   ```
+
+2. Ensure Docker network allows backend → keycloak communication:
+   ```powershell
+   docker network inspect backend_default
+   # Should show both rap-backend and rap-keycloak containers
+   ```
+
+3. Test Keycloak connectivity from backend container:
+   ```powershell
+   docker exec rap-backend curl -v http://keycloak:9090/realms/raptor/.well-known/openid-configuration
+   # Should return 200 OK with OIDC configuration JSON
+   ```
+
+4. Rebuild backend if configuration changed:
+   ```powershell
+   cd backend
+   .\dev.ps1 Dev-Rebuild
+   ```
 
 ### Issue: JWT validation fails
 
@@ -291,35 +382,152 @@ azd up
 
 3. Clear browser cookies and re-authenticate
 
-## Local Development vs Azure
+## Configuration Comparison: Local vs Azure
 
 | Configuration | Local (docker-compose) | Azure (Container Apps) |
 |--------------|------------------------|------------------------|
-| **OIDC Secret** | `.env` file | Key Vault secret |
-| **JWT Secret** | `.env` file | Key Vault secret |
+| **OIDC Provider** | Local Keycloak (Docker) | External Custom OIDC Provider |
+| **OIDC Protocol** | HTTP | HTTPS |
+| **OIDC Issuer URI** | Empty (explicit endpoints) | Empty (explicit endpoints) |
+| **Authorization Endpoint** | `http://localhost:9090/...` | `https://your-oidc-provider.com/...` |
+| **Token Endpoint** | `http://keycloak:9090/...` (internal) | `https://your-oidc-provider.com/...` (same) |
+| **UserInfo Endpoint** | `http://keycloak:9090/...` (internal) | `https://your-oidc-provider.com/...` (same) |
+| **JWK Set URI** | `http://keycloak:9090/...` (internal) | `https://your-oidc-provider.com/...` (same) |
+| **Split-Horizon DNS** | Yes (localhost vs keycloak) | No (unified HTTPS URL) |
+| **OIDC Client ID** | `raptor-client` | `raptor-azure-client` |
+| **OIDC Secret Storage** | `.env` file | Azure Key Vault |
+| **JWT Secret Storage** | `.env` file | Azure Key Vault |
 | **Secret Access** | File system | Managed Identity → Key Vault |
-| **CORS Origins** | `http://localhost:4200` | Deployed frontend URL |
+| **CORS Origins** | `http://localhost:4200` | `https://<frontend-fqdn>` |
 | **Frontend URL** | `http://localhost:4200` | `https://<frontend-fqdn>` |
+| **Backend Base URL** | `http://localhost:8080` | `https://<backend-fqdn>` |
+| **Network Constraints** | Docker internal network | Public internet (HTTPS) |
 
-**Recommendation:** Use separate OIDC clients for local development and Azure environments.
+**Key Architectural Differences:**
+
+1. **Local Docker Networking**
+   - Backend container cannot reach host's `localhost`
+   - Requires split-horizon: browser → `localhost:9090`, backend → `keycloak:9090`
+   - Solved with explicit endpoint configuration
+
+2. **Azure Unified Networking**
+   - Both browser and backend use same HTTPS URLs
+   - No Docker hostname resolution issues
+   - Simpler configuration (same URL for all endpoints)
+
+3. **Security Model**
+   - **Local**: Development secrets in `.env` file (not committed to Git)
+   - **Azure**: Production secrets in Key Vault with managed identity access
+
+**Recommendation:** 
+- Use **separate OIDC clients** for local development and Azure environments
+- Configure different redirect URIs for each environment
+- Never reuse production OIDC client secrets in local development
+
+## OIDC Provider Setup Checklist
+
+### For Local Development (Keycloak)
+
+- [ ] Start Keycloak: `cd backend; .\dev.ps1 Dev-Full`
+- [ ] Access Keycloak admin console: http://localhost:9090/admin (admin/admin)
+- [ ] Create realm: `raptor`
+- [ ] Create client: `raptor-client`
+  - Client authentication: ON
+  - Valid redirect URIs: `http://localhost:8080/auth/callback`
+  - Valid post logout redirect URIs: `http://localhost:4200`
+  - Web origins: `http://localhost:4200`, `http://localhost:8080`
+- [ ] Copy client secret to `.env` file
+- [ ] Verify configuration: `curl http://localhost:9090/realms/raptor/.well-known/openid-configuration`
+
+### For Azure Deployment (Custom OIDC Provider)
+
+- [ ] Configure OIDC client in your external provider
+  - Client name: `raptor-azure-client` (or your preference)
+  - Redirect URI: `https://<backend-fqdn>.azurecontainerapps.io/auth/callback`
+  - Allowed origins: `https://<frontend-fqdn>.azurecontainerapps.io`
+  - Scopes: `openid`, `profile`, `email`
+- [ ] Note down all OIDC endpoint URLs from provider documentation
+- [ ] Set azd environment variables (see "Azure Deployment" section above)
+- [ ] Verify provider accessibility: `curl https://your-oidc-provider.com/.well-known/openid-configuration`
+- [ ] Deploy to Azure: `cd infra; azd up`
+- [ ] Test authentication: Visit `https://<backend-fqdn>/auth/login`
+
+## Implementation Details
+
+### Spring Boot Configuration
+
+The backend uses **explicit endpoint configuration** instead of issuer-uri auto-discovery:
+
+**File**: `backend/src/main/resources/application.properties`
+```properties
+# OIDC Provider - Issuer URI (leave empty for explicit endpoints)
+spring.security.oauth2.client.provider.oidc-provider.issuer-uri=${OIDC_PROVIDER_ISSUER_URI:}
+
+# Explicit endpoints (used when issuer-uri is empty)
+spring.security.oauth2.client.provider.oidc-provider.authorization-uri=${OIDC_AUTHORIZATION_ENDPOINT:}
+spring.security.oauth2.client.provider.oidc-provider.token-uri=${OIDC_TOKEN_ENDPOINT:}
+spring.security.oauth2.client.provider.oidc-provider.user-info-uri=${OIDC_USER_INFO_ENDPOINT:}
+spring.security.oauth2.client.provider.oidc-provider.jwk-set-uri=${OIDC_JWK_SET_URI:}
+```
+
+**Benefits of explicit configuration:**
+- No auto-discovery HTTP calls during Spring Boot startup
+- Works in Docker environments with split-horizon DNS
+- Explicit control over each endpoint URL
+- Better debugging (clear which URLs are being used)
+
+### Infrastructure Configuration
+
+**File**: `infra/main.bicep`
+```bicep
+// OIDC parameters (explicit endpoints)
+param oidcAuthorizationEndpoint string = ''
+param oidcTokenEndpoint string = ''
+param oidcUserInfoEndpoint string = ''
+param oidcJwkSetUri string = ''
+param oidcClientId string = ''
+@secure()
+param oidcClientSecret string = ''
+```
+
+**File**: `infra/main.parameters.json`
+```json
+"oidcAuthorizationEndpoint": { "value": "${OIDC_AUTHORIZATION_ENDPOINT}" },
+"oidcTokenEndpoint": { "value": "${OIDC_TOKEN_ENDPOINT}" },
+"oidcUserInfoEndpoint": { "value": "${OIDC_USER_INFO_ENDPOINT}" },
+"oidcJwkSetUri": { "value": "${OIDC_JWK_SET_URI}" },
+"oidcClientId": { "value": "${OIDC_CLIENT_ID}" },
+"oidcClientSecret": { "value": "${OIDC_CLIENT_SECRET}" }
+```
 
 ## Next Steps
 
-- [ ] Configure Azure AD/Entra ID as OIDC provider
+- [ ] Configure external custom OIDC provider for Azure
 - [ ] Set up Key Vault secret rotation policy
 - [ ] Configure Azure Monitor alerts for Key Vault access failures
 - [ ] Implement secret versioning for zero-downtime updates
 - [ ] Add Application Insights monitoring for authentication flows
+- [ ] Document custom OIDC provider specific configuration
+- [ ] Set up automated testing for authentication flows
 
 ## References
 
+### Documentation
+- [Local Keycloak Setup Guide](../../backend/docs/KEYCLOAK-LOCAL-SETUP.md)
 - [Azure Key Vault Documentation](https://learn.microsoft.com/azure/key-vault/)
 - [Container Apps Managed Identity](https://learn.microsoft.com/azure/container-apps/managed-identity)
 - [OAuth2/OIDC Best Practices](https://datatracker.ietf.org/doc/html/rfc6749)
 - [JWT Secret Best Practices](https://auth0.com/docs/secure/tokens/json-web-tokens/json-web-token-best-practices)
 
+### Related Files
+- Backend OIDC Config: `backend/.env.example`
+- Backend Properties: `backend/src/main/resources/application.properties`
+- Infrastructure: `infra/main.bicep`, `infra/app/backend-springboot.bicep`
+- Parameters: `infra/main.parameters.json`
+
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** 2025-11-05  
+**Document Version:** 2.0  
+**Last Updated:** 2025-11-07  
+**Changes:** Updated for explicit OIDC endpoint configuration, added local Docker networking section, clarified external custom OIDC provider setup  
 **Maintained By:** RAP Development Team
