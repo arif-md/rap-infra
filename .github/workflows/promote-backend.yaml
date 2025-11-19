@@ -453,6 +453,14 @@ jobs:
           azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          # Derive location from the resource group and set it for preprovision scripts
+          RG_LOC=$(az group show -n "${{ steps.prep.outputs.rg }}" --query location -o tsv 2>/dev/null || true)
+          if [ -n "$RG_LOC" ]; then
+            echo "Resolved location from RG '${{ steps.prep.outputs.rg }}': $RG_LOC"
+            azd env set AZURE_LOCATION "$RG_LOC"
+          else
+            echo "Warning: Could not resolve location for RG '${{ steps.prep.outputs.rg }}'"
+          fi
           # Pass cross-RG override for ACR when configured
           if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"

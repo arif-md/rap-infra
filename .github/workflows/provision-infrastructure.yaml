@@ -109,9 +109,11 @@ jobs:
           if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "$AZURE_ACR_RESOURCE_GROUP"
           fi
+          # Derive location from the resource group and set it for preprovision scripts
           RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
           if [ -n "$RG_LOC" ]; then
             echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
+            azd env set AZURE_LOCATION "$RG_LOC"
           else
             echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
           fi
