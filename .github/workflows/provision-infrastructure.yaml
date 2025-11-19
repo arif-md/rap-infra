@@ -31,6 +31,7 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
       AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP }}
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME || '' }}
     permissions:
       id-token: write   # for OIDC
       contents: read
@@ -116,6 +117,14 @@ jobs:
           fi
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
+          if [ -n "$KEY_VAULT_NAME" ]; then
+            azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME"
+            echo "Using provided KEY_VAULT_NAME: $KEY_VAULT_NAME"
+          else
+            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
+          fi
           
           # Set SQL Admin Password - Required for SQL Server resource in main.bicep
           # This is a @secure() Bicep parameter that requires a value in non-interactive mode (--no-prompt).

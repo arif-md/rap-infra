@@ -459,6 +459,13 @@ jobs:
           else
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
+          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
+          if [ -n "${{ vars.KEY_VAULT_NAME || '' }}" ]; then
+            azd env set KEY_VAULT_NAME "${{ vars.KEY_VAULT_NAME }}"
+            echo "Using provided KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}"
+          else
+            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 

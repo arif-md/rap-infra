@@ -59,6 +59,9 @@ param enableSqlDatabase bool = true
 @description('Enable VNet integration for Container Apps and SQL Private Endpoints (requires Microsoft.ContainerService provider)')
 param enableVnetIntegration bool = false
 
+@description('Key Vault name to use (if empty, will use default naming pattern). Key Vault is never deleted by azd down.')
+param keyVaultName string = ''
+
 @description('SQL Server administrator login')
 param sqlAdminLogin string = 'sqladmin'
 
@@ -126,7 +129,7 @@ var namePrefix = toLower('${environmentName}-rap')
 var resolvedAcrName = !empty(acrName) ? acrName : toLower(replace('${environmentName}rapacr','-',''))
 var acrResourceGroup = empty(acrResourceGroupOverride) ? resourceGroup().name : acrResourceGroupOverride
 var frontendAppName = '${namePrefix}-fe'
-var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}${resourceToken}'
+var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
 var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
@@ -134,7 +137,9 @@ var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
 
 var abbrs = loadJsonContent('./abbreviations.json')
-var resourceToken = uniqueString(subscription().id, resourceGroup().id, location)
+// Use environment name for predictable, stable resource naming
+// This ensures the same Key Vault is reused across deployments
+var resourceToken = toLower('${environmentName}-${uniqueString(subscription().id, environmentName)}')
 
 /* Diagnostics module can be reintroduced later if needed */
 
@@ -162,13 +167,31 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
 }
 
 // Key Vault for storing secrets (OIDC client secret, JWT secret)
+// Key Vault is NEVER deployed or deleted by azd - it's managed externally
+// If it doesn't exist, create it manually using docs/MANUAL-KEYVAULT-SETUP.md
+// This prevents soft-delete conflicts and preserves secrets across azd down/up cycles
+var isProduction = environmentName == 'prod' || environmentName == 'production'
+var keyVaultSoftDeleteRetention = isProduction ? 90 : 7
+var keyVaultEnablePurgeProtection = true  // Required by Azure policy - cannot be disabled
+var resolvedKeyVaultName = !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}-v10'
+
+// Reference existing Key Vault (not deployed by this template)
+resource existingKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = {
+  name: resolvedKeyVaultName
+}
+
+/*
+// Key Vault module - COMMENTED OUT to prevent azd from deleting it
+// Create Key Vault manually using docs/MANUAL-KEYVAULT-SETUP.md or scripts/ensure-keyvault.ps1
 module keyVault 'shared/keyvault.bicep' = {
   name: 'keyVault'
   params: {
-    name: '${abbrs.keyVaultVaults}${resourceToken}'
+    name: resolvedKeyVaultName
     location: location
     tags: tags
-    principalId: '' // No principal by default; backend identity will be granted access via access policy
+    principalId: ''
+    softDeleteRetentionInDays: keyVaultSoftDeleteRetention
+    enablePurgeProtection: keyVaultEnablePurgeProtection
     secrets: [
       {
         name: 'oidc-client-secret'
@@ -181,6 +204,7 @@ module keyVault 'shared/keyvault.bicep' = {
     ]
   }
 }
+*/
 
 // Virtual Network for Container Apps and Private Endpoints
 // Only deploy if VNet integration is enabled
@@ -335,8 +359,9 @@ module backend 'app/backend-springboot.bicep' = {
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
     sqlAdminLogin: sqlAdminLogin
     // Key Vault configuration for OIDC and JWT secrets
-    keyVaultName: keyVault.outputs.name
-    keyVaultEndpoint: keyVault.outputs.endpoint
+    // Key Vault name is resolved from parameter or default naming pattern
+    keyVaultName: resolvedKeyVaultName
+    keyVaultEndpoint: existingKeyVault.properties.vaultUri
     // OIDC configuration
     oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
     oidcTokenEndpoint: oidcTokenEndpoint

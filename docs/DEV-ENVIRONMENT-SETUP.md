@@ -76,7 +76,7 @@ AZURE_ENV_NAME="dev"
 AZURE_RESOURCE_GROUP="rg-raptor-dev"
 AZURE_ACR_NAME="ngraptordev"
 AZURE_LOCATION="eastus2"
-AZURE_SUBSCRIPTION_ID="5b489d19-6e0a-45bd-be65-d7d1c40af428"
+AZURE_SUBSCRIPTION_ID="<subscription-id>"
 
 # Images (auto-resolved)
 SERVICE_FRONTEND_IMAGE_NAME="ngraptordev.azurecr.io/raptor/frontend-dev@sha256:bdb65eeb..."

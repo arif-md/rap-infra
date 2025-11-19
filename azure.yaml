@@ -4,6 +4,7 @@ infra:
   path: .
   deploymentStacks:
     # On azd down, delete managed resources but keep the resource group intact
+    # Key Vault is NOT in deployment stack (created by preprovision script), so it won't be deleted
     actionOnUnmanage:
       resources: delete
       resourceGroups: detach
@@ -14,20 +15,14 @@ hooks:
   preprovision:
     windows:
       shell: pwsh
-      run: |
-        ./scripts/resolve-images.ps1
-        ./scripts/validate-acr-binding.ps1
-        ./scripts/ensure-acr.ps1
+      run: ./scripts/run-preprovision-hooks.ps1
       interactive: false
     posix:
       shell: sh
-      run: |
-        ./scripts/resolve-images.sh
-        ./scripts/validate-acr-binding.sh
-        ./scripts/ensure-acr.sh
+      run: ./scripts/run-preprovision-hooks.sh
       interactive: false
-  
-  # Postprovision hooks disabled - SQL permissions now handled by:
+
+services:
   # - Local dev: Manual grant via Azure Portal Query Editor (one-time)
   # - GitHub Actions: Automated via grant-sql-permissions.yml workflow
   # postprovision:

@@ -38,6 +38,7 @@ jobs:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
       AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP }}
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME || '' }}  # Optional: Set to use specific Key Vault (e.g., kv-dev-abc123-v10)
     outputs:
       frontendFqdn: ${{ steps.expose_endpoints.outputs.frontendFqdn }}
     permissions:
@@ -142,6 +143,14 @@ jobs:
           fi
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
+          if [ -n "$KEY_VAULT_NAME" ]; then
+            azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME"
+            echo "Using provided KEY_VAULT_NAME: $KEY_VAULT_NAME"
+          else
+            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
+          fi
           
           # Set SQL Admin Password - Required because 'azd up' provisions ALL infrastructure from main.bicep
           # Even though this is the "frontend deployment" workflow, azd up runs the complete Bicep deployment

@@ -8,6 +8,14 @@ param principalId string = ''
 @description('Secrets to create in Key Vault (array of { name, value })')
 param secrets array = []
 
+@description('Soft delete retention period in days (7-90). Lower environments use 7, production uses 90.')
+@minValue(7)
+@maxValue(90)
+param softDeleteRetentionInDays int = 7
+
+@description('Enable purge protection. Should be true for production to prevent permanent deletion.')
+param enablePurgeProtection bool = false  // Default false for dev/test environments
+
 var defaultAccessPolicies = !empty(principalId) ? [
   {
     objectId: principalId
@@ -24,6 +32,11 @@ resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' = {
     tenantId: subscription().tenantId
     sku: { family: 'A', name: 'standard' }
     enabledForTemplateDeployment: true
+    // Soft-delete with configurable retention period
+    enableSoftDelete: true
+    softDeleteRetentionInDays: softDeleteRetentionInDays
+    // Purge protection configurable per environment
+    enablePurgeProtection: enablePurgeProtection
     accessPolicies: union(defaultAccessPolicies, [
       // define access policies here
     ])

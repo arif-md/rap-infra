@@ -29,6 +29,9 @@
       "enableVnetIntegration": {
         "value": "${ENABLE_VNET_INTEGRATION=false}"
       },
+      "keyVaultName": {
+        "value": "${KEY_VAULT_NAME=}"
+      },
       "sqlAdminLogin": {
         "value": "${SQL_ADMIN_LOGIN=sqladmin}"
       },
