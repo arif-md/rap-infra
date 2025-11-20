@@ -255,9 +255,9 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
 }
 
 // Reference the Container Apps Environment to get default domain
+// Note: This is an 'existing' resource reference, so it has implicit dependency on containerAppsEnvironment
 resource cae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: '${abbrs.appManagedEnvironments}${resourceToken}'
-  dependsOn: [containerAppsEnvironment]
 }
 
 // Azure SQL Database with private endpoint and managed identity
