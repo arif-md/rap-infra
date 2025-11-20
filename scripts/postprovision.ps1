@@ -1,37 +1,18 @@
 #!/usr/bin/env pwsh
 
 # =============================================================================
-# Post-Provision Hook: Database Initialization and Permission Grants (LOCAL ONLY)
+# Post-Provision Hook: Database Initialization and Permission Grants
 # =============================================================================
-# This script runs AFTER main.bicep deployment completes in LOCAL environments.
-# 
-# Purpose:
-#   1. Grant SQL database permissions to backend managed identity
-#   2. Database schema is initialized automatically by Flyway migrations (app startup)
-# 
-# Environment Behavior:
-#   - LOCAL (azd up):     Runs this script using 'az sql db query --auth-type ActiveDirectoryDefault'
-#   - GITHUB ACTIONS:     SKIPPED - uses separate grant-sql-permissions.yml workflow job instead
-# 
-# Why skip in GitHub Actions?
-#   - GitHub workflow uses Python + pyodbc with explicit token (more reliable)
-#   - Workflow handles firewall cleanup and container restart automatically
-#   - Prevents duplicate execution (both hook and workflow would run)
-# 
-# Prerequisites for local execution:
-#   - Azure CLI authenticated as user who is member of RAP-SQL-Admins group
-#   - SQL Server has public access enabled (or you're on VNet)
+# This script runs AFTER main.bicep deployment completes.
+# It ensures:
+# 1. Backend managed identity has SQL database permissions
+# 2. Database schema is initialized (via Flyway migrations in the app)
+#
+# Note: Flyway migrations run automatically when the Spring Boot app starts,
+# so we only need to ensure the managed identity has permissions.
 # =============================================================================
 
 Write-Host "==> Running post-provision tasks..." -ForegroundColor Cyan
-
-# Skip in GitHub Actions - the grant-sql-permissions workflow job handles this
-if ($env:GITHUB_ACTIONS -eq "true") {
-    Write-Host "Detected GitHub Actions environment." -ForegroundColor Yellow
-    Write-Host "SQL permissions will be granted by the grant-sql-permissions workflow job." -ForegroundColor Yellow
-    Write-Host "Skipping postprovision hook to avoid duplicate execution." -ForegroundColor Yellow
-    exit 0
-}
 
 # Check if SQL Database is enabled
 $enableSql = azd env get-value ENABLE_SQL_DATABASE 2>$null

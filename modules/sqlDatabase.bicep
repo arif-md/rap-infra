@@ -61,9 +61,6 @@ resource sqlServer 'Microsoft.Sql/servers@2023-05-01-preview' = {
   name: sqlServerName
   location: location
   tags: tags
-  identity: {
-    type: 'SystemAssigned'
-  }
   properties: {
     administratorLogin: administratorLogin
     administratorLoginPassword: administratorPassword
@@ -173,9 +170,6 @@ output sqlServerResourceId string = sqlServer.id
 
 @description('SQL Database resource ID')
 output sqlDatabaseResourceId string = sqlDatabase.id
-
-@description('SQL Server managed identity principal ID')
-output sqlServerIdentityPrincipalId string = sqlServer.identity.principalId
 
 @description('Connection string for SQL Database (without password)')
 output connectionString string = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Database=${sqlDatabaseName};'
