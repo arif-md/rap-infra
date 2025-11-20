@@ -201,6 +201,13 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
+      - name: Grant Directory Readers role to SQL Server
+        if: success()
+        shell: bash
+        run: |
+          chmod +x scripts/grant-sql-server-directory-readers.sh
+          ./scripts/grant-sql-server-directory-readers.sh || echo "⚠️ Could not grant Directory Readers role automatically"
+
       - name: Update FQDNs for cross-service communication
         if: success()
         shell: bash
