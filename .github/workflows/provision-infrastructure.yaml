@@ -362,14 +362,14 @@ jobs:
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
 
-  # SQL permissions are now granted manually via Azure Portal
-  # See the "SQL Database Permissions" section in the provision job summary above
-  # for the generated SQL script and step-by-step instructions
-  #
-  # grant-sql-permissions:
-  #   needs: provision
-  #   uses: ./.github/workflows/grant-sql-permissions.yml
-  #   with:
-  #     environment: ${{ inputs.targetEnv || 'dev' }}
-  #     resource_group: ${{ needs.provision.outputs.resource_group }}
-  #   secrets: inherit
+  # Automated SQL permissions via Azure AD Group
+  # The Azure AD group (containing both user and service principal) is set as SQL Server admin
+  # This allows GitHub Actions to grant permissions automatically without manual intervention
+  grant-sql-permissions:
+    needs: provision
+    uses: ./.github/workflows/grant-sql-permissions.yml
+    with:
+      environment: ${{ inputs.targetEnv || 'dev' }}
+      resource_group: ${{ needs.provision.outputs.resource_group }}
+    secrets: inherit
+

@@ -1,5 +1,74 @@
 # SQL Server Azure AD Admin Configuration
 
+## ✅ CURRENT CONFIGURATION: Azure AD Group (Fully Automated)
+
+This project uses an **Azure AD group** for SQL Server administration, enabling fully automated database permission management.
+
+### Your Azure AD Group Configuration
+
+**Group Name:** `RAP-SQL-Admins` (or your actual group name)  
+**Members:**
+- Your User Account (for manual Azure Portal access)
+- Service Principal `sp-raptordev` (for GitHub Actions automation)
+
+### Required azd Environment Variables
+
+Set these variables in your `infra` directory:
+
+```powershell
+cd c:\tmp\source-code\rap-prototype\infra
+
+# Get your Azure AD group's Object ID
+$groupObjectId = az ad group show --group "RAP-SQL-Admins" --query id -o tsv
+
+# Set the azd environment variables
+azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID $groupObjectId
+azd env set SQL_AZURE_AD_ADMIN_LOGIN "RAP-SQL-Admins"
+azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "Group"
+```
+
+| Variable Name | Value | Required |
+|---------------|-------|----------|
+| `SQL_AZURE_AD_ADMIN_OBJECT_ID` | `<Your Azure AD Group Object ID>` | ✅ Yes |
+| `SQL_AZURE_AD_ADMIN_LOGIN` | `RAP-SQL-Admins` (your group display name) | ✅ Yes |
+| `SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE` | `Group` | ✅ Yes (must be "Group") |
+
+**Note:** The variable name is `SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE`, not `SQL_AZURE_AD_ADMIN_TYPE`.
+
+### Enable Automated SQL Permission Workflow
+
+The automated workflow is currently commented out. To enable it:
+
+**File:** `infra/.github/workflows/provision-infrastructure.yaml`
+
+**Change from:**
+```yaml
+  # grant-sql-permissions:
+  #   needs: provision
+  #   uses: ./.github/workflows/grant-sql-permissions.yml
+```
+
+**Change to:**
+```yaml
+  grant-sql-permissions:
+    needs: provision
+    uses: ./.github/workflows/grant-sql-permissions.yml
+    with:
+      environment: ${{ inputs.targetEnv || 'dev' }}
+      resource_group: ${{ needs.provision.outputs.resource_group }}
+    secrets: inherit
+```
+
+### How It Works
+
+1. **GitHub Actions provisions infrastructure** → Sets Azure AD group as SQL Server admin
+2. **Workflow authenticates** → Uses service principal (group member) to connect to SQL Server
+3. **Permissions granted automatically** → No manual steps required
+4. **Backend container restarts** → Picks up new database permissions
+5. **Application ready** → Backend connects to database with managed identity
+
+---
+
 ## Problem Summary
 
 **Service principals CANNOT be set as Azure AD admin for Azure SQL Database** according to Microsoft documentation:
@@ -68,7 +137,11 @@ After the workflow completes:
 ✅ **One-time setup** - Only needed once per environment  
 ✅ **Clear documentation** - Script includes comments and verification queries  
 
-## Alternative: Azure AD Group for Full Automation (Recommended)
+## Azure AD Group for Full Automation (ENABLED)
+
+### ✅ Configuration Status: ACTIVE
+
+This project is configured to use an Azure AD group for SQL Server administration, enabling **fully automated** database permission management via GitHub Actions.
 
 ### Why an Azure AD Group?
 
