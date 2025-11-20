@@ -118,6 +118,20 @@ jobs:
             echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
           fi
           azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
+          
+          # Set SQL Azure AD admin configuration
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID }}"
+            echo "Set SQL_AZURE_AD_ADMIN_OBJECT_ID"
+          fi
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_LOGIN "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN }}"
+            echo "Set SQL_AZURE_AD_ADMIN_LOGIN: ${{ vars.SQL_AZURE_AD_ADMIN_LOGIN }}"
+          fi
+          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE }}" ]; then
+            azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE }}"
+            echo "Set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE: ${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE }}"
+          fi
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           
           # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
