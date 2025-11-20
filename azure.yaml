@@ -21,8 +21,7 @@ hooks:
       shell: sh
       run: ./scripts/run-preprovision-hooks.sh
       interactive: false
-
-hooks:
+  
   # Post-provision hook: Grants SQL permissions to backend managed identity
   # 
   # LOCAL DEVELOPMENT:
