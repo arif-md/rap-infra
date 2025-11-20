@@ -19,20 +19,36 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "🔐 Granting Directory Readers role to SQL Server" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
-# Get SQL Server details from azd environment
-$resourceGroup = azd env get-value AZURE_RESOURCE_GROUP
-$sqlServerName = azd env get-value sqlServerName 2>$null
-
-if ([string]::IsNullOrEmpty($sqlServerName)) {
-    Write-Host "⚠️  SQL Server name not found in azd environment, attempting auto-discovery..." -ForegroundColor Yellow
-    $sqlServerName = az sql server list -g $resourceGroup --query "[0].name" -o tsv
-    
-    if ([string]::IsNullOrEmpty($sqlServerName)) {
-        Write-Host "❌ No SQL Server found in resource group $resourceGroup" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "✅ Found SQL Server: $sqlServerName" -ForegroundColor Green
+# Get resource group from azd environment
+try {
+    $resourceGroup = azd env get-value AZURE_RESOURCE_GROUP 2>$null
+} catch {
+    $resourceGroup = $null
 }
+
+if ([string]::IsNullOrEmpty($resourceGroup)) {
+    Write-Host "❌ AZURE_RESOURCE_GROUP not found in azd environment" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "📋 Resource Group: $resourceGroup" -ForegroundColor Cyan
+
+# Auto-discover SQL Server (azd outputs may not be available yet during provision)
+Write-Host "🔍 Discovering SQL Server in resource group..." -ForegroundColor Yellow
+try {
+    $sqlServerName = az sql server list -g $resourceGroup --query "[0].name" -o tsv 2>$null
+} catch {
+    $sqlServerName = $null
+}
+
+if ([string]::IsNullOrEmpty($sqlServerName) -or $sqlServerName -eq "null") {
+    Write-Host "⚠️  No SQL Server found in resource group $resourceGroup" -ForegroundColor Yellow
+    Write-Host "   This may be normal if SQL Server hasn't been provisioned yet."
+    Write-Host "   Skipping Directory Readers role assignment."
+    exit 0
+}
+
+Write-Host "✅ Found SQL Server: $sqlServerName" -ForegroundColor Green
 
 # Get SQL Server managed identity principal ID
 Write-Host ""

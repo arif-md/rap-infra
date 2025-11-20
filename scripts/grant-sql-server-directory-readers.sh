@@ -8,20 +8,28 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔐 Granting Directory Readers role to SQL Server"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Get SQL Server details from azd environment
-RESOURCE_GROUP=$(azd env get-value AZURE_RESOURCE_GROUP)
-SQL_SERVER_NAME=$(azd env get-value sqlServerName 2>/dev/null || echo "")
+# Get resource group from azd environment
+RESOURCE_GROUP=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || echo "")
 
-if [ -z "$SQL_SERVER_NAME" ]; then
-  echo "⚠️  SQL Server name not found in azd environment, attempting auto-discovery..."
-  SQL_SERVER_NAME=$(az sql server list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv)
-  
-  if [ -z "$SQL_SERVER_NAME" ]; then
-    echo "❌ No SQL Server found in resource group $RESOURCE_GROUP"
-    exit 1
-  fi
-  echo "✅ Found SQL Server: $SQL_SERVER_NAME"
+if [ -z "$RESOURCE_GROUP" ]; then
+  echo "❌ AZURE_RESOURCE_GROUP not found in azd environment"
+  exit 1
 fi
+
+echo "📋 Resource Group: $RESOURCE_GROUP"
+
+# Auto-discover SQL Server (azd outputs may not be available yet during provision)
+echo "🔍 Discovering SQL Server in resource group..."
+SQL_SERVER_NAME=$(az sql server list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv 2>/dev/null)
+
+if [ -z "$SQL_SERVER_NAME" ] || [ "$SQL_SERVER_NAME" = "null" ]; then
+  echo "⚠️  No SQL Server found in resource group $RESOURCE_GROUP"
+  echo "   This may be normal if SQL Server hasn't been provisioned yet."
+  echo "   Skipping Directory Readers role assignment."
+  exit 0
+fi
+
+echo "✅ Found SQL Server: $SQL_SERVER_NAME"
 
 # Get SQL Server managed identity principal ID
 echo ""
