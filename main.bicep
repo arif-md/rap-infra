@@ -132,7 +132,6 @@ var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
 var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
-var containerAppsEnvironmentName = '${abbrs.appManagedEnvironments}${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
 var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
@@ -287,48 +286,6 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
 
 // ACR is treated as external; avoid hard dependency at deploy time. Use name-derived login server when needed.
 
-// Frontend Angular Container App
-module frontend 'app/frontend-angular.bicep' = {
-  name: 'frontendApp'
-  dependsOn: [
-    containerAppsEnvironment
-  ]
-  params: {
-    name: frontendAppName
-    location: location
-    identityName: frontendIdentityName
-    // Managed environment name matches what we created above
-    containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
-  // ACR name for image pull identity binding
-  containerRegistryName: resolvedAcrName
-  // ACR resource group (for cross-RG role assignment)
-  containerRegistryResourceGroup: acrResourceGroup
-    // Use provided image (from env via parameters file) or default placeholder
-    image: frontendImage
-  // Allow toggling AcrPull role assignment per service
-  skipAcrPullRoleAssignment: skipFrontendAcrPullRoleAssignment
-    // Compute sizing (exposed as parameters)
-    cpu: frontendCpu
-    memory: frontendMemory
-    // Optional env vars (can be extended later)
-    envVars: [
-      {
-        name: 'APP_ROLE'
-        value: 'frontend'
-      }
-      {
-        name: 'AZURE_ENV_NAME'
-        value: environmentName
-      }
-      {
-        name: 'API_BASE_URL'
-        value: 'https://${backendAppName}.${reference(resourceId('Microsoft.App/managedEnvironments', containerAppsEnvironmentName), '2024-03-01').properties.defaultDomain}'
-      }
-    ]
-    tags: tags
-  }
-}
-
 // Backend Spring Boot Container App
 module backend 'app/backend-springboot.bicep' = {
   name: 'backendApp'
@@ -377,9 +334,9 @@ module backend 'app/backend-springboot.bicep' = {
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
-    // CORS and Frontend URL (construct from naming convention to avoid circular dependency)
-    corsAllowedOrigins: corsAllowedOrigins
-    frontendUrl: 'https://${frontendAppName}.${reference(resourceId('Microsoft.App/managedEnvironments', containerAppsEnvironmentName), '2024-03-01').properties.defaultDomain}'
+    // CORS: Use provided origins or allow all during initial deployment (can be tightened later)
+    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
+    frontendUrl: '' // Not needed for CORS, can be set via env var if backend needs it
     // Optional env vars (can be extended later)
     envVars: [
       {
@@ -393,6 +350,48 @@ module backend 'app/backend-springboot.bicep' = {
     ]
     tags: tags
   }
+}
+
+// Frontend Angular Container App (can deploy in parallel with backend if no dependency)
+module frontend 'app/frontend-angular.bicep' = {
+  name: 'frontendApp'
+  params: {
+    name: frontendAppName
+    location: location
+    identityName: frontendIdentityName
+    // Managed environment name matches what we created above
+    containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
+  // ACR name for image pull identity binding
+  containerRegistryName: resolvedAcrName
+  // ACR resource group (for cross-RG role assignment)
+  containerRegistryResourceGroup: acrResourceGroup
+    // Use provided image (from env via parameters file) or default placeholder
+    image: frontendImage
+  // Allow toggling AcrPull role assignment per service
+  skipAcrPullRoleAssignment: skipFrontendAcrPullRoleAssignment
+    // Compute sizing (exposed as parameters)
+    cpu: frontendCpu
+    memory: frontendMemory
+    // Optional env vars (can be extended later)
+    envVars: [
+      {
+        name: 'APP_ROLE'
+        value: 'frontend'
+      }
+      {
+        name: 'AZURE_ENV_NAME'
+        value: environmentName
+      }
+      {
+        name: 'API_BASE_URL'
+        value: 'https://${backend.outputs.fqdn}'
+      }
+    ]
+    tags: tags
+  }
+  dependsOn: [
+    containerAppsEnvironment
+  ]
 }
 
 // Useful outputs for azd and diagnostics

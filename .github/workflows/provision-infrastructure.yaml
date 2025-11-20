@@ -201,6 +201,34 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
+      - name: Update FQDNs for cross-service communication
+        if: success()
+        shell: bash
+        run: |
+          echo "Getting deployed FQDNs from azd outputs..."
+          
+          # Get FQDNs from azd environment
+          FRONTEND_FQDN=$(azd env get-value frontendFqdn 2>/dev/null || echo "")
+          BACKEND_FQDN=$(azd env get-value backendFqdn 2>/dev/null || echo "")
+          
+          if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+            echo "Frontend FQDN: $FRONTEND_FQDN"
+            azd env set FRONTEND_FQDN "$FRONTEND_FQDN"
+          fi
+          
+          if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
+            echo "Backend FQDN: $BACKEND_FQDN"
+            azd env set BACKEND_FQDN "$BACKEND_FQDN"
+          fi
+          
+          # Re-provision to update container apps with correct URLs
+          if [ -n "$FRONTEND_FQDN" ] && [ -n "$BACKEND_FQDN" ]; then
+            echo "Re-provisioning to update cross-service URLs..."
+            azd provision --no-prompt --environment "$AZURE_ENV_NAME"
+          else
+            echo "Warning: Could not retrieve FQDNs, skipping URL update"
+          fi
+
       - name: Extract SQL permission script
         if: success()
         shell: bash
