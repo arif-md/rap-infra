@@ -362,6 +362,21 @@ jobs:
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
 
+  # Wait for Azure AD admin propagation
+  # Azure takes 30-90 seconds to propagate Azure AD administrator configuration
+  # to SQL Server after Bicep deployment completes. Without this wait, the 
+  # grant-sql-permissions job will fail with "Server identity is not configured"
+  wait-for-sql-admin:
+    needs: provision
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Azure AD admin propagation
+        run: |
+          echo "⏳ Waiting for Azure AD admin configuration to propagate..."
+          echo "This typically takes 30-90 seconds after SQL Server deployment"
+          sleep 60
+          echo "✅ Wait complete - Azure AD admin should now be ready"
+
   # Automated SQL permissions via Azure AD Group (CI/CD ONLY)
   # 
   # This job runs AFTER provision completes and handles SQL permission grants for GitHub Actions.
@@ -379,7 +394,7 @@ jobs:
   #   - Service principal (sp-raptordev) is member of RAP-SQL-Admins group
   #   - GitHub secrets configured: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
   grant-sql-permissions:
-    needs: provision
+    needs: [provision, wait-for-sql-admin]
     uses: ./.github/workflows/grant-sql-permissions.yml
     with:
       environment: ${{ inputs.targetEnv || 'dev' }}
