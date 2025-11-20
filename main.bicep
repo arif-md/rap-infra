@@ -132,6 +132,7 @@ var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
 var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
+var containerAppsEnvironmentName = '${abbrs.appManagedEnvironments}${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
 var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
@@ -254,12 +255,6 @@ module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5
   dependsOn: enableVnetIntegration ? [vnet] : []
 }
 
-// Reference the Container Apps Environment to get default domain
-// Note: This is an 'existing' resource reference, so it has implicit dependency on containerAppsEnvironment
-resource cae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
-  name: '${abbrs.appManagedEnvironments}${resourceToken}'
-}
-
 // Azure SQL Database with private endpoint and managed identity
 module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
   name: 'sql-database'
@@ -327,7 +322,7 @@ module frontend 'app/frontend-angular.bicep' = {
       }
       {
         name: 'API_BASE_URL'
-        value: 'https://${backendAppName}.${cae.properties.defaultDomain}'
+        value: 'https://${backendAppName}.${reference(resourceId('Microsoft.App/managedEnvironments', containerAppsEnvironmentName), '2024-03-01').properties.defaultDomain}'
       }
     ]
     tags: tags
@@ -384,7 +379,7 @@ module backend 'app/backend-springboot.bicep' = {
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
     // CORS and Frontend URL (construct from naming convention to avoid circular dependency)
     corsAllowedOrigins: corsAllowedOrigins
-    frontendUrl: 'https://${frontendAppName}.${cae.properties.defaultDomain}'
+    frontendUrl: 'https://${frontendAppName}.${reference(resourceId('Microsoft.App/managedEnvironments', containerAppsEnvironmentName), '2024-03-01').properties.defaultDomain}'
     // Optional env vars (can be extended later)
     envVars: [
       {
