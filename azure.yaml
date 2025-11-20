@@ -22,17 +22,30 @@ hooks:
       run: ./scripts/run-preprovision-hooks.sh
       interactive: false
 
-services:
-  # - Local dev: Manual grant via Azure Portal Query Editor (one-time)
-  # - GitHub Actions: Automated via grant-sql-permissions.yml workflow
-  # postprovision:
-  #   windows:
-  #     shell: pwsh
-  #     run: |
-  #       ./scripts/postprovision.ps1
-  #     interactive: false
-  #   posix:
-  #     shell: sh
-  #     run: |
-  #       ./scripts/postprovision.sh
-  #     interactive: false
+hooks:
+  # Post-provision hook: Grants SQL permissions to backend managed identity
+  # 
+  # LOCAL DEVELOPMENT:
+  #   - Runs automatically after 'azd provision' or 'azd up'
+  #   - Uses 'az sql db query --auth-type ActiveDirectoryDefault' for simplicity
+  #   - Requires: User must be member of RAP-SQL-Admins Azure AD group
+  #   - Best effort: May fail if Azure AD tokens not cached or group membership not propagated
+  # 
+  # GITHUB ACTIONS (CI/CD):
+  #   - Postprovision hook is SKIPPED (detects GITHUB_ACTIONS=true environment variable)
+  #   - Uses separate 'grant-sql-permissions' workflow job instead (more robust)
+  #   - That job uses Python + pyodbc with explicit Azure AD token for reliability
+  #   - Handles firewall rules, container restarts, and cleanup automatically
+  # 
+  # Why the distinction?
+  #   - Local: Interactive authentication, simpler tooling, developer convenience
+  #   - CI/CD: Ephemeral runners, explicit token auth, guaranteed cleanup, automated restart
+  postprovision:
+    windows:
+      shell: pwsh
+      run: ./scripts/postprovision.ps1
+      interactive: false
+    posix:
+      shell: sh
+      run: ./scripts/postprovision.sh
+      interactive: false

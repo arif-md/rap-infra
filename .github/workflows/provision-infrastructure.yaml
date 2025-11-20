@@ -362,9 +362,22 @@ jobs:
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
 
-  # Automated SQL permissions via Azure AD Group
-  # The Azure AD group (containing both user and service principal) is set as SQL Server admin
-  # This allows GitHub Actions to grant permissions automatically without manual intervention
+  # Automated SQL permissions via Azure AD Group (CI/CD ONLY)
+  # 
+  # This job runs AFTER provision completes and handles SQL permission grants for GitHub Actions.
+  # The postprovision hook in azure.yaml is SKIPPED in GitHub Actions to avoid duplicate execution.
+  # 
+  # Why a separate job instead of postprovision hook?
+  #   1. More robust authentication: Uses Python + pyodbc with explicit Azure AD access token
+  #   2. Automatic cleanup: Creates/removes temporary firewall rules with 'if: always()' guarantee
+  #   3. Container restart: Automatically restarts backend app to pick up new permissions
+  #   4. Better error handling: Structured workflow steps with detailed Python exception messages
+  #   5. Ephemeral runners: Installs ODBC drivers and dependencies automatically
+  # 
+  # Prerequisites:
+  #   - Azure AD group (RAP-SQL-Admins) is set as SQL Server administrator
+  #   - Service principal (sp-raptordev) is member of RAP-SQL-Admins group
+  #   - GitHub secrets configured: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
   grant-sql-permissions:
     needs: provision
     uses: ./.github/workflows/grant-sql-permissions.yml
