@@ -34,6 +34,9 @@ param keyVaultEndpoint string = ''
 @description('Secrets to create from Key Vault (array of { name: secretName })')
 param keyVaultSecrets array = []
 
+@description('CORS allowed origins (comma-separated or * for all)')
+param corsAllowedOrigins string = '*'
+
 // Build secrets array for Container App from Key Vault references
 var secrets = [for secret in keyVaultSecrets: {
   name: secret.name
@@ -60,6 +63,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'auto'
         allowInsecure: false
         //fqdn: empty(ingressHostname) ? null : ingressHostname
+        corsPolicy: {
+          allowedOrigins: corsAllowedOrigins == '*' ? ['*'] : split(corsAllowedOrigins, ',')
+          allowedMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+          allowedHeaders: ['*']
+          exposeHeaders: ['*']
+          maxAge: 3600
+          allowCredentials: false
+        }
         traffic: [
           {
             latestRevision: true

@@ -267,6 +267,8 @@ module backend '../modules/containerApp.bicep' = {
     minReplicas: minReplicas
     maxReplicas: maxReplicas    
     envVars: combinedEnv
+    // CORS configuration at ingress level
+    corsAllowedOrigins: corsAllowedOrigins
     // Key Vault configuration for secret references
     keyVaultName: keyVaultName
     keyVaultEndpoint: keyVaultEndpoint
