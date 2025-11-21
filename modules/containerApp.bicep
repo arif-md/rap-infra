@@ -69,7 +69,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           allowedHeaders: ['*']
           exposeHeaders: ['*']
           maxAge: 3600
-          allowCredentials: false
+          allowCredentials: corsAllowedOrigins != '*'  // Only allow credentials when not using wildcard
         }
         traffic: [
           {
