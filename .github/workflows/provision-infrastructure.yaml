@@ -221,9 +221,15 @@ jobs:
             azd env set BACKEND_FQDN "$BACKEND_FQDN"
           fi
           
-          # Re-provision to update container apps with correct URLs
+          # Set backend-specific CORS allowed origins to frontend URL for credential support
+          if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+            echo "Setting backend CORS allowed origins to frontend URL: https://$FRONTEND_FQDN"
+            azd env set BACKEND_CORS_ALLOWED_ORIGINS "https://$FRONTEND_FQDN"
+          fi
+          
+          # Re-provision to update container apps with correct URLs and CORS
           if [ -n "$FRONTEND_FQDN" ] && [ -n "$BACKEND_FQDN" ]; then
-            echo "Re-provisioning to update cross-service URLs..."
+            echo "Re-provisioning to update cross-service URLs and CORS configuration..."
             azd provision --no-prompt --environment "$AZURE_ENV_NAME"
           else
             echo "Warning: Could not retrieve FQDNs, skipping URL update"

@@ -334,7 +334,7 @@ module backend 'app/backend-springboot.bicep' = {
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
-    // CORS: Use provided origins or allow all during initial deployment (can be tightened later)
+    // CORS: Use provided origins or allow all during initial deployment (updated via workflow)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
     frontendUrl: '' // Not needed for CORS, can be set via env var if backend needs it
     // Optional env vars (can be extended later)
