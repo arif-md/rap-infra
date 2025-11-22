@@ -99,6 +99,9 @@ param oidcJwkSetUri string = ''
 @description('OIDC Client ID (Public client - no secret needed for PKCE)')
 param oidcClientId string = ''
 
+@description('OIDC Additional Request Parameters as JSON object (e.g., {"acr_values": "ial2", "prompt": "login"})')
+param oidcAdditionalParams object = {}
+
 @description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
 @secure()
 param jwtSecret string = ''
@@ -323,6 +326,7 @@ module backend 'app/backend-springboot.bicep' = {
     oidcUserInfoEndpoint: oidcUserInfoEndpoint
     oidcJwkSetUri: oidcJwkSetUri
     oidcClientId: oidcClientId
+    oidcAdditionalParams: oidcAdditionalParams
     // JWT configuration
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes

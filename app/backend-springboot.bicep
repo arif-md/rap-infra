@@ -76,6 +76,9 @@ param oidcUserInfoEndpoint string = ''
 param oidcJwkSetUri string = ''
 param oidcClientId string = ''
 
+@description('OIDC Additional Request Parameters (key-value pairs for custom OIDC provider requirements)')
+param oidcAdditionalParams object = {}
+
 @description('JWT Configuration')
 param jwtIssuer string = 'raptor-app'
 param jwtAccessTokenExpirationMinutes int = 15
@@ -153,7 +156,7 @@ var sqlEnv = enableSqlDatabase ? [
 ] : []
 
 // OIDC env vars (if OIDC is configured)
-var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
+var oidcBaseEnv = !empty(oidcAuthorizationEndpoint) ? [
   {
     name: 'OIDC_AUTHORIZATION_ENDPOINT'
     value: oidcAuthorizationEndpoint
@@ -175,6 +178,17 @@ var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
     value: oidcClientId
   }
 ] : []
+
+// OIDC additional request parameters (dynamic from oidcAdditionalParams object)
+// Converts object properties to environment variables with prefix OIDC_ADDL_REQ_PARAM_
+// Example: { acr_values: 'value' } becomes OIDC_ADDL_REQ_PARAM_ACR_VALUES=value
+var oidcAdditionalEnv = [for param in items(oidcAdditionalParams): {
+  name: 'OIDC_ADDL_REQ_PARAM_${toUpper(replace(param.key, '_', '_'))}'
+  value: param.value
+}]
+
+// Combine OIDC base and additional parameters
+var oidcEnv = concat(oidcBaseEnv, oidcAdditionalEnv)
 
 // JWT env vars (if Key Vault is configured)
 var jwtEnv = !empty(keyVaultName) ? [
