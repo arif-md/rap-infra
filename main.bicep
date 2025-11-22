@@ -99,9 +99,6 @@ param oidcJwkSetUri string = ''
 @description('OIDC Client ID (Public client - no secret needed for PKCE)')
 param oidcClientId string = ''
 
-@description('OIDC Additional Request Parameters as JSON string (e.g., \'{"acr_values": "ial2", "prompt": "login"}\')')
-param oidcAdditionalParams string = '{}'
-
 @description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
 @secure()
 param jwtSecret string = ''
@@ -174,10 +171,8 @@ var keyVaultSoftDeleteRetention = isProduction ? 90 : 7
 var keyVaultEnablePurgeProtection = true  // Required by Azure policy - cannot be disabled
 var resolvedKeyVaultName = !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}-v10'
 
-// Parse OIDC additional parameters from JSON string to object
-// If empty or contains escaped characters (corruption from shell), default to empty object
-var oidcParamsIsEmpty = empty(oidcAdditionalParams) || oidcAdditionalParams == '{}' || oidcAdditionalParams == '' || contains(oidcAdditionalParams, '\\"')
-var parsedOidcAdditionalParams = oidcParamsIsEmpty ? {} : json(oidcAdditionalParams)
+// OIDC additional parameters are passed directly as environment variables (OIDC_ADDL_REQ_PARAM_*)
+// No parsing needed in Bicep
 
 // Reference existing Key Vault (not deployed by this template)
 resource existingKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = {
@@ -331,7 +326,6 @@ module backend 'app/backend-springboot.bicep' = {
     oidcUserInfoEndpoint: oidcUserInfoEndpoint
     oidcJwkSetUri: oidcJwkSetUri
     oidcClientId: oidcClientId
-    oidcAdditionalParams: parsedOidcAdditionalParams
     // JWT configuration
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes

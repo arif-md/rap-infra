@@ -192,6 +192,22 @@ jobs:
             azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
             echo "✓ OIDC_CLIENT_ID configured (using PKCE - no client secret needed)"
           fi
+          
+          # Set individual OIDC additional parameters (simpler than JSON parsing)
+          if [ -n "${{ vars.OIDC_ACR_VALUES || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_ACR_VALUES "${{ vars.OIDC_ACR_VALUES }}"
+            echo "✓ OIDC_ACR_VALUES configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_PROMPT || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_PROMPT "${{ vars.OIDC_PROMPT }}"
+            echo "✓ OIDC_PROMPT configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_RESPONSE_TYPE || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE "${{ vars.OIDC_RESPONSE_TYPE }}"
+            echo "✓ OIDC_RESPONSE_TYPE configured"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
@@ -227,29 +243,6 @@ jobs:
           echo "  - Frontend Container App (dev-rap-fe)"
           echo "  - Backend Container App (dev-rap-be)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Set OIDC additional parameters if provided (Base64 encoded in GitHub variable)
-          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
-            echo "Decoding and setting OIDC additional parameters"
-            # Decode Base64 to file
-            echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d > /tmp/oidc_params.json
-            DECODED_JSON=$(cat /tmp/oidc_params.json)
-            echo "Decoded JSON: $DECODED_JSON"
-            
-            # Write directly to azd .env file instead of using azd env set
-            # This bypasses any azd processing/escaping
-            ENV_FILE=".azure/${AZURE_ENV_NAME}/.env"
-            if [ -f "$ENV_FILE" ]; then
-              # Remove existing OIDC_ADDITIONAL_PARAMS line if present
-              sed -i '/^OIDC_ADDITIONAL_PARAMS=/d' "$ENV_FILE"
-            fi
-            # Append new value (properly quoted for .env format)
-            echo "OIDC_ADDITIONAL_PARAMS='$DECODED_JSON'" >> "$ENV_FILE"
-            echo "Written to $ENV_FILE"
-            
-            rm /tmp/oidc_params.json
-          fi
-          
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
       - name: Update FQDNs for cross-service communication
