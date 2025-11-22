@@ -195,7 +195,7 @@ jobs:
           
           # Set OIDC Additional Parameters (JSON object)
           if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS || '' }}" ]; then
-            azd env set OIDC_ADDITIONAL_PARAMS '${{ vars.OIDC_ADDITIONAL_PARAMS }}'
+            azd env set OIDC_ADDITIONAL_PARAMS "${{ vars.OIDC_ADDITIONAL_PARAMS }}"
             echo "✓ OIDC_ADDITIONAL_PARAMS configured"
           fi
 
