@@ -192,14 +192,6 @@ jobs:
             azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
             echo "✓ OIDC_CLIENT_ID configured (using PKCE - no client secret needed)"
           fi
-          
-          # Set OIDC Additional Parameters (JSON object)
-          # Use Base64 encoding to safely pass JSON (industry standard for complex values)
-          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
-            DECODED_JSON=$(echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d)
-            azd env set OIDC_ADDITIONAL_PARAMS "$DECODED_JSON"
-            echo "✓ OIDC_ADDITIONAL_PARAMS configured"
-          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
@@ -235,7 +227,18 @@ jobs:
           echo "  - Frontend Container App (dev-rap-fe)"
           echo "  - Backend Container App (dev-rap-be)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          azd provision --no-prompt --environment "$AZURE_ENV_NAME"
+          
+          # Build azd provision command with optional OIDC parameters
+          AZD_CMD="azd provision --no-prompt --environment $AZURE_ENV_NAME"
+          
+          # Add OIDC additional parameters directly as Bicep parameter if set
+          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
+            DECODED_JSON=$(echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d)
+            echo "Setting OIDC additional parameters via command line"
+            AZD_CMD="$AZD_CMD --parameters oidcAdditionalParams='$DECODED_JSON'"
+          fi
+          
+          eval $AZD_CMD
 
       - name: Update FQDNs for cross-service communication
         if: success()
