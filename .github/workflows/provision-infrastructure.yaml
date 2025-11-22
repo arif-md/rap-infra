@@ -194,11 +194,10 @@ jobs:
           fi
           
           # Set OIDC Additional Parameters (JSON object)
-          # Write to temp file to avoid shell escaping issues
-          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS || '' }}" ]; then
-            echo '${{ vars.OIDC_ADDITIONAL_PARAMS }}' > /tmp/oidc_params.json
-            azd env set OIDC_ADDITIONAL_PARAMS "$(cat /tmp/oidc_params.json)"
-            rm /tmp/oidc_params.json
+          # Use Base64 encoding to safely pass JSON (industry standard for complex values)
+          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
+            DECODED_JSON=$(echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d)
+            azd env set OIDC_ADDITIONAL_PARAMS "$DECODED_JSON"
             echo "✓ OIDC_ADDITIONAL_PARAMS configured"
           fi
 
