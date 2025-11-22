@@ -231,12 +231,22 @@ jobs:
           # Set OIDC additional parameters if provided (Base64 encoded in GitHub variable)
           if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
             echo "Decoding and setting OIDC additional parameters"
-            # Decode Base64 and write to temp file to avoid any shell escaping
+            # Decode Base64 to file
             echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d > /tmp/oidc_params.json
-            # Read from file and set in azd env
             DECODED_JSON=$(cat /tmp/oidc_params.json)
             echo "Decoded JSON: $DECODED_JSON"
-            azd env set OIDC_ADDITIONAL_PARAMS "$DECODED_JSON"
+            
+            # Write directly to azd .env file instead of using azd env set
+            # This bypasses any azd processing/escaping
+            ENV_FILE=".azure/${AZURE_ENV_NAME}/.env"
+            if [ -f "$ENV_FILE" ]; then
+              # Remove existing OIDC_ADDITIONAL_PARAMS line if present
+              sed -i '/^OIDC_ADDITIONAL_PARAMS=/d' "$ENV_FILE"
+            fi
+            # Append new value (properly quoted for .env format)
+            echo "OIDC_ADDITIONAL_PARAMS='$DECODED_JSON'" >> "$ENV_FILE"
+            echo "Written to $ENV_FILE"
+            
             rm /tmp/oidc_params.json
           fi
           
