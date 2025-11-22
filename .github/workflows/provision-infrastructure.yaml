@@ -194,19 +194,19 @@ jobs:
           fi
           
           # Set individual OIDC additional parameters (simpler than JSON parsing)
-          if [ -n "${{ vars.OIDC_ACR_VALUES || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_ACR_VALUES "${{ vars.OIDC_ACR_VALUES }}"
-            echo "✓ OIDC_ACR_VALUES configured"
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_ACR_VALUES "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES }}"
+            echo "✓ OIDC_ADDL_REQ_PARAM_ACR_VALUES configured"
           fi
           
-          if [ -n "${{ vars.OIDC_PROMPT || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_PROMPT "${{ vars.OIDC_PROMPT }}"
-            echo "✓ OIDC_PROMPT configured"
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_PROMPT "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT }}"
+            echo "✓ OIDC_ADDL_REQ_PARAM_PROMPT configured"
           fi
           
-          if [ -n "${{ vars.OIDC_RESPONSE_TYPE || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE "${{ vars.OIDC_RESPONSE_TYPE }}"
-            echo "✓ OIDC_RESPONSE_TYPE configured"
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE }}"
+            echo "✓ OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE configured"
           fi
 
       - name: Ensure ACR exists (preprovision)
