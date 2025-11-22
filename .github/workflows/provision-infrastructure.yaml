@@ -192,6 +192,12 @@ jobs:
             azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
             echo "✓ OIDC_CLIENT_ID configured (using PKCE - no client secret needed)"
           fi
+          
+          # Set OIDC Additional Parameters (JSON object)
+          if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS || '' }}" ]; then
+            azd env set OIDC_ADDITIONAL_PARAMS '${{ vars.OIDC_ADDITIONAL_PARAMS }}'
+            echo "✓ OIDC_ADDITIONAL_PARAMS configured"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
