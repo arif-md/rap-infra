@@ -194,9 +194,11 @@ jobs:
           fi
           
           # Set OIDC Additional Parameters (JSON object)
-          # Use printf to properly handle JSON with special characters
+          # Write to temp file to avoid shell escaping issues
           if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS || '' }}" ]; then
-            printf '%s\n' "${{ vars.OIDC_ADDITIONAL_PARAMS }}" | azd env set OIDC_ADDITIONAL_PARAMS --stdin
+            echo '${{ vars.OIDC_ADDITIONAL_PARAMS }}' > /tmp/oidc_params.json
+            azd env set OIDC_ADDITIONAL_PARAMS "$(cat /tmp/oidc_params.json)"
+            rm /tmp/oidc_params.json
             echo "✓ OIDC_ADDITIONAL_PARAMS configured"
           fi
 
