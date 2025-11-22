@@ -96,12 +96,8 @@ param oidcUserInfoEndpoint string = ''
 @description('OIDC Provider JWK Set URI')
 param oidcJwkSetUri string = ''
 
-@description('OIDC Client ID')
+@description('OIDC Client ID (Public client - no secret needed for PKCE)')
 param oidcClientId string = ''
-
-@description('OIDC Client Secret (will be stored in Key Vault)')
-@secure()
-param oidcClientSecret string = ''
 
 @description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
 @secure()
@@ -193,10 +189,7 @@ module keyVault 'shared/keyvault.bicep' = {
     softDeleteRetentionInDays: keyVaultSoftDeleteRetention
     enablePurgeProtection: keyVaultEnablePurgeProtection
     secrets: [
-      {
-        name: 'oidc-client-secret'
-        value: oidcClientSecret
-      }
+  
       {
         name: 'jwt-secret'
         value: jwtSecret

@@ -174,10 +174,6 @@ var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
     name: 'OIDC_CLIENT_ID'
     value: oidcClientId
   }
-  {
-    name: 'OIDC_CLIENT_SECRET'
-    secretRef: 'oidc-client-secret'
-  }
 ] : []
 
 // JWT env vars (if Key Vault is configured)
@@ -216,8 +212,8 @@ var corsEnv = !empty(corsAllowedOrigins) ? [
 var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, jwtEnv, corsEnv, envVars)
 
 // Key Vault secrets to reference (if Key Vault is configured)
+// PKCE authentication doesn't require client secret, only JWT secret is stored
 var kvSecrets = !empty(keyVaultName) ? [
-  { name: 'oidc-client-secret' }
   { name: 'jwt-secret' }
 ] : []
 

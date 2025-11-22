@@ -164,6 +164,34 @@ jobs:
             echo "Using default principal type: Application (service principal)"
             azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "Application"
           fi
+          
+          # Set OIDC Provider Configuration - Required for OAuth2/OpenID Connect authentication
+          # Public endpoints are stored as GitHub environment variables (not secrets)
+          # PKCE authentication is used (no client secret required for public clients)
+          if [ -n "${{ vars.OIDC_AUTHORIZATION_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_AUTHORIZATION_ENDPOINT "${{ vars.OIDC_AUTHORIZATION_ENDPOINT }}"
+            echo "✓ OIDC_AUTHORIZATION_ENDPOINT configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_TOKEN_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_TOKEN_ENDPOINT "${{ vars.OIDC_TOKEN_ENDPOINT }}"
+            echo "✓ OIDC_TOKEN_ENDPOINT configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_USER_INFO_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_USER_INFO_ENDPOINT "${{ vars.OIDC_USER_INFO_ENDPOINT }}"
+            echo "✓ OIDC_USER_INFO_ENDPOINT configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_JWK_SET_URI || '' }}" ]; then
+            azd env set OIDC_JWK_SET_URI "${{ vars.OIDC_JWK_SET_URI }}"
+            echo "✓ OIDC_JWK_SET_URI configured"
+          fi
+          
+          if [ -n "${{ vars.OIDC_CLIENT_ID || '' }}" ]; then
+            azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
+            echo "✓ OIDC_CLIENT_ID configured (using PKCE - no client secret needed)"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
