@@ -104,6 +104,9 @@
       "oidcClientId": {
         "value": "${OIDC_CLIENT_ID}"
       },
+      "oidcAdditionalParams": {
+        "value": "${OIDC_ADDITIONAL_PARAMS={}}"
+      },
       "jwtSecret": {
         "value": "${JWT_SECRET}"
       },

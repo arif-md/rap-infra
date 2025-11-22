@@ -175,8 +175,8 @@ var keyVaultEnablePurgeProtection = true  // Required by Azure policy - cannot b
 var resolvedKeyVaultName = !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}-v10'
 
 // Parse OIDC additional parameters from JSON string to object
-// If empty, '{}', or starts with escaped quotes, default to empty object
-var oidcParamsIsEmpty = empty(oidcAdditionalParams) || oidcAdditionalParams == '{}' || oidcAdditionalParams == ''
+// If empty or contains escaped characters (corruption from shell), default to empty object
+var oidcParamsIsEmpty = empty(oidcAdditionalParams) || oidcAdditionalParams == '{}' || oidcAdditionalParams == '' || contains(oidcAdditionalParams, '\\"')
 var parsedOidcAdditionalParams = oidcParamsIsEmpty ? {} : json(oidcAdditionalParams)
 
 // Reference existing Key Vault (not deployed by this template)

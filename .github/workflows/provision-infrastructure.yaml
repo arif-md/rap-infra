@@ -228,17 +228,19 @@ jobs:
           echo "  - Backend Container App (dev-rap-be)"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Build azd provision command with optional OIDC parameters
-          AZD_CMD="azd provision --no-prompt --environment $AZURE_ENV_NAME"
-          
-          # Add OIDC additional parameters directly as Bicep parameter if set
+          # Set OIDC additional parameters if provided (Base64 encoded in GitHub variable)
           if [ -n "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 || '' }}" ]; then
-            DECODED_JSON=$(echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d)
-            echo "Setting OIDC additional parameters via command line"
-            AZD_CMD="$AZD_CMD --parameters oidcAdditionalParams='$DECODED_JSON'"
+            echo "Decoding and setting OIDC additional parameters"
+            # Decode Base64 and write to temp file to avoid any shell escaping
+            echo "${{ vars.OIDC_ADDITIONAL_PARAMS_BASE64 }}" | base64 -d > /tmp/oidc_params.json
+            # Read from file and set in azd env
+            DECODED_JSON=$(cat /tmp/oidc_params.json)
+            echo "Decoded JSON: $DECODED_JSON"
+            azd env set OIDC_ADDITIONAL_PARAMS "$DECODED_JSON"
+            rm /tmp/oidc_params.json
           fi
           
-          eval $AZD_CMD
+          azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
       - name: Update FQDNs for cross-service communication
         if: success()
