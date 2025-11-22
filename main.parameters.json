@@ -104,6 +104,15 @@
       "oidcClientId": {
         "value": "${OIDC_CLIENT_ID}"
       },
+      "oidcAcrValues": {
+        "value": "${OIDC_ADDL_REQ_PARAM_ACR_VALUES=}"
+      },
+      "oidcPrompt": {
+        "value": "${OIDC_ADDL_REQ_PARAM_PROMPT=}"
+      },
+      "oidcResponseType": {
+        "value": "${OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE=}"
+      },
       "jwtSecret": {
         "value": "${JWT_SECRET}"
       },

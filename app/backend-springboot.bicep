@@ -76,6 +76,11 @@ param oidcUserInfoEndpoint string = ''
 param oidcJwkSetUri string = ''
 param oidcClientId string = ''
 
+@description('OIDC additional request parameters (optional)')
+param oidcAcrValues string = ''
+param oidcPrompt string = ''
+param oidcResponseType string = ''
+
 @description('JWT configuration')
 param jwtIssuer string = 'raptor-app'
 param jwtAccessTokenExpirationMinutes int = 15
@@ -177,6 +182,24 @@ var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
   }
 ] : []
 
+// OIDC additional request parameters (optional - provider-specific)
+var oidcAdditionalParamsEnv = [
+  !empty(oidcAcrValues) ? {
+    name: 'OIDC_ADDL_REQ_PARAM_ACR_VALUES'
+    value: oidcAcrValues
+  } : null
+  !empty(oidcPrompt) ? {
+    name: 'OIDC_ADDL_REQ_PARAM_PROMPT'
+    value: oidcPrompt
+  } : null
+  !empty(oidcResponseType) ? {
+    name: 'OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE'
+    value: oidcResponseType
+  } : null
+]
+
+var oidcAdditionalParamsEnvFiltered = filter(oidcAdditionalParamsEnv, param => param != null)
+
 // JWT env vars (if Key Vault is configured)
 var jwtEnv = !empty(keyVaultName) ? [
   {
@@ -209,8 +232,8 @@ var corsEnv = !empty(corsAllowedOrigins) ? [
   }
 ] : []
 
-// Combine base env + optional App Insights + SQL + OIDC + JWT + CORS + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, jwtEnv, corsEnv, envVars)
+// Combine base env + optional App Insights + SQL + OIDC + OIDC additional params + JWT + CORS + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, oidcAdditionalParamsEnvFiltered, jwtEnv, corsEnv, envVars)
 
 // Key Vault secrets to reference (if Key Vault is configured)
 // PKCE authentication doesn't require client secret, only JWT secret is stored
