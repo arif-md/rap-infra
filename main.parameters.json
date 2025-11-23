@@ -127,6 +127,9 @@
       },
       "corsAllowedOrigins": {
         "value": "${BACKEND_CORS_ALLOWED_ORIGINS}"
+      },
+      "frontendUrl": {
+        "value": "${FRONTEND_URL}"
       }
     }
 }

@@ -120,6 +120,9 @@ param jwtRefreshTokenExpirationDays int = 7
 @description('CORS Allowed Origins (comma-separated)')
 param corsAllowedOrigins string = ''
 
+@description('Frontend URL for OAuth2 redirects (single URL)')
+param frontendUrl string = ''
+
 @description('Tags to apply to all resources')
 param tags object = {
   environment: environmentName
@@ -340,7 +343,7 @@ module backend 'app/backend-springboot.bicep' = {
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
     // CORS: Use provided origins or allow all during initial deployment (updated via workflow)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
-    frontendUrl: '' // Not needed for CORS, can be set via env var if backend needs it
+    frontendUrl: frontendUrl
     // Optional env vars (can be extended later)
     envVars: [
       {

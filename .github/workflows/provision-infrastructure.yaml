@@ -269,6 +269,9 @@ jobs:
           if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
             echo "Setting backend CORS allowed origins to frontend URL: https://$FRONTEND_FQDN"
             azd env set BACKEND_CORS_ALLOWED_ORIGINS "https://$FRONTEND_FQDN"
+            
+            echo "Setting backend FRONTEND_URL for OAuth2 redirect: https://$FRONTEND_FQDN"
+            azd env set FRONTEND_URL "https://$FRONTEND_FQDN"
           fi
           
           # Re-provision to update container apps with correct URLs and CORS
@@ -362,8 +365,44 @@ jobs:
                 echo "- **$name**: $status"
                 if [ -n "$fqdn" ] && [ "$fqdn" != "null" ]; then
                   echo "  - URL: https://$fqdn"
+                  
+                  # Add OIDC redirect URI info for backend
+                  if [[ "$name" == *"-be" ]]; then
+                    echo "  - **OIDC Redirect URI**: \`https://$fqdn/login/oauth2/code/oidc-provider\`"
+                  fi
                 fi
               done
+            fi
+            
+            # Add OIDC Provider Configuration section
+            BACKEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-be" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "### 🔐 OIDC Provider Configuration"
+              echo ""
+              echo "**⚠️ MANUAL ACTION NEEDED**: Update your OIDC provider settings with the following redirect URI."
+              echo ""
+              echo "**Instructions**:"
+              echo "1. Log in to your OIDC provider's admin console"
+              echo "2. Navigate to your application/client configuration"
+              echo "3. Add or update the **Redirect URI** / **Callback URL**:"
+              echo ""
+              echo "   \`\`\`"
+              echo "   https://$BACKEND_FQDN/login/oauth2/code/oidc-provider"
+              echo "   \`\`\`"
+              echo ""
+              echo "4. Save the configuration"
+              echo ""
+              echo "**Note**: The redirect URI must exactly match the URL above (including the path). Most OIDC providers require this to be configured before authentication will work."
+              echo ""
+              echo "**Example OIDC Providers**:"
+              echo "- **Identity Sandbox**: Update in your application settings at identity sandbox admin console"
+              echo "- **Keycloak**: Client Settings → Valid Redirect URIs"
+              echo "- **Azure AD**: App Registration → Authentication → Redirect URIs"
+              echo "- **Okta**: Applications → [Your App] → General → Login → Redirect URIs"
+              echo "- **Auth0**: Applications → [Your App] → Settings → Allowed Callback URLs"
             fi
             
             # Add SQL permission script if available
