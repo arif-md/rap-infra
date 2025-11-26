@@ -140,6 +140,9 @@ case "$SERVICE_KEY" in
   backend)
     SERVICE_SUFFIX="be"
     ;;
+  processes)
+    SERVICE_SUFFIX="proc"
+    ;;
   *)
     SERVICE_SUFFIX=$(echo "$SERVICE_KEY" | cut -c1-3)
     ;;

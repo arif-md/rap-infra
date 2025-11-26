@@ -116,6 +116,9 @@ case "$SERVICE_KEY" in
   backend)
     SERVICE_SUFFIX="be"
     ;;
+  processes)
+    SERVICE_SUFFIX="proc"
+    ;;
   *)
     # For other services, use first 2-3 characters
     SERVICE_SUFFIX=$(echo "$SERVICE_KEY" | cut -c1-3)
