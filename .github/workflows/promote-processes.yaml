@@ -1,0 +1,1096 @@
+name: Promote Processes Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Full image digest (e.g., acrname.azurecr.io/raptor/processes-dev@sha256:...)"
+        required: true
+  repository_dispatch:
+    types: [ processes-image-promote ]
+
+jobs:
+  plan:
+    name: Plan Promotion
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SERVICE_KEY: processes
+      SERVICE_SUFFIX: proc
+    outputs:
+      srcImage: ${{ steps.resolve.outputs.srcImage }}
+      srcRepo: ${{ steps.resolve.outputs.srcRepo }}
+      baseEnv: ${{ steps.resolve.outputs.baseEnv }}
+      run_test: ${{ steps.flags.outputs.run_test }}
+      run_train: ${{ steps.flags.outputs.run_train }}
+      run_prod: ${{ steps.flags.outputs.run_prod }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve source image and repository
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Accept image from workflow_dispatch or repository_dispatch
+          IMG='${{ github.event.inputs.image || github.event.client_payload.image }}'
+          if [ -z "$IMG" ]; then
+            echo "No image provided in workflow_dispatch.inputs or repository_dispatch.client_payload" >&2
+            exit 1
+          fi
+          echo "srcImage=$IMG" >> $GITHUB_OUTPUT
+          # Parse base environment from image name
+          # Expected format: <acr>.azurecr.io/raptor/processes-<env>@<digest>
+          DOMAIN="${IMG%%/*}"
+          REPO_PATH="${IMG#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          BASE_ENV="${REPO_NAME##*-}"
+          if [ -z "$BASE_ENV" ]; then BASE_ENV="dev"; fi
+          echo "baseEnv=$BASE_ENV" >> $GITHUB_OUTPUT
+          # Resolve source repository (for commit history/release notes)
+          # Prefer value from repository_dispatch payload, then configured var, else fall back to current repo
+          SRC_REPO='${{ github.event.client_payload.sourceRepo || vars.PROCESSES_SOURCE_REPO || '' }}'
+          if [ -z "$SRC_REPO" ]; then
+            SRC_REPO="$GITHUB_REPOSITORY"
+            echo "Warning: sourceRepo not provided; falling back to $SRC_REPO"
+          fi
+          echo "srcRepo=$SRC_REPO" >> $GITHUB_OUTPUT
+          echo "Source image: $IMG"
+          echo "Base environment: $BASE_ENV"
+          echo "Source repository: $SRC_REPO"
+
+      - name: Set promotion flags
+        id: flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_ENV='${{ steps.resolve.outputs.baseEnv }}'
+          # Promotion logic:
+          # dev -> test, train, prod
+          # test -> train, prod
+          # train -> prod
+          # prod -> (no further promotion)
+          case "$BASE_ENV" in
+            dev)
+              echo "run_test=true" >> $GITHUB_OUTPUT
+              echo "run_train=true" >> $GITHUB_OUTPUT
+              echo "run_prod=true" >> $GITHUB_OUTPUT
+              ;;
+            test)
+              echo "run_test=false" >> $GITHUB_OUTPUT
+              echo "run_train=true" >> $GITHUB_OUTPUT
+              echo "run_prod=true" >> $GITHUB_OUTPUT
+              ;;
+            train)
+              echo "run_test=false" >> $GITHUB_OUTPUT
+              echo "run_train=false" >> $GITHUB_OUTPUT
+              echo "run_prod=true" >> $GITHUB_OUTPUT
+              ;;
+            prod)
+              echo "run_test=false" >> $GITHUB_OUTPUT
+              echo "run_train=false" >> $GITHUB_OUTPUT
+              echo "run_prod=false" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "Unknown base environment: $BASE_ENV. Defaulting to no promotions." >&2
+              echo "run_test=false" >> $GITHUB_OUTPUT
+              echo "run_train=false" >> $GITHUB_OUTPUT
+              echo "run_prod=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  # ------------------------------
+  # Test Environment
+  # ------------------------------
+
+  prepare-and-notify-test:
+    name: Prepare & Notify (test)
+    if: ${{ needs.plan.outputs.run_test == 'true' }}
+    needs: [plan]
+    runs-on: ubuntu-latest
+    environment: preflight
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: test
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
+      PROCESSES_REPO_READ_TOKEN: ${{ secrets.PROCESSES_REPO_READ_TOKEN }}
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+    outputs:
+      needsApproval: ${{ steps.gate.outputs.needsApproval }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
+            echo "Configure these as vars in the GitHub Environment: ${TARGET_ENV}" >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+          echo "Target ACR: $ACR_NAME"
+          echo "Target RG: $RG"
+          echo "Target Location: $LOC"
+
+      - name: Capture current deployed image (before promotion)
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-proc" | tr '[:upper:]' '[:lower:]')
+          RG="${{ steps.prep.outputs.rg }}"
+          
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          OLD_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          OLD_DIGEST=""
+          OLD_COMMIT=""
+          
+          if [ -n "$OLD_IMG" ]; then
+            echo "Current deployed image: $OLD_IMG"
+            echo "oldImage=$OLD_IMG" >> $GITHUB_OUTPUT
+            
+            DIGEST_PART="${OLD_IMG#*@}"
+            if [ "$OLD_IMG" != "$DIGEST_PART" ]; then
+              OLD_DIGEST="$DIGEST_PART"
+              echo "oldDigest=$OLD_DIGEST" >> $GITHUB_OUTPUT
+              
+              TAGS=$(az resource show -n "$APP_NAME" -g "$RG" --resource-type "Microsoft.App/containerApps" --query "tags" -o json 2>/dev/null || echo "{}")
+              OLD_COMMIT=$(echo "$TAGS" | jq -r '.["raptor.lastCommit"] // ""' || true)
+              if [ -n "$OLD_COMMIT" ]; then
+                echo "oldCommit=$OLD_COMMIT" >> $GITHUB_OUTPUT
+              fi
+            fi
+          else
+            echo "No existing image found (first deployment to ${{ steps.prep.outputs.env }})"
+          fi
+
+      - name: Generate release notes
+        id: relnotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          SRC_REPO='${{ env.SRC_REPO }}'
+          
+          DOMAIN="${SRC_IMAGE%%/*}"
+          REG_NAME=$(echo "$DOMAIN" | sed 's/\.azurecr\.io$//')
+          REPO_PATH="${SRC_IMAGE#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          
+          echo "Extracting commit SHA from new image..."
+          NEW_SHA=$(bash "${GITHUB_WORKSPACE}/scripts/get-commit-from-image.sh" "$REG_NAME" "$REPO_NAME" "$NEW_DIGEST" 2>&1 | tee /dev/stderr | tail -n1)
+          
+          OLD_SHA='${{ steps.before.outputs.oldCommit }}'
+          TARGET_ENV='${{ steps.prep.outputs.env }}'
+          
+          chmod +x "${GITHUB_WORKSPACE}/scripts/relnotes.sh"
+          bash "${GITHUB_WORKSPACE}/scripts/relnotes.sh" \
+            "$SRC_REPO" \
+            "$OLD_SHA" \
+            "$NEW_SHA" \
+            "$TARGET_ENV" \
+            > release-notes.html
+
+      - name: ACR label access diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          DOMAIN="${SRC_IMAGE%%/*}"
+          REG_NAME=$(echo "$DOMAIN" | sed 's/\.azurecr\.io$//')
+          REPO_PATH="${SRC_IMAGE#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          DIGEST="${SRC_IMAGE#*@}"
+          
+          echo "Checking ACR label access for $REG_NAME/$REPO_NAME@$DIGEST"
+          LABELS_JSON=$(az acr repository show -n "$REG_NAME" --image "${REPO_NAME}@${DIGEST}" --query "changeableAttributes.labels" -o json 2>&1 || true)
+          if echo "$LABELS_JSON" | jq empty 2>/dev/null; then
+            echo "✓ Successfully retrieved labels from ACR"
+            echo "$LABELS_JSON" | jq .
+          else
+            echo "⚠ Could not retrieve labels. Response:"
+            echo "$LABELS_JSON"
+            echo ""
+            echo "Possible causes:"
+            echo "- ACR anonymous pull is disabled and workflow lacks AcrPull role"
+            echo "- Image was deleted or is in a different registry"
+            echo "Release notes generation may fall back to tag-based commit resolution"
+          fi
+
+      - name: Check email prerequisites
+        id: email_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          HAS_MAIL="false"
+          if [ -n "$MAIL_SERVER" ] && [ -n "$MAIL_USERNAME" ] && [ -n "$MAIL_PASSWORD" ] && [ -n "$MAIL_TO" ]; then
+            HAS_MAIL="true"
+          fi
+          echo "hasEmail=$HAS_MAIL" >> $GITHUB_OUTPUT
+          if [ "$HAS_MAIL" = "true" ]; then
+            echo "✓ Email notification configured"
+          else
+            echo "⚠ Email notification not configured (missing MAIL_* secrets)"
+          fi
+
+      - name: Check environment approval requirements
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Check if test environment requires approval (protected environment)
+          # GitHub API call would be ideal but requires additional token permissions
+          # For now, assume test requires approval if configured in environment settings
+          NEEDS_APPROVAL="false"
+          # This can be overridden via environment variable or repository configuration
+          if [ "${{ vars.TEST_REQUIRES_APPROVAL || 'false' }}" = "true" ]; then
+            NEEDS_APPROVAL="true"
+          fi
+          echo "needsApproval=$NEEDS_APPROVAL" >> $GITHUB_OUTPUT
+          if [ "$NEEDS_APPROVAL" = "true" ]; then
+            echo "✓ Test environment requires approval"
+          else
+            echo "Test environment does not require approval"
+          fi
+
+      - name: Compose email notification
+        id: email_compose
+        shell: bash
+        env:
+          TARGET_ENV: ${{ steps.prep.outputs.env }}
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+          NEEDS_APPROVAL: ${{ steps.gate.outputs.needsApproval }}
+          RELEASE_HTML: release-notes.html
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          
+          NEEDS_APPROVAL=${NEEDS_APPROVAL:-false}
+          SUBJECT_PREFIX="[Deployment Notice]"
+          INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is ready."
+          
+          if [ "$NEEDS_APPROVAL" = "true" ]; then
+            SUBJECT_PREFIX="[Approval Needed]"
+            INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
+          fi
+          
+          SUBJECT="$SUBJECT_PREFIX Promote processes to ${TARGET_ENV}"
+          EMAIL_HTML="email.html"
+          
+          {
+            printf "<p>%s</p>\n" "$INTRO"
+            printf "<p><strong>Image:</strong> %s<br>\n<strong>Target:</strong> Azure Container Apps (%s)</p>\n" "$SRC_IMAGE" "$TARGET_ENV"
+            if [ "$NEEDS_APPROVAL" = "true" ]; then
+              printf "<p><a href=\"%s\">Build details</a> • <a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL" "$BUILD_URL"
+            else
+              printf "<p><a href=\"%s\">Build details</a></p>\n" "$BUILD_URL"
+            fi
+            cat "$RELEASE_HTML" || true
+          } > "$EMAIL_HTML"
+          
+          {
+            echo "subject<<EOF"
+            echo "$SUBJECT"
+            echo "EOF"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email approver/notify (optional)
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
+          subject: "${{ steps.email_compose.outputs.subject }}"
+          to: ${{ env.MAIL_TO }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: "${{ steps.email_compose.outputs.html }}"
+
+  promote-to-test:
+    name: Promote to test
+    if: ${{ needs.plan.outputs.run_test == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, prepare-and-notify-test]
+    environment: test
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: test
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACR='${{ steps.prep.outputs.acr }}'
+          # Prefer override RG when provided for cross-RG ACR
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          echo "Ensuring ACR '$ACR' exists in resource group '$ACR_RG'"
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/processes-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env
+        shell: bash
+        run: |
+          set -euo pipefail
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          # Derive location from the resource group and set it for preprovision scripts
+          RG_LOC=$(az group show -n "${{ steps.prep.outputs.rg }}" --query location -o tsv 2>/dev/null || true)
+          if [ -n "$RG_LOC" ]; then
+            echo "Resolved location from RG '${{ steps.prep.outputs.rg }}': $RG_LOC"
+            azd env set AZURE_LOCATION "$RG_LOC"
+          else
+            echo "Warning: Could not resolve location for RG '${{ steps.prep.outputs.rg }}'"
+          fi
+          # Pass cross-RG override for ACR when configured
+          if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"
+          else
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          fi
+          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
+          if [ -n "${{ vars.KEY_VAULT_NAME || '' }}" ]; then
+            azd env set KEY_VAULT_NAME "${{ vars.KEY_VAULT_NAME }}"
+            echo "Using provided KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}"
+          else
+            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
+          fi
+          azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Fast image-only update (skip provision when possible)
+        id: fastpath_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-proc" | tr '[:upper:]' '[:lower:]')
+          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          RG="${{ steps.prep.outputs.rg }}"
+          ACR_NAME="${{ steps.prep.outputs.acr }}"
+          ACR_DOMAIN="${ACR_NAME}.azurecr.io"
+          
+          # Validate prerequisites
+          DIGEST_PART="${IMG#*@}"
+          if [ "$IMG" = "$DIGEST_PART" ]; then
+            echo "Image is not digest-form; cannot fast-path."
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if ! az containerapp show -n "$APP_NAME" -g "$RG" >/dev/null 2>&1; then
+            echo "Container App does not exist; cannot fast-path."
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Execute fast-path image update
+          chmod +x scripts/update-containerapp-image.sh
+          if ./scripts/update-containerapp-image.sh "$APP_NAME" "$RG" "$IMG" "$ACR_NAME" "$ACR_DOMAIN"; then
+            echo "didFastPath=true" >> $GITHUB_OUTPUT
+          else
+            echo "Fast-path update failed; will fall back to full provision"
+            echo "didFastPath=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Make preprovision hooks executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/ensure-acr.sh
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        if: steps.fastpath_test.outputs.didFastPath != 'true'
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+      - name: Expose deployment endpoints
+        id: expose_endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW=$(azd env get-value processesFqdn 2>/dev/null || true)
+          FQDN=$(printf '%s' "$RAW" | tr -d '\r' | head -n1)
+          if printf '%s' "$FQDN" | grep -qi '^error:'; then FQDN=""; fi
+          if [ -z "$FQDN" ]; then
+            ENV="${{ steps.prep.outputs.env }}"
+            RG="${{ steps.prep.outputs.rg }}"
+            APP_NAME=$(echo "${ENV}-rap-proc" | tr '[:upper:]' '[:lower:]')
+            az extension add -n containerapp -y >/dev/null 2>&1 || true
+            CA_FQDN=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
+            FQDN=$(printf '%s' "$CA_FQDN" | tr -d '\r' | head -n1)
+            if [ -n "$FQDN" ]; then
+              azd env set processesFqdn "$FQDN" >/dev/null || true
+            fi
+          fi
+          if [ -n "$FQDN" ]; then
+            echo "processesFqdn=$FQDN" >> $GITHUB_OUTPUT
+            echo "Processes URL: https://$FQDN"
+          else
+            echo "Processes URL not available"
+          fi
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Processes: https://$FQDN"
+            else
+              echo "- Processes: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Persist deployment metadata to tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENV="${{ steps.prep.outputs.env }}"
+          RG="${{ steps.prep.outputs.rg }}"
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
+          APP_NAME=$(echo "${ENV}-rap-proc" | tr '[:upper:]' '[:lower:]')
+          NEW_DIGEST='${{ steps.import.outputs.digest }}'
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          SRC_DOMAIN="${SRC_IMAGE%%/*}"
+          SRC_REG_NAME=$(echo "$SRC_DOMAIN" | sed 's/\.azurecr\.io$//')
+          SRC_PATH="${SRC_IMAGE#*/}"
+          SRC_REPO="${SRC_PATH%@*}"
+          NEW_SHA=$(bash "${GITHUB_WORKSPACE}/scripts/get-commit-from-image.sh" "$SRC_REG_NAME" "$SRC_REPO" "$NEW_DIGEST" 2>&1)
+          echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
+          if [ -z "$NEW_DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
+          TAG_ARGS=("raptor.lastDigest=${NEW_DIGEST}")
+          if [ -n "$NEW_SHA" ]; then TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}"); fi
+          az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+            --resource-type "Microsoft.App/containerApps" \
+            --is-incremental \
+            --tags "${TAG_ARGS[@]}" >/dev/null
+
+  # ------------------------------
+  # Train Environment
+  # ------------------------------
+
+  after-test:
+    name: Gate for train/prod
+    if: ${{ always() && needs.plan.outputs.run_test == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, promote-to-test]
+    steps:
+      - name: Check test promotion result
+        run: |
+          if [ "${{ needs.promote-to-test.result }}" != "success" ]; then
+            echo "Test promotion failed. Blocking subsequent promotions."
+            exit 1
+          fi
+          echo "Test promotion succeeded. Allowing subsequent promotions."
+
+  prepare-and-notify-train:
+    name: Prepare & Notify (train)
+    if: ${{ needs.plan.outputs.run_train == 'true' }}
+    needs: [plan, after-test]
+    runs-on: ubuntu-latest
+    environment: preflight
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: train
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
+      PROCESSES_REPO_READ_TOKEN: ${{ secrets.PROCESSES_REPO_READ_TOKEN }}
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+    outputs:
+      needsApproval: ${{ steps.gate.outputs.needsApproval }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          az account show -o none
+          az account get-access-token -o none
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          if [ -z "$ACR_NAME" ] || [ -z "$RG" ]; then
+            echo "Missing AZURE_ACR_NAME or AZURE_RESOURCE_GROUP for '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          if [ -z "$LOC" ]; then
+            echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            exit 1
+          fi
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Capture current deployed image
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-proc" | tr '[:upper:]' '[:lower:]')
+          RG="${{ steps.prep.outputs.rg }}"
+          
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          OLD_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          
+          if [ -n "$OLD_IMG" ]; then
+            echo "oldImage=$OLD_IMG" >> $GITHUB_OUTPUT
+            TAGS=$(az resource show -n "$APP_NAME" -g "$RG" --resource-type "Microsoft.App/containerApps" --query "tags" -o json 2>/dev/null || echo "{}")
+            OLD_COMMIT=$(echo "$TAGS" | jq -r '.["raptor.lastCommit"] // ""' || true)
+            if [ -n "$OLD_COMMIT" ]; then
+              echo "oldCommit=$OLD_COMMIT" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Generate release notes
+        id: relnotes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          SRC_REPO='${{ env.SRC_REPO }}'
+          DOMAIN="${SRC_IMAGE%%/*}"
+          REG_NAME=$(echo "$DOMAIN" | sed 's/\.azurecr\.io$//')
+          REPO_PATH="${SRC_IMAGE#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          NEW_SHA=$(bash "${GITHUB_WORKSPACE}/scripts/get-commit-from-image.sh" "$REG_NAME" "$REPO_NAME" "$NEW_DIGEST" 2>&1 | tail -n1)
+          OLD_SHA='${{ steps.before.outputs.oldCommit }}'
+          TARGET_ENV='${{ steps.prep.outputs.env }}'
+          chmod +x "${GITHUB_WORKSPACE}/scripts/relnotes.sh"
+          bash "${GITHUB_WORKSPACE}/scripts/relnotes.sh" "$SRC_REPO" "$OLD_SHA" "$NEW_SHA" "$TARGET_ENV" > release-notes.html
+
+      - name: Check environment approval requirements
+        id: gate
+        shell: bash
+        run: |
+          NEEDS_APPROVAL="false"
+          if [ "${{ vars.TRAIN_REQUIRES_APPROVAL || 'false' }}" = "true" ]; then
+            NEEDS_APPROVAL="true"
+          fi
+          echo "needsApproval=$NEEDS_APPROVAL" >> $GITHUB_OUTPUT
+
+      - name: Compose email notification
+        id: email_compose
+        shell: bash
+        env:
+          TARGET_ENV: ${{ steps.prep.outputs.env }}
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+          NEEDS_APPROVAL: ${{ steps.gate.outputs.needsApproval }}
+          RELEASE_HTML: release-notes.html
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NEEDS_APPROVAL=${NEEDS_APPROVAL:-false}
+          SUBJECT_PREFIX="[Deployment Notice]"
+          INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is ready."
+          if [ "$NEEDS_APPROVAL" = "true" ]; then
+            SUBJECT_PREFIX="[Approval Needed]"
+            INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
+          fi
+          SUBJECT="$SUBJECT_PREFIX Promote processes to ${TARGET_ENV}"
+          EMAIL_HTML="email.html"
+          {
+            printf "<p>%s</p>\n" "$INTRO"
+            printf "<p><strong>Image:</strong> %s<br>\n<strong>Target:</strong> Azure Container Apps (%s)</p>\n" "$SRC_IMAGE" "$TARGET_ENV"
+            if [ "$NEEDS_APPROVAL" = "true" ]; then
+              printf "<p><a href=\"%s\">Build details</a> • <a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL" "$BUILD_URL"
+            else
+              printf "<p><a href=\"%s\">Build details</a></p>\n" "$BUILD_URL"
+            fi
+            cat "$RELEASE_HTML" || true
+          } > "$EMAIL_HTML"
+          {
+            echo "subject<<EOF"
+            echo "$SUBJECT"
+            echo "EOF"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email approver/notify (optional)
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
+          subject: "${{ steps.email_compose.outputs.subject }}"
+          to: ${{ env.MAIL_TO }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: "${{ steps.email_compose.outputs.html }}"
+
+  promote-to-train:
+    name: Promote to train
+    if: ${{ needs.plan.outputs.run_train == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, prepare-and-notify-train]
+    environment: train
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: train
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+    steps:
+      # Same structure as promote-to-test (Azure Login, azd setup, import, deploy)
+      # Implementation follows same pattern but targets 'train' environment
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          ACR='${{ steps.prep.outputs.acr }}'
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/processes-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env and deploy
+        shell: bash
+        run: |
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+  # ------------------------------
+  # Prod Environment
+  # ------------------------------
+
+  after-train:
+    name: Gate for prod
+    if: ${{ always() && needs.plan.outputs.run_train == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, promote-to-train]
+    steps:
+      - name: Check train promotion result
+        run: |
+          if [ "${{ needs.promote-to-train.result }}" != "success" ]; then
+            echo "Train promotion failed. Blocking prod promotion."
+            exit 1
+          fi
+
+  prepare-and-notify-prod:
+    name: Prepare & Notify (prod)
+    if: ${{ needs.plan.outputs.run_prod == 'true' }}
+    needs: [plan, after-train]
+    runs-on: ubuntu-latest
+    environment: preflight
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: prod
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+      SRC_REPO: ${{ needs.plan.outputs.srcRepo }}
+      PROCESSES_REPO_READ_TOKEN: ${{ secrets.PROCESSES_REPO_READ_TOKEN }}
+      MAIL_SERVER: ${{ secrets.MAIL_SERVER }}
+      MAIL_PORT: ${{ secrets.MAIL_PORT }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      MAIL_FROM: ${{ secrets.MAIL_FROM }}
+    outputs:
+      needsApproval: ${{ steps.gate.outputs.needsApproval }}
+    steps:
+      # Same structure as test/train prepare-and-notify jobs
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          SRC_REPO='${{ env.SRC_REPO }}'
+          DOMAIN="${SRC_IMAGE%%/*}"
+          REG_NAME=$(echo "$DOMAIN" | sed 's/\.azurecr\.io$//')
+          REPO_PATH="${SRC_IMAGE#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          NEW_DIGEST="${SRC_IMAGE#*@}"
+          NEW_SHA=$(bash "${GITHUB_WORKSPACE}/scripts/get-commit-from-image.sh" "$REG_NAME" "$REPO_NAME" "$NEW_DIGEST" 2>&1 | tail -n1)
+          chmod +x "${GITHUB_WORKSPACE}/scripts/relnotes.sh"
+          bash "${GITHUB_WORKSPACE}/scripts/relnotes.sh" "$SRC_REPO" "" "$NEW_SHA" "prod" > release-notes.html
+
+      - name: Check environment approval requirements
+        id: gate
+        shell: bash
+        run: |
+          NEEDS_APPROVAL="true"  # Prod should ALWAYS require approval
+          echo "needsApproval=$NEEDS_APPROVAL" >> $GITHUB_OUTPUT
+
+      - name: Compose email notification
+        id: email_compose
+        shell: bash
+        env:
+          TARGET_ENV: prod
+          SRC_IMAGE: ${{ env.SRC_IMAGE }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          SUBJECT="[Approval Required] Promote processes to PRODUCTION"
+          EMAIL_HTML="email.html"
+          {
+            printf "<p><strong>⚠ PRODUCTION DEPLOYMENT APPROVAL REQUIRED</strong></p>\n"
+            printf "<p>Image: %s<br>\nTarget: Azure Container Apps (prod)</p>\n" "$SRC_IMAGE"
+            printf "<p><a href=\"%s\">Review &amp; approve</a></p>\n" "$BUILD_URL"
+            cat release-notes.html || true
+          } > "$EMAIL_HTML"
+          {
+            echo "subject=$SUBJECT"
+            echo "html<<EOF"
+            cat "$EMAIL_HTML"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Email approver (required for prod)
+        if: ${{ env.MAIL_SERVER && env.MAIL_USERNAME && env.MAIL_PASSWORD && env.MAIL_TO }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.MAIL_SERVER }}
+          server_port: ${{ env.MAIL_PORT || 587 }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
+          subject: "${{ steps.email_compose.outputs.subject }}"
+          to: ${{ env.MAIL_TO }}
+          from: "${{ env.MAIL_FROM || format('github-actions@{0}', github.repository_owner) }}"
+          html_body: "${{ steps.email_compose.outputs.html }}"
+
+  promote-to-prod:
+    name: Promote to prod
+    if: ${{ needs.plan.outputs.run_prod == 'true' }}
+    runs-on: ubuntu-latest
+    needs: [plan, prepare-and-notify-prod]
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TARGET_ENV: prod
+      SRC_IMAGE: ${{ needs.plan.outputs.srcImage }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Azure Developer CLI (azd)
+        run: |
+          curl -fsSL https://aka.ms/install-azd.sh | bash
+          echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare target env variables
+        id: prep
+        shell: bash
+        run: |
+          TARGET_ENV=${TARGET_ENV}
+          ACR_NAME='${{ vars.AZURE_ACR_NAME }}'
+          RG='${{ vars.AZURE_RESOURCE_GROUP }}'
+          LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
+          echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "rg=$RG" >> $GITHUB_OUTPUT
+          echo "loc=$LOC" >> $GITHUB_OUTPUT
+          echo "env=$TARGET_ENV" >> $GITHUB_OUTPUT
+
+      - name: Ensure target ACR exists
+        shell: bash
+        run: |
+          ACR='${{ steps.prep.outputs.acr }}'
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
+          if [ -z "$ACR_RG" ]; then ACR_RG='${{ steps.prep.outputs.rg }}'; fi
+          az acr show -n "$ACR" -g "$ACR_RG" >/dev/null 2>&1 || az acr create -n "$ACR" -g "$ACR_RG" --sku Standard >/dev/null
+
+      - name: Import manifest into target ACR repo
+        id: import
+        shell: bash
+        run: |
+          SRC_IMAGE='${{ env.SRC_IMAGE }}'
+          ACR='${{ steps.prep.outputs.acr }}'
+          TARGET_REPO="raptor/processes-${{ steps.prep.outputs.env }}"
+          TAG="promoted-${GITHUB_RUN_ID}"
+          az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
+          DIGEST="${SRC_IMAGE#*@}"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Prepare azd env and deploy
+        shell: bash
+        run: |
+          azd config set alpha.deployment.stacks on
+          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
+          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
+          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
+          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+
+      - name: Deployment confirmation
+        run: |
+          echo "✅ Successfully deployed processes service to PRODUCTION"
+          echo "Image: ${{ env.SRC_IMAGE }}"
+          echo "Container App: prod-rap-proc"

@@ -1,0 +1,415 @@
+name: Deploy Processes Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      targetEnv:
+        description: "GitHub Environment name to run under (e.g., test/train/prod)"
+        required: false
+        default: "dev"
+  push:
+    branches: [ main ]
+    paths:
+      - 'azure.yaml'
+      - 'app/processes-springboot.bicep'
+      - 'scripts/**'
+      # Shared infrastructure changes handled by workflow_dispatch or manual coordination
+      # - 'main.bicep'           # Excluded: triggers all services
+      # - 'main.parameters.json' # Excluded: triggers all services
+      # - 'modules/**'           # Excluded: triggers all services
+      # - 'shared/**'            # Excluded: triggers all services
+  repository_dispatch:
+    types: [ processes-image-pushed ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+    concurrency:
+      group: azure-deployment-${{ github.event.client_payload.targetEnv || inputs.targetEnv || vars.DEFAULT_GITHUB_ENV || 'dev' }}
+      cancel-in-progress: false
+    env:
+      # Processes service configuration
+      SERVICE_KEY: processes            # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
+      SERVICE_SUFFIX: proc              # Used for: {env}-rap-{suffix}
+      
+      # Use environment-scoped variables; define these per GitHub Environment (test/train/prod)
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || 'dev' }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP }}
+      KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME || '' }}  # Optional: Set to use specific Key Vault (e.g., kv-dev-abc123-v10)
+    outputs:
+      processesFqdn: ${{ steps.expose_endpoints.outputs.processesFqdn }}
+    permissions:
+      id-token: write   # for OIDC
+      contents: write   # required for repository_dispatch using GITHUB_TOKEN
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Azure Developer CLI (preferred)
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
+        run: |
+          if ! command -v azd >/dev/null 2>&1; then
+            echo "setup-azd failed; installing via script"
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
+          azd version
+
+      - name: azd auth login (OIDC via provider)
+        run: |
+          echo "Authenticating azd using GitHub OIDC provider"
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Verify az/azd auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Verify Azure CLI is authenticated for this job
+          az account show -o none
+          az account get-access-token -o none
+          # Verify azd is installed and on PATH
+          command -v azd >/dev/null 2>&1
+          azd version
+
+      - name: "Sanity: az context"
+        shell: bash
+        run: |
+          set -euo pipefail
+          CTX=$(az account show --query "{tenant:tenantId, sub:id, user:user.name}" -o tsv)
+          echo "AZ context: $CTX"
+
+      - name: "Sanity: environment variables (resolved)"
+        run: |
+          echo "Using GitHub Environment: ${{ job.environment.name }}"
+          echo "AZURE_ENV_NAME=$AZURE_ENV_NAME"
+          echo "AZURE_RESOURCE_GROUP=$AZURE_RESOURCE_GROUP"
+          echo "AZURE_ACR_NAME=$AZURE_ACR_NAME"
+          echo "AZURE_ACR_RESOURCE_GROUP=$AZURE_ACR_RESOURCE_GROUP"
+
+      - name: Enable azd alpha features (deployment stacks)
+        run: azd config set alpha.deployment.stacks on
+
+      - name: Ensure AZURE_ENV_NAME default
+        run: |
+          if [ -z "$AZURE_ENV_NAME" ]; then
+            # If not provided via repo/environment vars, derive from the ref that triggered the run.
+            # GITHUB_REF_NAME is the short branch/tag (e.g., "main" or "v1.2.3"). Default to "dev" if unavailable.
+            NAME="${GITHUB_REF_NAME:-dev}"
+            # Normalize to a safe environment name:
+            #  - tr: make lowercase
+            #  - sed 's/[^a-z0-9-]/-/g': replace any character that's not a-z, 0-9, or '-' with '-'
+            #    This helps comply with Azure naming constraints for resources derived from env name.
+            SAFE=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            # Write the resolved value to GITHUB_ENV to make it available to subsequent steps in this job.
+            echo "AZURE_ENV_NAME=$SAFE" >> $GITHUB_ENV
+            echo "Using fallback AZURE_ENV_NAME: $SAFE"
+          else
+            echo "Using provided AZURE_ENV_NAME: $AZURE_ENV_NAME"
+          fi
+
+      - name: Prepare azd environment
+        run: |
+          azd env new $AZURE_ENV_NAME --no-prompt || true
+          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
+          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
+          if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "$AZURE_ACR_RESOURCE_GROUP"
+          fi
+          # Derive location from the resource group and set it for preprovision scripts
+          RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
+          if [ -n "$RG_LOC" ]; then
+            echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
+            azd env set AZURE_LOCATION "$RG_LOC"
+          else
+            echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
+          fi
+          azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Set Key Vault name if provided (ensures consistency across preprovision script and Bicep)
+          if [ -n "$KEY_VAULT_NAME" ]; then
+            azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME"
+            echo "Using provided KEY_VAULT_NAME: $KEY_VAULT_NAME"
+          else
+            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
+          fi
+          
+          # Set SQL Admin Password - Required because 'azd up' provisions ALL infrastructure from main.bicep
+          # Even though this is the "processes deployment" workflow, azd up runs the complete Bicep deployment
+          # which includes SQL Server (a @secure() parameter requiring a value in non-interactive mode).
+          # Note: Processes application uses passwordless managed identity auth, not this admin password.
+          if [ -n "${{ secrets.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ secrets.SQL_ADMIN_PASSWORD }}"
+          elif [ -n "${{ vars.SQL_ADMIN_PASSWORD || '' }}" ]; then
+            azd env set SQL_ADMIN_PASSWORD "${{ vars.SQL_ADMIN_PASSWORD }}"
+          else
+            echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
+          fi
+
+      - name: Accept image from repository_dispatch (optional)
+        if: github.event_name == 'repository_dispatch' && github.event.action == 'processes-image-pushed'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMG='${{ github.event.client_payload.image }}'
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          
+          if [ -n "$IMG" ]; then
+            echo "Using pre-built image from repository_dispatch: $IMG"
+            azd env set "$IMAGE_VAR" "$IMG"
+            # The resolve-images.sh hook will keep this digest-based image
+          fi
+
+      # NOTE: Run preprovision hooks manually before azd up to ensure:
+      #   1. Image resolution completes (resolve-images.sh)
+      #   2. SKIP flags are set correctly per service
+      #   3. Validation catches misconfigurations early
+
+      - name: Ensure ACR exists (preprovision)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-acr.sh
+          ./scripts/ensure-acr.sh
+
+      - name: Resolve images (preprovision)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/resolve-images.sh
+          ./scripts/resolve-images.sh processes
+
+      - name: Validate image vs ACR binding (guard)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/validate-acr-binding.sh
+          ./scripts/validate-acr-binding.sh processes
+
+      - name: Fast image-only update (skip provision when possible)
+        if: (github.event_name == 'repository_dispatch' && github.event.action == 'processes-image-pushed') || github.event_name == 'workflow_dispatch'
+        id: fastpath
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          # Use generalized deployment script
+          chmod +x scripts/deploy-service-image.sh
+          ./scripts/deploy-service-image.sh "$SERVICE_KEY" "${AZURE_ENV_NAME}"
+
+      - name: azd up (provision + deploy)
+        if: steps.fastpath.outputs.didFastPath != 'true'
+        run: azd up --no-prompt --environment "$AZURE_ENV_NAME"
+
+      - name: Show effective deployed image
+        id: effective_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE_KEY_UPPER=$(echo "$SERVICE_KEY" | tr '[:lower:]' '[:upper:]')
+          IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-${SERVICE_SUFFIX}" | tr '[:upper:]' '[:lower:]')
+          
+          CONFIGURED_IMG=$(azd env get-value "$IMAGE_VAR" || true)
+          az extension add -n containerapp -y >/dev/null 2>&1 || true
+          DEPLOYED_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          echo "configuredImage=$CONFIGURED_IMG" >> $GITHUB_OUTPUT
+          echo "deployedImage=$DEPLOYED_IMG" >> $GITHUB_OUTPUT
+          echo "Configured image: ${CONFIGURED_IMG:-'(not set)'}"
+          echo "Deployed image:   ${DEPLOYED_IMG:-'(unavailable)'}"
+          {
+            echo "### Deployed image ($SERVICE_KEY)"
+            echo
+            echo "- Configured: ${CONFIGURED_IMG:-'(not set)'}"
+            echo "- Deployed: ${DEPLOYED_IMG:-'(unavailable)'}"
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Persist deployment metadata to tags (base env)
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-${SERVICE_SUFFIX}" | tr '[:upper:]' '[:lower:]')
+          RG="$AZURE_RESOURCE_GROUP"
+          SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
+          if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
+          # Prefer configured image (what we attempted to deploy); fall back to the actual deployed image read back
+          IMG='${{ steps.effective_image.outputs.configuredImage }}'
+          if [ -z "$IMG" ]; then IMG='${{ steps.effective_image.outputs.deployedImage }}'; fi
+          if [ -z "$IMG" ]; then
+            echo "No image detected; skipping tag persistence."
+            exit 0
+          fi
+          DIGEST="${IMG#*@}"
+          if [ "$IMG" = "$DIGEST" ]; then
+            echo "Image is not in digest form; skipping tag persistence: $IMG"
+            exit 0
+          fi
+          DOMAIN="${IMG%%/*}"
+          REPO_PATH="${IMG#*/}"
+          REPO_NAME="${REPO_PATH%@*}"
+          echo "Resolved image: domain=$DOMAIN repo=$REPO_NAME digest=$DIGEST"
+          # Attempt to resolve commit from OCI labels when image is in ACR
+          NEW_SHA=""
+          if echo "$DOMAIN" | grep -q ".azurecr.io$"; then
+            # Strip .azurecr.io suffix using bash parameter expansion (more reliable than sed)
+            REG_NAME="${DOMAIN%.azurecr.io}"
+            echo "Attempting to read OCI labels from ACR: $REG_NAME, repo: $REPO_NAME, digest: $DIGEST"
+            NEW_SHA=$(bash "${GITHUB_WORKSPACE}/scripts/get-commit-from-image.sh" "$REG_NAME" "$REPO_NAME" "$DIGEST" 2>&1 | tee /dev/stderr | tail -n1)
+            if [ -n "$NEW_SHA" ]; then
+              echo "✓ Successfully extracted commit SHA from OCI labels: $NEW_SHA"
+            else
+              echo "⚠ Could not extract commit SHA from OCI labels"
+            fi
+          fi
+          echo "Updating tags on Container App '$APP_NAME' in RG '$RG'"
+          if [ -z "$DIGEST" ]; then echo "No digest to persist; skipping tag update."; exit 0; fi
+          TAG_ARGS=("raptor.lastDigest=${DIGEST}")
+          if [ -n "$NEW_SHA" ]; then 
+            TAG_ARGS+=("raptor.lastCommit=${NEW_SHA}")
+            echo "Will set tags: raptor.lastDigest=${DIGEST}, raptor.lastCommit=${NEW_SHA}"
+          else
+            echo "Will set tags: raptor.lastDigest=${DIGEST} (no commit SHA available)"
+          fi
+          az resource tag -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} \
+            --resource-type "Microsoft.App/containerApps" \
+            --is-incremental \
+            --tags "${TAG_ARGS[@]}" >/dev/null || true
+          echo "✓ Container App tags updated"
+
+      - name: Prepare promotion target
+        if: success() && github.event_name == 'repository_dispatch' && github.event.action == 'processes-image-pushed'
+        id: promo
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ vars.PROMOTE_REPO || github.repository }}"
+          echo "repo=$TARGET" >> $GITHUB_OUTPUT
+          IMG='${{ steps.effective_image.outputs.configuredImage }}'
+          echo "image=$IMG" >> $GITHUB_OUTPUT
+          # Resolve the source repository for commit history / compare links
+          # Prefer value provided by the originating event payload, then a configured var, else fall back to current repo
+          SRC_REPO='${{ github.event.client_payload.sourceRepo || vars.PROCESSES_SOURCE_REPO || '' }}'
+          if [ -z "$SRC_REPO" ]; then
+            SRC_REPO="$GITHUB_REPOSITORY"
+            echo "Warning: sourceRepo not provided in payload or vars; falling back to $SRC_REPO"
+          fi
+          echo "sourceRepo=$SRC_REPO" >> $GITHUB_OUTPUT
+          # Determine the promotion environment: prefer payload.promoEnv, fallback to configured default, else 'test'
+          PROMO_ENV='${{ github.event.client_payload.promoEnv || vars.PROMO_ENV_NAME || 'test' }}'
+          echo "env=$PROMO_ENV" >> $GITHUB_OUTPUT
+          echo "Promotion will target repo: $TARGET" 
+          echo "Image to promote: $IMG"
+          echo "Source repo: $SRC_REPO"
+          echo "Promotion environment: $PROMO_ENV"
+
+      - name: Log and wait before promotion dispatch
+        if: success() && steps.promo.outputs.image && steps.promo.outputs.repo
+        shell: bash
+        run: |
+          echo "Dev deployment successful. Dispatching promotion event in 3 seconds..."
+          sleep 3
+
+      - name: Dispatch promotion (same-repo)
+        if: success() && steps.promo.outputs.repo == github.repository
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ github.token }}
+          repository: ${{ steps.promo.outputs.repo }}
+          event-type: processes-image-promote
+          client-payload: |
+            {"image": "${{ steps.promo.outputs.image }}",
+             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
+             "acrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
+             "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}",
+             "targetEnv": "${{ steps.promo.outputs.env }}",
+             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
+             "targetAcrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
+             "targetSubscriptionId": "${{ vars.PROMO_AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"}
+
+      - name: Verify dispatch token for cross-repo
+        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != '' && steps.promo.outputs.repo != github.repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ secrets.GH_PAT_REPO_DISPATCH }}" ]; then
+            echo "Missing secret GH_PAT_REPO_DISPATCH for cross-repo dispatch to ${{ steps.promo.outputs.repo }}." >&2
+            echo "Provide a PAT with repo (classic) OR a fine-grained PAT with Actions: Read+write and Contents: Read+write on the target repo." >&2
+            exit 1
+          fi
+
+      - name: Dispatch promotion (cross-repo)
+        if: success() && steps.promo.outputs.repo && steps.promo.outputs.repo != github.repository
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GH_PAT_REPO_DISPATCH }}
+          repository: ${{ steps.promo.outputs.repo }}
+          event-type: processes-image-promote
+          client-payload: |
+            {"image": "${{ steps.promo.outputs.image }}",
+             "resourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
+             "acrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
+             "sourceRepo": "${{ steps.promo.outputs.sourceRepo }}",
+             "targetEnv": "${{ steps.promo.outputs.env }}",
+             "targetResourceGroup": "${{ vars.PROMO_AZURE_RESOURCE_GROUP || format('rg-raptor-{0}', steps.promo.outputs.env) }}",
+             "targetAcrName": "${{ vars.PROMO_AZURE_ACR_NAME }}",
+             "targetSubscriptionId": "${{ vars.PROMO_AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"}
+
+      - name: Expose deployment endpoints
+        id: expose_endpoints
+        run: |
+          set -euo pipefail
+          RAW=$(azd env get-value processesFqdn 2>/dev/null || true)
+          # Use only the first line and strip CR to avoid breaking GitHub output/env files
+          FQDN=$(printf '%s' "$RAW" | tr -d '\r' | head -n1)
+          # Treat any 'ERROR:' response from azd as empty
+          if printf '%s' "$FQDN" | grep -qi '^error:'; then FQDN=""; fi
+          # Fallback: read from Container App if not present in azd env
+          if [ -z "$FQDN" ]; then
+            APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-proc" | tr '[:upper:]' '[:lower:]')
+            az extension add -n containerapp -y >/dev/null 2>&1 || true
+            CA_FQDN=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            # Some environments return 'null' literal; normalize to empty
+            if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
+            FQDN=$(printf '%s' "$CA_FQDN" | tr -d '\r' | head -n1)
+            if [ -n "$FQDN" ]; then
+              azd env set processesFqdn "$FQDN" >/dev/null || true
+            fi
+          fi
+          # Only write outputs/env when FQDN is a non-empty, single-line value
+          if [ -n "$FQDN" ]; then
+            echo "processesFqdn=$FQDN" >> $GITHUB_OUTPUT
+            echo "DEPLOY_URL=$FQDN" >> $GITHUB_ENV
+            echo "Processes URL: https://$FQDN"
+          else
+            echo "Processes URL not available"
+          fi
+          {
+            echo "### Deployment endpoints"
+            echo ""
+            if [ -n "$FQDN" ]; then
+              echo "- Processes: https://$FQDN"
+            else
+              echo "- Processes: (not available)"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
