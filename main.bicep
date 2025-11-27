@@ -14,6 +14,9 @@ param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-hellowor
 @description('Container image (full ACR reference) for backend (e.g. myacr.azurecr.io/rap-backend:latest)')
 param backendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Container image (full ACR reference) for processes (e.g. myacr.azurecr.io/rap-processes:latest)')
+param processesImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 /* Removed publicHostname parameter for simplicity */
 
 
@@ -28,6 +31,9 @@ param skipFrontendAcrPullRoleAssignment bool = true
 
 @description('Skip creating AcrPull role assignment for backend (useful for local runs without RBAC)')
 param skipBackendAcrPullRoleAssignment bool = true
+
+@description('Skip creating AcrPull role assignment for processes (useful for local runs without RBAC)')
+param skipProcessesAcrPullRoleAssignment bool = true
 
 @description('vCPU allocation for frontend container app (integer, default 1)')
 param frontendCpu int = 1
@@ -52,6 +58,18 @@ param backendCpu int = 1
   '4Gi'
 ])
 param backendMemory string = '2Gi'
+
+@description('vCPU allocation for processes container app (integer, default 1)')
+param processesCpu int = 1
+
+@description('Memory allocation for processes container app (valid combos with selected CPU; e.g., 2Gi for 1 vCPU)')
+@allowed([
+  '0.5Gi'
+  '1Gi'
+  '2Gi'
+  '4Gi'
+])
+param processesMemory string = '2Gi'
 
 @description('Enable Azure SQL Database')
 param enableSqlDatabase bool = true
@@ -136,6 +154,8 @@ var frontendAppName = '${namePrefix}-fe'
 var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
 var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
+var processesAppName = '${namePrefix}-proc'
+var processesIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}processes-${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
 var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
@@ -401,15 +421,67 @@ module frontend 'app/frontend-angular.bicep' = {
   ]
 }
 
+// Processes jBPM Container App (can deploy in parallel with other services)
+module processes 'app/processes-springboot.bicep' = {
+  name: 'processesApp'
+  params: {
+    name: processesAppName
+    location: location
+    identityName: processesIdentityName
+    // Managed environment name matches what we created above
+    containerAppsEnvironmentName: '${abbrs.appManagedEnvironments}${resourceToken}'
+    // ACR name for image pull identity binding
+    containerRegistryName: resolvedAcrName
+    // ACR resource group (for cross-RG role assignment)
+    containerRegistryResourceGroup: acrResourceGroup
+    // Use provided image (from env via parameters file) or default placeholder
+    image: processesImage
+    // Allow toggling AcrPull role assignment per service
+    skipAcrPullRoleAssignment: skipProcessesAcrPullRoleAssignment
+    // Application Insights name for processes monitoring
+    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
+    enableAppInsights: true
+    // Compute sizing (exposed as parameters)
+    cpu: processesCpu
+    memory: processesMemory
+    // Replicas configuration
+    minReplicas: 1
+    maxReplicas: 10
+    // SQL connection configuration (if SQL is enabled)
+    enableSqlDatabase: enableSqlDatabase
+    sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
+    sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
+    sqlAdminLogin: sqlAdminLogin
+    // Optional env vars (can be extended later)
+    envVars: [
+      {
+        name: 'APP_ROLE'
+        value: 'processes'
+      }
+      {
+        name: 'AZURE_ENV_NAME'
+        value: environmentName
+      }
+    ]
+    tags: tags
+  }
+  dependsOn: [
+    containerAppsEnvironment
+  ]
+}
+
 // Useful outputs for azd and diagnostics
 // Derive login server from the provided ACR name to avoid cross-RG coupling
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
 output backendFqdn string = backend.outputs.fqdn
+output processesFqdn string = processes.outputs.fqdn
 output sqlServerFqdn string = enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
 output sqlDatabaseName string = enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
 output backendIdentityName string = backendIdentityName
 output backendIdentityPrincipalId string = backend.outputs.identityPrincipalId
+output processesIdentityName string = processesIdentityName
+output processesIdentityPrincipalId string = processes.outputs.identityPrincipalId
 
 // SQL permission grant script for manual execution via Azure Portal
 output sqlPermissionScript string = enableSqlDatabase ? replace(replace('''

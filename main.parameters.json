@@ -23,6 +23,12 @@
       "backendImage": {
         "value": "${SERVICE_BACKEND_IMAGE_NAME}"
       },
+      "processesImage": {
+        "value": "${SERVICE_PROCESSES_IMAGE_NAME}"
+      },
+      "skipProcessesAcrPullRoleAssignment": {
+        "value": "${SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true}"
+      },
       "enableSqlDatabase": {
         "value": "${ENABLE_SQL_DATABASE=true}"
       },
