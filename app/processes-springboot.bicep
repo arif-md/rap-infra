@@ -117,7 +117,7 @@ var appInsightsEnv = (enableAppInsights && !empty(applicationInsightsName)) ? [
 var sqlEnv = enableSqlDatabase ? [
   {
     name: 'SPRING_DATASOURCE_URL'
-    value: 'jdbc:sqlserver://${sqlServerFqdn}:1433;database=${sqlDatabaseName};currentSchema=JBPM;encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;authentication=ActiveDirectoryMSI;msiClientId=${uai.properties.clientId};'
+    value: 'jdbc:sqlserver://${sqlServerFqdn}:1433;database=${sqlDatabaseName};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;authentication=ActiveDirectoryMSI;msiClientId=${uai.properties.clientId};'
   }
   {
     name: 'SPRING_DATASOURCE_DRIVER_CLASS_NAME'
