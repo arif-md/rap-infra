@@ -484,24 +484,31 @@ output processesIdentityName string = processesIdentityName
 output processesIdentityPrincipalId string = processes.outputs.identityPrincipalId
 
 // SQL permission grant script for manual execution via Azure Portal
-output sqlPermissionScript string = enableSqlDatabase ? replace(replace('''
+output sqlPermissionScript string = enableSqlDatabase ? replace(replace(replace('''
 -- ========================================
--- SQL Permissions for Backend Managed Identity
+-- SQL Permissions for Backend and Processes Managed Identities
 -- ========================================
 -- Execute this script in Azure Portal Query Editor after deployment
 -- Connect to database: __DATABASE_NAME__
 --
--- IMPORTANT: Replace the variable placeholder below with the actual value:
+-- IMPORTANT: Replace the variable placeholders below with the actual values:
 -- Variable: backendIdentityName
--- Value: __IDENTITY_VALUE__
+-- Value: __BACKEND_IDENTITY_VALUE__
+-- Variable: processesIdentityName
+-- Value: __PROCESSES_IDENTITY_VALUE__
 --
 -- Instructions:
 -- 1. Go to Azure Portal > SQL Database > __DATABASE_NAME__
 -- 2. Click "Query editor" in left menu
 -- 3. Sign in with Azure AD (use the SQL Server Azure AD admin account)
 -- 4. Copy this entire script
--- 5. Replace ${backendIdentityName} with the value shown above
--- 6. Click "Run"
+-- 5. Replace ${backendIdentityName} with the backend identity value shown above
+-- 6. Replace ${processesIdentityName} with the processes identity value shown above
+-- 7. Click "Run"
+-- ========================================
+
+-- ========================================
+-- Backend Service Permissions
 -- ========================================
 
 -- Create user for backend managed identity
@@ -520,7 +527,7 @@ GO
 ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentityName}];
 GO
 
--- Verify the user was created
+-- Verify the backend user was created
 SELECT 
     name as UserName,
     type_desc as UserType,
@@ -530,9 +537,38 @@ WHERE name = '${backendIdentityName}';
 GO
 
 -- ========================================
+-- Processes Service Permissions
+-- ========================================
+
+-- Create user for processes managed identity
+CREATE USER [${processesIdentityName}] FROM EXTERNAL PROVIDER;
+GO
+
+-- Grant read permissions
+ALTER ROLE db_datareader ADD MEMBER [${processesIdentityName}];
+GO
+
+-- Grant write permissions
+ALTER ROLE db_datawriter ADD MEMBER [${processesIdentityName}];
+GO
+
+-- Grant DDL permissions (for jBPM schema management)
+ALTER ROLE db_ddladmin ADD MEMBER [${processesIdentityName}];
+GO
+
+-- Verify the processes user was created
+SELECT 
+    name as UserName,
+    type_desc as UserType,
+    create_date as CreatedDate
+FROM sys.database_principals 
+WHERE name = '${processesIdentityName}';
+GO
+
+-- ========================================
 -- Script execution complete!
 -- ========================================
-''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__IDENTITY_VALUE__', backendIdentityName) : ''
+''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__BACKEND_IDENTITY_VALUE__', backendIdentityName), '__PROCESSES_IDENTITY_VALUE__', processesIdentityName) : ''
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
