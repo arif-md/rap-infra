@@ -94,6 +94,14 @@ var baseEnvArray = [
     name: 'AZURE_CLIENT_ID'
     value: uai.properties.clientId
   }
+  {
+    name: 'KIESERVER_USER'
+    value: 'kieserver'
+  }
+  {
+    name: 'KIESERVER_PASSWORD'
+    value: 'kieserver123'
+  }
 ]
 
 // App Insights env vars (if enabled)
