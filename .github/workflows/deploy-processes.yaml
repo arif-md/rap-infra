@@ -230,7 +230,11 @@ jobs:
           IMAGE_VAR="SERVICE_${SERVICE_KEY_UPPER}_IMAGE_NAME"
           APP_NAME=$(echo "${AZURE_ENV_NAME}-rap-${SERVICE_SUFFIX}" | tr '[:upper:]' '[:lower:]')
           
-          CONFIGURED_IMG=$(azd env get-value "$IMAGE_VAR" || true)
+          CONFIGURED_IMG=$(azd env get-value "$IMAGE_VAR" 2>/dev/null || true)
+          # Filter out ERROR messages from azd output
+          if echo "$CONFIGURED_IMG" | grep -qi '^ERROR:'; then
+            CONFIGURED_IMG=""
+          fi
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           DEPLOYED_IMG=$(az containerapp show -n "$APP_NAME" -g "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           echo "configuredImage=$CONFIGURED_IMG" >> $GITHUB_OUTPUT

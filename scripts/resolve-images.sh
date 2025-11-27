@@ -6,7 +6,7 @@
 #   ./resolve-images.sh [service-name]
 #
 # PARAMETERS:
-#   service-name (optional) - Specific service to resolve (e.g., "frontend", "backend")
+#   service-name (optional) - Specific service to resolve (e.g., "frontend", "backend", "processes")
 #                             If omitted, resolves ALL services
 #
 # BEHAVIOR:
@@ -14,13 +14,14 @@
 #   - If image is missing or invalid, queries ACR for latest
 #   - Falls back to public image if ACR repository is empty
 #
-# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT
+# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT
 #
 # This script is used by:
 #   - Local azd up: ./resolve-images.sh (resolves all services)
 #   - provision-infrastructure workflow: ./resolve-images.sh (resolves all services)
 #   - deploy-frontend workflow: ./resolve-images.sh frontend (resolves only frontend)
 #   - deploy-backend workflow: ./resolve-images.sh backend (resolves only backend)
+#   - deploy-processes workflow: ./resolve-images.sh processes (resolves only processes)
 
 set -euo pipefail
 
@@ -97,6 +98,10 @@ if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "backend" ]; then
   resolve_service_image "backend"
 fi
 
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "processes" ]; then
+  resolve_service_image "processes"
+fi
+
 # Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
 # Each service has independent control over whether to create ACR role assignment
 echo ""
@@ -104,6 +109,7 @@ echo "🔧 Setting per-service ACR pull role assignment flags..."
 
 FRONTEND_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || echo "")
 BACKEND_IMG=$(azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>/dev/null || echo "")
+PROCESSES_IMG=$(azd env get-value SERVICE_PROCESSES_IMAGE_NAME 2>/dev/null || echo "")
 
 # Frontend: SKIP if image doesn't use ACR
 if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "frontend" ]; then
@@ -124,6 +130,17 @@ if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "backend" ]; then
   else
     echo "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true"
     azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+  fi
+fi
+
+# Processes: SKIP if image doesn't use ACR
+if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "processes" ]; then
+  if [[ "$PROCESSES_IMG" == *"$REGISTRY"* ]]; then
+    echo "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false"
+    azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+  else
+    echo "   Processes uses public/external image - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true"
+    azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
   fi
 fi
 
