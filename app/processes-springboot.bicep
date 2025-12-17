@@ -131,6 +131,27 @@ var sqlEnv = enableSqlDatabase ? [
     name: 'SQL_DATABASE_NAME'
     value: sqlDatabaseName
   }
+  // CRITICAL: Override datasource credentials when using Managed Identity
+  // For Managed Identity, credentials are provided via the connection string (authentication=ActiveDirectoryMSI)
+  // Setting these to empty/unset values prevents Spring from using SQL authentication
+  {
+    name: 'SPRING_DATASOURCE_USERNAME'
+    value: ''
+  }
+  {
+    name: 'SPRING_DATASOURCE_PASSWORD'
+    value: ''
+  }
+  // Flyway: Don't set user/password so it uses the datasource connection (with Managed Identity)
+  // Setting to empty string unsets the defaults from application.properties
+  {
+    name: 'FLYWAY_USER'
+    value: ''
+  }
+  {
+    name: 'FLYWAY_PASSWORD'
+    value: ''
+  }
 ] : []
 
 // Combine base env + optional App Insights + SQL + caller-provided env vars
