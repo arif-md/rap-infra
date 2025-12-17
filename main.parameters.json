@@ -53,6 +53,9 @@
       "sqlAzureAdAdminPrincipalType": {
         "value": "${SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE=Application}"
       },
+      "flywayValidateOnMigrate": {
+        "value": "${FLYWAY_VALIDATE_ON_MIGRATE=true}"
+      },
       "sqlDatabaseSku": {
         "value": "${SQL_DATABASE_SKU=Basic}"
       },

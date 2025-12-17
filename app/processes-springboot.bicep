@@ -60,6 +60,9 @@ param sqlDatabaseName string = ''
 @description('SQL admin login username')
 param sqlAdminLogin string = ''
 
+@description('Flyway validate on migrate (set to false if migrations were removed/refactored)')
+param flywayValidateOnMigrate string = 'true'
+
 // Existing (shared) resources
 resource cai 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: containerAppsEnvironmentName
@@ -157,6 +160,11 @@ var sqlEnv = enableSqlDatabase ? [
   {
     name: 'FLYWAY_PASSWORD'
     value: ''
+  }
+  // Flyway: Configurable validation (can be disabled if migrations were removed/refactored)
+  {
+    name: 'SPRING_FLYWAY_VALIDATE_ON_MIGRATE'
+    value: flywayValidateOnMigrate
   }
 ] : []
 

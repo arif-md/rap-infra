@@ -93,6 +93,9 @@ param sqlAzureAdAdminObjectId string = ''
 @description('Azure AD admin login name (display name or email)')
 param sqlAzureAdAdminLogin string = ''
 
+@description('Flyway validate on migrate for processes service (set to false if migrations were removed/refactored)')
+param flywayValidateOnMigrate string = 'true'
+
 @description('Azure AD admin principal type: Application (for service principals), User, or Group')
 param sqlAzureAdAdminPrincipalType string = 'Application'
 
@@ -453,6 +456,8 @@ module processes 'app/processes-springboot.bicep' = {
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
     sqlAdminLogin: sqlAdminLogin
+    // Flyway configuration
+    flywayValidateOnMigrate: flywayValidateOnMigrate
     // Optional env vars (can be extended later)
     envVars: [
       {
