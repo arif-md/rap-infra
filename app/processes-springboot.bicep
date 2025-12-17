@@ -111,6 +111,10 @@ var baseEnvArray = [
     // The FQDN follows pattern: <name>.<defaultDomain>
     value: 'https://${name}.${cai.properties.defaultDomain}/rest/server'
   }
+  {
+    name: 'JAVA_OPTS'
+    value: '-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -Dorg.kie.server.startup.strategy=LocalContainersStartupStrategy -Dorg.kie.server.persistence.schema=JBPM -Dorg.kie.server.bypass.auth.user=true'
+  }
 ]
 
 // App Insights env vars (if enabled)
