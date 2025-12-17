@@ -102,6 +102,12 @@ var baseEnvArray = [
     name: 'KIESERVER_PASSWORD'
     value: 'kieserver123'
   }
+  {
+    name: 'KIESERVER_LOCATION'
+    // Construct the public URL: https://<app-name>.<environment-domain>/rest/server
+    // The FQDN follows pattern: <name>.<defaultDomain>
+    value: 'https://${name}.${cai.properties.defaultDomain}/rest/server'
+  }
 ]
 
 // App Insights env vars (if enabled)
