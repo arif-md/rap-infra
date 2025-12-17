@@ -36,25 +36,36 @@ azd env get-value frontendFqdn
 In CI, the workflow prints the URL in the job logs as "Frontend URL: https://…", adds it to the job summary under "Deployment endpoints," and exposes it as `frontendFqdn` output.
 
 ## Prerequisites
-- Azure CLI (az) 2.61.0 or newer (required for Deployment Stacks alpha)
-- Azure Developer CLI (azd)
-- Docker Desktop (optional; not required when deploying a 2) Add the token as a secret
-	- In the infra repo (this repository): Settings → Secrets and variables → Actions → New repository secret
-	- Name: `FRONTEND_REPO_READ_TOKEN`
-	- Value: paste the token
-	- Since this is defined at repository level, it's accessible to all jobs across all environments.
+- **Azure Developer CLI (azd)** - Infrastructure deployment orchestration
+- **Azure CLI (az)** - Version 2.61.0 or newer (required for Deployment Stacks alpha)
+- **Bicep CLI** - Infrastructure as Code (automatically installed with Azure CLI)
+- **Docker Desktop** (optional; not required when deploying pre-built images)
 
-3) Verify
-	- Trigger a promotion to `test`. In the job summary and the approval email, the "List of changes" section should include a commit list/table instead of being empty. image)
+### Installation (Windows PowerShell)
 
-Windows install (PowerShell):
-
-```
+```powershell
+# Install Azure Developer CLI (azd)
 winget install microsoft.azd
 winget upgrade microsoft.azd
+
+# Install Azure CLI (az)
+winget install -e --id Microsoft.AzureCLI
+winget upgrade -e --id Microsoft.AzureCLI
+
+# Install Bicep CLI (via Azure CLI)
+az bicep install
+az bicep upgrade
+
+# Verify installations
 azd version
 az version
+az bicep version
 ```
+
+> **Note:** After installation, restart your terminal or refresh PATH in current session:
+> ```powershell
+> $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+> ```
 
 ## One-time environment setup (local)
 From this `infra/` folder:

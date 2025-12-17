@@ -184,7 +184,8 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
   params: {
     logAnalyticsName: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
     applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
-    applicationInsightsDashboardName: '${abbrs.portalDashboards}${resourceToken}'
+    // Dashboard removed - causes deployment stack failures (known issue with Microsoft.Portal/dashboards in alpha stacks)
+    // applicationInsightsDashboardName: '${abbrs.portalDashboards}${resourceToken}'
     location: location
     tags: tags
   }
