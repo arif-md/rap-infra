@@ -117,6 +117,9 @@ param oidcUserInfoEndpoint string = ''
 @description('OIDC Provider JWK Set URI')
 param oidcJwkSetUri string = ''
 
+@description('OIDC Provider End Session Endpoint (for logout)')
+param oidcEndSessionEndpoint string = ''
+
 @description('OIDC Client ID (Public client - no secret needed for PKCE)')
 param oidcClientId string = ''
 
@@ -357,6 +360,7 @@ module backend 'app/backend-springboot.bicep' = {
     oidcTokenEndpoint: oidcTokenEndpoint
     oidcUserInfoEndpoint: oidcUserInfoEndpoint
     oidcJwkSetUri: oidcJwkSetUri
+    oidcEndSessionEndpoint: oidcEndSessionEndpoint
     oidcClientId: oidcClientId
     oidcAcrValues: oidcAcrValues
     oidcPrompt: oidcPrompt

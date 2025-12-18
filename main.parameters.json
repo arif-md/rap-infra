@@ -110,6 +110,9 @@
       "oidcJwkSetUri": {
         "value": "${OIDC_JWK_SET_URI}"
       },
+      "oidcEndSessionEndpoint": {
+        "value": "${OIDC_END_SESSION_ENDPOINT}"
+      },
       "oidcClientId": {
         "value": "${OIDC_CLIENT_ID}"
       },

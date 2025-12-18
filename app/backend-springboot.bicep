@@ -74,6 +74,7 @@ param oidcAuthorizationEndpoint string = ''
 param oidcTokenEndpoint string = ''
 param oidcUserInfoEndpoint string = ''
 param oidcJwkSetUri string = ''
+param oidcEndSessionEndpoint string = ''
 param oidcClientId string = ''
 
 @description('OIDC additional request parameters (optional)')
@@ -175,6 +176,10 @@ var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
   {
     name: 'OIDC_JWK_SET_URI'
     value: oidcJwkSetUri
+  }
+  {
+    name: 'OIDC_END_SESSION_ENDPOINT'
+    value: oidcEndSessionEndpoint
   }
   {
     name: 'OIDC_CLIENT_ID'
