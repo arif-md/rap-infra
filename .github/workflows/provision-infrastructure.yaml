@@ -188,6 +188,11 @@ jobs:
             echo "✓ OIDC_JWK_SET_URI configured"
           fi
           
+          if [ -n "${{ vars.OIDC_END_SESSION_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_END_SESSION_ENDPOINT "${{ vars.OIDC_END_SESSION_ENDPOINT }}"
+            echo "✓ OIDC_END_SESSION_ENDPOINT configured"
+          fi
+          
           if [ -n "${{ vars.OIDC_CLIENT_ID || '' }}" ]; then
             azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
             echo "✓ OIDC_CLIENT_ID configured (using PKCE - no client secret needed)"

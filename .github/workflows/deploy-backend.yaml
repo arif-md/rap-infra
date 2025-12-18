@@ -164,6 +164,26 @@ jobs:
           else
             echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
           fi
+          
+          # Set OIDC Provider Configuration (required for backend authentication)
+          if [ -n "${{ vars.OIDC_AUTHORIZATION_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_AUTHORIZATION_ENDPOINT "${{ vars.OIDC_AUTHORIZATION_ENDPOINT }}"
+          fi
+          if [ -n "${{ vars.OIDC_TOKEN_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_TOKEN_ENDPOINT "${{ vars.OIDC_TOKEN_ENDPOINT }}"
+          fi
+          if [ -n "${{ vars.OIDC_USER_INFO_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_USER_INFO_ENDPOINT "${{ vars.OIDC_USER_INFO_ENDPOINT }}"
+          fi
+          if [ -n "${{ vars.OIDC_JWK_SET_URI || '' }}" ]; then
+            azd env set OIDC_JWK_SET_URI "${{ vars.OIDC_JWK_SET_URI }}"
+          fi
+          if [ -n "${{ vars.OIDC_END_SESSION_ENDPOINT || '' }}" ]; then
+            azd env set OIDC_END_SESSION_ENDPOINT "${{ vars.OIDC_END_SESSION_ENDPOINT }}"
+          fi
+          if [ -n "${{ vars.OIDC_CLIENT_ID || '' }}" ]; then
+            azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
+          fi
 
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'backend-image-pushed'
