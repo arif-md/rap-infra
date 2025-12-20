@@ -260,7 +260,7 @@ jobs:
           echo "  - Frontend Container App (dev-rap-fe)"
           echo "  - Backend Container App (dev-rap-be)"
           echo "  - Processes Container App (dev-rap-proc)"
-          echo "  - SQL Server"
+          echo "  - Azure SQL Server and Database"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
