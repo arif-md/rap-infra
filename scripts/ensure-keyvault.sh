@@ -110,29 +110,43 @@ if az keyvault create \
     --location "$LOCATION" \
     --retention-days "$RETENTION_DAYS" \
     --enable-purge-protection true \
-    --enable-rbac-authorization false \
+    --enable-rbac-authorization true \
     >/dev/null 2>&1; then
     
     success "Key Vault created successfully: $KEY_VAULT_NAME"
     
-    # Grant the service principal (ourselves) access to manage secrets
-    info "Granting access policies to service principal..."
-    SP_OBJECT_ID=$(az account show --query user.name -o tsv)
+    # Grant the service principal RBAC permissions to manage secrets
+    info "Granting Key Vault Secrets Officer role to current identity..."
     
-    # If running as service principal, get the object ID
-    ACCOUNT_TYPE=$(az account show --query user.type -o tsv)
-    if [ "$ACCOUNT_TYPE" = "servicePrincipal" ]; then
-        SP_OBJECT_ID=$(az account show --query user.name -o tsv)
+    # Get current user/SP object ID
+    CURRENT_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)
+    
+    # If running as service principal, get its object ID differently
+    if [ -z "$CURRENT_OBJECT_ID" ]; then
+        ACCOUNT_TYPE=$(az account show --query user.type -o tsv)
+        if [ "$ACCOUNT_TYPE" = "servicePrincipal" ]; then
+            SP_APP_ID=$(az account show --query user.name -o tsv)
+            CURRENT_OBJECT_ID=$(az ad sp show --id "$SP_APP_ID" --query id -o tsv 2>/dev/null || true)
+        fi
     fi
     
-    if az keyvault set-policy \
-        --name "$KEY_VAULT_NAME" \
-        --object-id "$SP_OBJECT_ID" \
-        --secret-permissions get list set delete \
-        >/dev/null 2>&1; then
-        success "Access policies granted"
+    if [ -n "$CURRENT_OBJECT_ID" ]; then
+        # Get Key Vault resource ID for role assignment
+        KV_ID=$(az keyvault show --name "$KEY_VAULT_NAME" --query id -o tsv)
+        
+        # Assign Key Vault Secrets Officer role (allows full secret management)
+        if az role assignment create \
+            --role "Key Vault Secrets Officer" \
+            --assignee-object-id "$CURRENT_OBJECT_ID" \
+            --assignee-principal-type "ServicePrincipal" \
+            --scope "$KV_ID" \
+            >/dev/null 2>&1; then
+            success "RBAC role assigned"
+        else
+            warning "Failed to assign RBAC role, but continuing..."
+        fi
     else
-        warning "Failed to set access policies, but continuing..."
+        warning "Could not determine current identity, skipping RBAC assignment"
     fi
     
     # Create required secrets if provided in environment
