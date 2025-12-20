@@ -14,7 +14,15 @@ on:
       - 'main.parameters.json'
       - 'modules/**'
       - 'shared/**'
+      - 'scripts/**'
       - '!app/**'  # Exclude app-specific Bicep files
+      # Note: Workflow files (.github/workflows/**) are intentionally NOT included in paths
+      # Best practices:
+      # 1. Avoid unintended auto-deployment - Workflow changes should be tested deliberately
+      # 2. Prevent breaking changes - A broken workflow could fail silently or cause deployment issues
+      # 3. Require explicit testing - Workflow changes should be reviewed and tested separately
+      # 4. Avoid infinite loops - If a workflow modifies itself, it could create loops
+      # 5. GitHub's design - GitHub treats workflow changes specially for security reasons
 
 jobs:
   provision:
