@@ -110,13 +110,13 @@ if az keyvault create \
     --location "$LOCATION" \
     --retention-days "$RETENTION_DAYS" \
     --enable-purge-protection true \
-    --enable-rbac-authorization true \
+    --enable-rbac-authorization false \
     >/dev/null 2>&1; then
     
     success "Key Vault created successfully: $KEY_VAULT_NAME"
     
-    # Grant the service principal RBAC permissions to manage secrets
-    info "Granting Key Vault Secrets Officer role to current identity..."
+    # Grant the service principal access policies to manage secrets
+    info "Granting access policies to service principal..."
     
     # Get current user/SP object ID
     CURRENT_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)
@@ -131,22 +131,17 @@ if az keyvault create \
     fi
     
     if [ -n "$CURRENT_OBJECT_ID" ]; then
-        # Get Key Vault resource ID for role assignment
-        KV_ID=$(az keyvault show --name "$KEY_VAULT_NAME" --query id -o tsv)
-        
-        # Assign Key Vault Secrets Officer role (allows full secret management)
-        if az role assignment create \
-            --role "Key Vault Secrets Officer" \
-            --assignee-object-id "$CURRENT_OBJECT_ID" \
-            --assignee-principal-type "ServicePrincipal" \
-            --scope "$KV_ID" \
+        if az keyvault set-policy \
+            --name "$KEY_VAULT_NAME" \
+            --object-id "$CURRENT_OBJECT_ID" \
+            --secret-permissions get list set delete \
             >/dev/null 2>&1; then
-            success "RBAC role assigned"
+            success "Access policies granted"
         else
-            warning "Failed to assign RBAC role, but continuing..."
+            warning "Failed to set access policies, but continuing..."
         fi
     else
-        warning "Could not determine current identity, skipping RBAC assignment"
+        warning "Could not determine current identity, skipping access policy assignment"
     fi
     
     # Create required secrets if provided in environment
