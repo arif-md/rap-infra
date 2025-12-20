@@ -128,93 +128,18 @@ if [ -n "$MY_IP" ]; then
 fi
 
 # Grant managed identity permissions using sqlcmd
-echo "Granting database permissions to managed identity..."
+echo "Granting database permissions to managed identities..."
 
-# Build SQL script for processes identity if it exists
-if [ -n "$PROCESSES_IDENTITY_NAME" ]; then
-  PROCESSES_SQL="
+# Generate SQL script with actual identity values substituted
+# Using cat with here-doc to properly expand variables
+SQL_SCRIPT=$(cat <<EOSQL
 -- ============================================
--- Processes Service Permissions
--- ============================================
-
--- Create user for processes managed identity
-IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '${PROCESSES_IDENTITY_NAME}')
-BEGIN
-    PRINT 'Creating processes user from external provider...'
-    CREATE USER [${PROCESSES_IDENTITY_NAME}] FROM EXTERNAL PROVIDER
-END
-ELSE
-BEGIN
-    PRINT 'Processes user already exists.'
-END
-GO
-
--- Grant db_datareader role to processes
-IF IS_ROLEMEMBER('db_datareader', '${PROCESSES_IDENTITY_NAME}') = 0
-BEGIN
-    PRINT 'Granting db_datareader role to processes identity...'
-    ALTER ROLE db_datareader ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
-END
-ELSE
-BEGIN
-    PRINT 'db_datareader role already assigned to processes identity.'
-END
-GO
-
--- Grant db_datawriter role to processes
-IF IS_ROLEMEMBER('db_datawriter', '${PROCESSES_IDENTITY_NAME}') = 0
-BEGIN
-    PRINT 'Granting db_datawriter role to processes identity...'
-    ALTER ROLE db_datawriter ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
-END
-ELSE
-BEGIN
-    PRINT 'db_datawriter role already assigned to processes identity.'
-END
-GO
-
--- Grant db_ddladmin role to processes
-IF IS_ROLEMEMBER('db_ddladmin', '${PROCESSES_IDENTITY_NAME}') = 0
-BEGIN
-    PRINT 'Granting db_ddladmin role to processes identity...'
-    ALTER ROLE db_ddladmin ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
-END
-ELSE
-BEGIN
-    PRINT 'db_ddladmin role already assigned to processes identity.'
-END
-GO
-
-PRINT 'Permissions granted successfully to [${PROCESSES_IDENTITY_NAME}].'
-GO
-"
-else
-  PROCESSES_SQL=""
-fi
-
-# Create SQL script with actual values (not shell variable syntax)
-SQL_SCRIPT="-- ============================================
 -- SQL Permissions for Backend and Processes Managed Identities
 -- ============================================
--- Execute this script in Azure Portal Query Editor after deployment
--- Connect to database: ${SQL_DATABASE_NAME}
--- ============================================
-
--- IMPORTANT: Replace the variable placeholders below with the actual values:
--- Variable: backendIdentityName
--- Value: ${BACKEND_IDENTITY_NAME}
--- Variable: processesIdentityName
--- Value: ${PROCESSES_IDENTITY_NAME}
--- ============================================
-
--- Instructions:
--- 1. Go to Azure Portal > SQL Database > ${SQL_DATABASE_NAME}
--- 2. Click \"Query editor\" in left menu
--- 3. Sign in with SQL Server Azure AD admin account)
--- 4. Copy this entire script
--- 5. Replace \${backendIdentityName} with the backend identity value shown above
--- 6. Replace \${processesIdentityName} with the processes identity value shown above
--- 7. Click \"Run\"
+-- Database: ${SQL_DATABASE_NAME}
+-- Backend Identity: ${BACKEND_IDENTITY_NAME}
+-- Processes Identity: ${PROCESSES_IDENTITY_NAME:-<not found>}
+-- Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 -- ============================================
 
 -- ============================================
@@ -271,9 +196,78 @@ GO
 
 PRINT 'Permissions granted successfully to [${BACKEND_IDENTITY_NAME}].'
 GO
-${PROCESSES_SQL}
+EOSQL
+)
+
+# Add processes identity permissions if it exists
+if [ -n "$PROCESSES_IDENTITY_NAME" ]; then
+  SQL_SCRIPT="${SQL_SCRIPT}
+$(cat <<EOSQL
+
 -- ============================================
--- Verify the backend user was created
+-- Processes Service Permissions
+-- ============================================
+
+-- Create user for processes managed identity
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '${PROCESSES_IDENTITY_NAME}')
+BEGIN
+    PRINT 'Creating processes user from external provider...'
+    CREATE USER [${PROCESSES_IDENTITY_NAME}] FROM EXTERNAL PROVIDER
+END
+ELSE
+BEGIN
+    PRINT 'Processes user already exists.'
+END
+GO
+
+-- Grant db_datareader role to processes
+IF IS_ROLEMEMBER('db_datareader', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_datareader role to processes identity...'
+    ALTER ROLE db_datareader ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_datareader role already assigned to processes identity.'
+END
+GO
+
+-- Grant db_datawriter role to processes
+IF IS_ROLEMEMBER('db_datawriter', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_datawriter role to processes identity...'
+    ALTER ROLE db_datawriter ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_datawriter role already assigned to processes identity.'
+END
+GO
+
+-- Grant db_ddladmin role to processes
+IF IS_ROLEMEMBER('db_ddladmin', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_ddladmin role to processes identity...'
+    ALTER ROLE db_ddladmin ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_ddladmin role already assigned to processes identity.'
+END
+GO
+
+PRINT 'Permissions granted successfully to [${PROCESSES_IDENTITY_NAME}].'
+GO
+EOSQL
+)"
+fi
+
+# Add verification query
+SQL_SCRIPT="${SQL_SCRIPT}
+$(cat <<EOSQL
+
+-- ============================================
+-- Verify users were created
 -- ============================================
 SELECT
     name as UserName,
@@ -284,7 +278,8 @@ FROM sys.database_principals
 WHERE name IN ('${BACKEND_IDENTITY_NAME}'$([ -n "$PROCESSES_IDENTITY_NAME" ] && echo ", '${PROCESSES_IDENTITY_NAME}'" || echo ""))
 ORDER BY name;
 GO
-"
+EOSQL
+)"
 
 # Check if sqlcmd is available
 if command -v sqlcmd &> /dev/null; then
