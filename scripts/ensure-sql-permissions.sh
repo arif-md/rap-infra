@@ -72,6 +72,16 @@ fi
 
 echo "Found backend identity: $BACKEND_IDENTITY_NAME"
 
+# Get processes managed identity name
+PROCESSES_IDENTITY_NAME=$(az identity list -g "$AZURE_RESOURCE_GROUP" --query "[?contains(name, 'processes')].name | [0]" -o tsv 2>/dev/null || echo "")
+
+if [ -z "$PROCESSES_IDENTITY_NAME" ]; then
+  echo "Processes managed identity not found yet. Will be created by main.bicep deployment."
+  echo "Will only grant permissions to backend identity."
+else
+  echo "Found processes identity: $PROCESSES_IDENTITY_NAME"
+fi
+
 # Get SQL Server FQDN
 SQL_SERVER_FQDN=$(az sql server show -n "$SQL_SERVER_NAME" -g "$AZURE_RESOURCE_GROUP" --query "fullyQualifiedDomainName" -o tsv)
 
@@ -120,61 +130,159 @@ fi
 # Grant managed identity permissions using sqlcmd
 echo "Granting database permissions to managed identity..."
 
-# Create SQL script with actual values (not shell variable syntax)
-SQL_SCRIPT="-- SQL Permissions Script for Backend Managed Identity
--- Database: ${SQL_DATABASE_NAME}
--- Identity: ${BACKEND_IDENTITY_NAME}
--- Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+# Build SQL script for processes identity if it exists
+if [ -n "$PROCESSES_IDENTITY_NAME" ]; then
+  PROCESSES_SQL="
+-- ============================================
+-- Processes Service Permissions
+-- ============================================
 
--- Check if user already exists
+-- Create user for processes managed identity
+IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '${PROCESSES_IDENTITY_NAME}')
+BEGIN
+    PRINT 'Creating processes user from external provider...'
+    CREATE USER [${PROCESSES_IDENTITY_NAME}] FROM EXTERNAL PROVIDER
+END
+ELSE
+BEGIN
+    PRINT 'Processes user already exists.'
+END
+GO
+
+-- Grant db_datareader role to processes
+IF IS_ROLEMEMBER('db_datareader', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_datareader role to processes identity...'
+    ALTER ROLE db_datareader ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_datareader role already assigned to processes identity.'
+END
+GO
+
+-- Grant db_datawriter role to processes
+IF IS_ROLEMEMBER('db_datawriter', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_datawriter role to processes identity...'
+    ALTER ROLE db_datawriter ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_datawriter role already assigned to processes identity.'
+END
+GO
+
+-- Grant db_ddladmin role to processes
+IF IS_ROLEMEMBER('db_ddladmin', '${PROCESSES_IDENTITY_NAME}') = 0
+BEGIN
+    PRINT 'Granting db_ddladmin role to processes identity...'
+    ALTER ROLE db_ddladmin ADD MEMBER [${PROCESSES_IDENTITY_NAME}]
+END
+ELSE
+BEGIN
+    PRINT 'db_ddladmin role already assigned to processes identity.'
+END
+GO
+
+PRINT 'Permissions granted successfully to [${PROCESSES_IDENTITY_NAME}].'
+GO
+"
+else
+  PROCESSES_SQL=""
+fi
+
+# Create SQL script with actual values (not shell variable syntax)
+SQL_SCRIPT="-- ============================================
+-- SQL Permissions for Backend and Processes Managed Identities
+-- ============================================
+-- Execute this script in Azure Portal Query Editor after deployment
+-- Connect to database: ${SQL_DATABASE_NAME}
+-- ============================================
+
+-- IMPORTANT: Replace the variable placeholders below with the actual values:
+-- Variable: backendIdentityName
+-- Value: ${BACKEND_IDENTITY_NAME}
+-- Variable: processesIdentityName
+-- Value: ${PROCESSES_IDENTITY_NAME}
+-- ============================================
+
+-- Instructions:
+-- 1. Go to Azure Portal > SQL Database > ${SQL_DATABASE_NAME}
+-- 2. Click \"Query editor\" in left menu
+-- 3. Sign in with SQL Server Azure AD admin account)
+-- 4. Copy this entire script
+-- 5. Replace \${backendIdentityName} with the backend identity value shown above
+-- 6. Replace \${processesIdentityName} with the processes identity value shown above
+-- 7. Click \"Run\"
+-- ============================================
+
+-- ============================================
+-- Backend Service Permissions
+-- ============================================
+
+-- Create user for backend managed identity
 IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '${BACKEND_IDENTITY_NAME}')
 BEGIN
-    PRINT 'Creating user from external provider...'
+    PRINT 'Creating backend user from external provider...'
     CREATE USER [${BACKEND_IDENTITY_NAME}] FROM EXTERNAL PROVIDER
 END
 ELSE
 BEGIN
-    PRINT 'User already exists.'
+    PRINT 'Backend user already exists.'
 END
 GO
 
--- Grant db_datareader role
+-- Grant db_datareader role to backend
 IF IS_ROLEMEMBER('db_datareader', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
-    PRINT 'Granting db_datareader role...'
+    PRINT 'Granting db_datareader role to backend identity...'
     ALTER ROLE db_datareader ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
 ELSE
 BEGIN
-    PRINT 'db_datareader role already assigned.'
+    PRINT 'db_datareader role already assigned to backend identity.'
 END
 GO
 
--- Grant db_datawriter role
+-- Grant db_datawriter role to backend
 IF IS_ROLEMEMBER('db_datawriter', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
-    PRINT 'Granting db_datawriter role...'
+    PRINT 'Granting db_datawriter role to backend identity...'
     ALTER ROLE db_datawriter ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
 ELSE
 BEGIN
-    PRINT 'db_datawriter role already assigned.'
+    PRINT 'db_datawriter role already assigned to backend identity.'
 END
 GO
 
--- Grant db_ddladmin role (for Flyway migrations)
+-- Grant db_ddladmin role to backend (for Flyway migrations)
 IF IS_ROLEMEMBER('db_ddladmin', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
-    PRINT 'Granting db_ddladmin role (for Flyway migrations)...'
+    PRINT 'Granting db_ddladmin role to backend identity (for Flyway migrations)...'
     ALTER ROLE db_ddladmin ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
 ELSE
 BEGIN
-    PRINT 'db_ddladmin role already assigned.'
+    PRINT 'db_ddladmin role already assigned to backend identity.'
 END
 GO
 
 PRINT 'Permissions granted successfully to [${BACKEND_IDENTITY_NAME}].'
+GO
+${PROCESSES_SQL}
+-- ============================================
+-- Verify the backend user was created
+-- ============================================
+SELECT
+    name as UserName,
+    type_desc as UserType,
+    authentication_type_desc as AuthType,
+    create_date as CreatedDate
+FROM sys.database_principals
+WHERE name IN ('${BACKEND_IDENTITY_NAME}'$([ -n "$PROCESSES_IDENTITY_NAME" ] && echo ", '${PROCESSES_IDENTITY_NAME}'" || echo ""))
+ORDER BY name;
 GO
 "
 
