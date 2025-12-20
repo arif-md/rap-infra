@@ -8,7 +8,7 @@ on:
         required: false
         default: "dev"
   push:
-    branches: [ main ]
+    branches: [ az-204 ]
     paths:
       - 'azure.yaml'
       - 'app/frontend-angular.bicep'
