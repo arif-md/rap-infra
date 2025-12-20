@@ -8,7 +8,7 @@ on:
         required: false
         default: "dev"
   push:
-    branches: [ main ]
+    branches: [ az-204 ]
     paths:
       - 'main.bicep'
       - 'main.parameters.json'
@@ -128,6 +128,17 @@ jobs:
             echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
           fi
           
+          # Set Key Vault Secrets - Required for backend authentication
+          if [ -n "${{ secrets.OIDC_CLIENT_SECRET || '' }}" ]; then
+            azd env set OIDC_CLIENT_SECRET "${{ secrets.OIDC_CLIENT_SECRET }}"
+            echo "✓ OIDC_CLIENT_SECRET configured"
+          fi
+          
+          if [ -n "${{ secrets.JWT_SECRET || '' }}" ]; then
+            azd env set JWT_SECRET "${{ secrets.JWT_SECRET }}"
+            echo "✓ JWT_SECRET configured"
+          fi
+          
           # Set SQL Admin Password - Required for SQL Server resource in main.bicep
           # This is a @secure() Bicep parameter that requires a value in non-interactive mode (--no-prompt).
           # Used only for SQL Server admin account; backend application uses passwordless managed identity.
@@ -242,11 +253,14 @@ jobs:
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "This workflow provisions:"
           echo "  - Azure Container Registry (if not exists)"
+          echo "  - Azure Key Vault (if not exists)"
           echo "  - Container Apps Environment"
           echo "  - Log Analytics Workspace"
           echo "  - Application Insights"
           echo "  - Frontend Container App (dev-rap-fe)"
           echo "  - Backend Container App (dev-rap-be)"
+          echo "  - Processes Container App (dev-rap-proc)"
+          echo "  - SQL Server"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
 
