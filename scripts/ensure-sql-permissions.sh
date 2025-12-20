@@ -120,8 +120,12 @@ fi
 # Grant managed identity permissions using sqlcmd
 echo "Granting database permissions to managed identity..."
 
-# Create SQL script
-SQL_SCRIPT=$(cat <<EOF
+# Create SQL script with actual values (not shell variable syntax)
+SQL_SCRIPT="-- SQL Permissions Script for Backend Managed Identity
+-- Database: ${SQL_DATABASE_NAME}
+-- Identity: ${BACKEND_IDENTITY_NAME}
+-- Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
 -- Check if user already exists
 IF NOT EXISTS (SELECT * FROM sys.database_principals WHERE name = '${BACKEND_IDENTITY_NAME}')
 BEGIN
@@ -134,30 +138,45 @@ BEGIN
 END
 GO
 
--- Grant permissions
+-- Grant db_datareader role
 IF IS_ROLEMEMBER('db_datareader', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
     PRINT 'Granting db_datareader role...'
     ALTER ROLE db_datareader ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
+ELSE
+BEGIN
+    PRINT 'db_datareader role already assigned.'
+END
+GO
 
+-- Grant db_datawriter role
 IF IS_ROLEMEMBER('db_datawriter', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
     PRINT 'Granting db_datawriter role...'
     ALTER ROLE db_datawriter ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
+ELSE
+BEGIN
+    PRINT 'db_datawriter role already assigned.'
+END
+GO
 
+-- Grant db_ddladmin role (for Flyway migrations)
 IF IS_ROLEMEMBER('db_ddladmin', '${BACKEND_IDENTITY_NAME}') = 0
 BEGIN
     PRINT 'Granting db_ddladmin role (for Flyway migrations)...'
     ALTER ROLE db_ddladmin ADD MEMBER [${BACKEND_IDENTITY_NAME}]
 END
+ELSE
+BEGIN
+    PRINT 'db_ddladmin role already assigned.'
+END
 GO
 
-PRINT 'Permissions granted successfully.'
+PRINT 'Permissions granted successfully to [${BACKEND_IDENTITY_NAME}].'
 GO
-EOF
-)
+"
 
 # Check if sqlcmd is available
 if command -v sqlcmd &> /dev/null; then
@@ -165,12 +184,28 @@ if command -v sqlcmd &> /dev/null; then
   echo "$SQL_SCRIPT" | sqlcmd -S "$SQL_SERVER_FQDN" -d "$SQL_DATABASE_NAME" -U "$SQL_ADMIN_LOGIN" -P "$SQL_ADMIN_PASSWORD" -b
   echo "✅ SQL permissions granted successfully!"
 else
-  echo "WARNING: sqlcmd not found. Install it with:"
-  echo "  curl https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "⚠️  WARNING: sqlcmd not found - Manual execution required"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "Install sqlcmd with:"
+  echo "  curl https://packages.microsoft.com/config/ubuntu/\$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list"
   echo "  sudo apt-get update && sudo apt-get install -y mssql-tools18 unixodbc-dev"
   echo ""
-  echo "Alternatively, run these SQL commands manually:"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "📋 COPY-PASTE READY SQL SCRIPT (Values already substituted)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "Execute this in Azure Portal → SQL Database → Query Editor:"
+  echo ""
   echo "$SQL_SCRIPT"
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Connection Details:"
+  echo "  Server: $SQL_SERVER_FQDN"
+  echo "  Database: $SQL_DATABASE_NAME"
+  echo "  Authentication: Use Azure AD (Active Directory - Universal with MFA)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
 # Cleanup temporary firewall rule if created
