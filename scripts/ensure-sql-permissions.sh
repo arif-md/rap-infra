@@ -131,8 +131,8 @@ fi
 echo "Granting database permissions to managed identities..."
 
 # Generate SQL script with actual identity values substituted
-# Using cat with here-doc to properly expand variables
-SQL_SCRIPT=$(cat <<EOSQL
+# Note: Using read with heredoc to properly expand bash variables
+read -r -d '' SQL_SCRIPT <<EOSQL || true
 -- ============================================
 -- SQL Permissions for Backend and Processes Managed Identities
 -- ============================================
@@ -197,12 +197,10 @@ GO
 PRINT 'Permissions granted successfully to [${BACKEND_IDENTITY_NAME}].'
 GO
 EOSQL
-)
 
 # Add processes identity permissions if it exists
 if [ -n "$PROCESSES_IDENTITY_NAME" ]; then
-  SQL_SCRIPT="${SQL_SCRIPT}
-$(cat <<EOSQL
+  read -r -d '' PROCESSES_SQL <<EOSQL || true
 
 -- ============================================
 -- Processes Service Permissions
@@ -259,12 +257,11 @@ GO
 PRINT 'Permissions granted successfully to [${PROCESSES_IDENTITY_NAME}].'
 GO
 EOSQL
-)"
+  SQL_SCRIPT="${SQL_SCRIPT}${PROCESSES_SQL}"
 fi
 
 # Add verification query
-SQL_SCRIPT="${SQL_SCRIPT}
-$(cat <<EOSQL
+read -r -d '' VERIFY_SQL <<EOSQL || true
 
 -- ============================================
 -- Verify users were created
@@ -279,7 +276,7 @@ WHERE name IN ('${BACKEND_IDENTITY_NAME}'$([ -n "$PROCESSES_IDENTITY_NAME" ] && 
 ORDER BY name;
 GO
 EOSQL
-)"
+SQL_SCRIPT="${SQL_SCRIPT}${VERIFY_SQL}"
 
 # Check if sqlcmd is available
 if command -v sqlcmd &> /dev/null; then
