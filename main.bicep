@@ -494,27 +494,22 @@ output processesIdentityName string = processesIdentityName
 output processesIdentityPrincipalId string = processes.outputs.identityPrincipalId
 
 // SQL permission grant script for manual execution via Azure Portal
-output sqlPermissionScript string = enableSqlDatabase ? replace(replace(replace('''
+output sqlPermissionScript string = enableSqlDatabase ? replace(replace(replace(replace(replace('''
 -- ========================================
 -- SQL Permissions for Backend and Processes Managed Identities
 -- ========================================
 -- Execute this script in Azure Portal Query Editor after deployment
 -- Connect to database: __DATABASE_NAME__
 --
--- IMPORTANT: Replace the variable placeholders below with the actual values:
--- Variable: backendIdentityName
--- Value: __BACKEND_IDENTITY_VALUE__
--- Variable: processesIdentityName
--- Value: __PROCESSES_IDENTITY_VALUE__
+-- Backend Identity: __BACKEND_IDENTITY_VALUE__
+-- Processes Identity: __PROCESSES_IDENTITY_VALUE__
 --
 -- Instructions:
 -- 1. Go to Azure Portal > SQL Database > __DATABASE_NAME__
 -- 2. Click "Query editor" in left menu
 -- 3. Sign in with Azure AD (use the SQL Server Azure AD admin account)
--- 4. Copy this entire script
--- 5. Replace ${backendIdentityName} with the backend identity value shown above
--- 6. Replace ${processesIdentityName} with the processes identity value shown above
--- 7. Click "Run"
+-- 4. Copy and paste this entire script
+-- 5. Click "Run"
 -- ========================================
 
 -- ========================================
@@ -578,7 +573,7 @@ GO
 -- ========================================
 -- Script execution complete!
 -- ========================================
-''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__BACKEND_IDENTITY_VALUE__', backendIdentityName), '__PROCESSES_IDENTITY_VALUE__', processesIdentityName) : ''
+''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__BACKEND_IDENTITY_VALUE__', backendIdentityName), '__PROCESSES_IDENTITY_VALUE__', processesIdentityName), '\${backendIdentityName}', backendIdentityName), '\${processesIdentityName}', processesIdentityName) : ''
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
