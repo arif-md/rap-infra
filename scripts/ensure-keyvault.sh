@@ -171,6 +171,19 @@ if az keyvault create \
         fi
     fi
     
+    if [ -n "$AZURE_AD_CLIENT_SECRET" ]; then
+        info "Creating aad-client-secret..."
+        if az keyvault secret set \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name "aad-client-secret" \
+            --value "$AZURE_AD_CLIENT_SECRET" \
+            >/dev/null 2>&1; then
+            success "Secret 'aad-client-secret' created"
+        else
+            warning "Failed to create aad-client-secret"
+        fi
+    fi
+    
     exit 0
 else
     error "Failed to create Key Vault"

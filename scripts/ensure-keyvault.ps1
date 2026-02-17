@@ -157,6 +157,7 @@ if ($LASTEXITCODE -eq 0) {
     # Create required secrets if provided in environment
     $oidcSecret = $env:OIDC_CLIENT_SECRET
     $jwtSecret = $env:JWT_SECRET
+    $aadClientSecret = $env:AZURE_AD_CLIENT_SECRET
     
     if (![string]::IsNullOrEmpty($oidcSecret)) {
         Write-Info "Creating oidc-client-secret..."
@@ -175,6 +176,16 @@ if ($LASTEXITCODE -eq 0) {
             Write-Success "Secret 'jwt-secret' created"
         } else {
             Write-Warning "Failed to create jwt-secret"
+        }
+    }
+    
+    if (![string]::IsNullOrEmpty($aadClientSecret)) {
+        Write-Info "Creating aad-client-secret..."
+        az keyvault secret set --vault-name $keyVaultName --name "aad-client-secret" --value $aadClientSecret | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Secret 'aad-client-secret' created"
+        } else {
+            Write-Warning "Failed to create aad-client-secret"
         }
     }
     

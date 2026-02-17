@@ -128,6 +128,12 @@ param oidcAcrValues string = ''
 param oidcPrompt string = ''
 param oidcResponseType string = ''
 
+@description('Azure AD / Entra ID Configuration (Internal User Login - endpoints derived from tenant ID)')
+param aadClientId string = ''
+@secure()
+param aadClientSecret string = ''
+param aadTenantId string = ''
+
 @description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
 @secure()
 param jwtSecret string = ''
@@ -365,6 +371,10 @@ module backend 'app/backend-springboot.bicep' = {
     oidcAcrValues: oidcAcrValues
     oidcPrompt: oidcPrompt
     oidcResponseType: oidcResponseType
+    // Azure AD / Entra ID configuration (internal user login - endpoints derived from tenant ID in backend module)
+    aadClientId: aadClientId
+    aadClientSecret: aadClientSecret
+    aadTenantId: aadTenantId
     // JWT configuration
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes

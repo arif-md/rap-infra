@@ -184,6 +184,37 @@ jobs:
           if [ -n "${{ vars.OIDC_CLIENT_ID || '' }}" ]; then
             azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
           fi
+          
+          # Set OIDC secrets
+          if [ -n "${{ secrets.OIDC_CLIENT_SECRET || '' }}" ]; then
+            azd env set OIDC_CLIENT_SECRET "${{ secrets.OIDC_CLIENT_SECRET }}"
+          fi
+          if [ -n "${{ secrets.JWT_SECRET || '' }}" ]; then
+            azd env set JWT_SECRET "${{ secrets.JWT_SECRET }}"
+          fi
+          
+          # Set OIDC additional request parameters (Login.gov specific)
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_ACR_VALUES "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES }}"
+          fi
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_PROMPT "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT }}"
+          fi
+          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE || '' }}" ]; then
+            azd env set OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE }}"
+          fi
+          
+          # Set Azure AD (Entra ID) Configuration (internal SSO - endpoints derived from tenant ID)
+          if [ -n "${{ vars.AZURE_AD_CLIENT_ID || '' }}" ]; then
+            azd env set AZURE_AD_CLIENT_ID "${{ vars.AZURE_AD_CLIENT_ID }}"
+          fi
+          # Reuse existing AZURE_TENANT_ID secret (same tenant for Azure CLI login and AAD SSO)
+          if [ -n "${{ secrets.AZURE_TENANT_ID || '' }}" ]; then
+            azd env set AZURE_AD_TENANT_ID "${{ secrets.AZURE_TENANT_ID }}"
+          fi
+          if [ -n "${{ secrets.AZURE_AD_CLIENT_SECRET || '' }}" ]; then
+            azd env set AZURE_AD_CLIENT_SECRET "${{ secrets.AZURE_AD_CLIENT_SECRET }}"
+          fi
 
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'backend-image-pushed'

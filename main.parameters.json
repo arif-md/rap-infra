@@ -125,6 +125,15 @@
       "oidcResponseType": {
         "value": "${OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE=}"
       },
+      "aadClientId": {
+        "value": "${AZURE_AD_CLIENT_ID=}"
+      },
+      "aadClientSecret": {
+        "value": "${AZURE_AD_CLIENT_SECRET=}"
+      },
+      "aadTenantId": {
+        "value": "${AZURE_AD_TENANT_ID=}"
+      },
       "jwtSecret": {
         "value": "${JWT_SECRET}"
       },

@@ -82,6 +82,20 @@ param oidcAcrValues string = ''
 param oidcPrompt string = ''
 param oidcResponseType string = ''
 
+@description('Azure AD / Entra ID Configuration (Internal User Login - only tenantId, clientId, clientSecret needed; endpoints derived)')
+param aadClientId string = ''
+@secure()
+param aadClientSecret string = ''
+param aadTenantId string = ''
+
+// Derive Azure AD endpoints from tenant ID (standard Microsoft Entra ID v2.0 paths)
+var aadTenantBaseUrl = 'https://login.microsoftonline.com/${aadTenantId}'
+var aadAuthorizationEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/authorize'
+var aadTokenEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/token'
+var aadUserInfoEndpoint = 'https://graph.microsoft.com/oidc/userinfo'
+var aadJwkSetUri = '${aadTenantBaseUrl}/discovery/v2.0/keys'
+var aadEndSessionEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/logout'
+
 @description('JWT configuration')
 param jwtIssuer string = 'raptor-app'
 param jwtAccessTokenExpirationMinutes int = 15
@@ -205,6 +219,42 @@ var oidcAdditionalParamsEnv = [
 
 var oidcAdditionalParamsEnvFiltered = filter(oidcAdditionalParamsEnv, param => param != null)
 
+// Azure AD / Entra ID env vars (if AAD is configured)
+var aadEnv = !empty(aadClientId) ? [
+  {
+    name: 'AAD_AUTHORIZATION_ENDPOINT'
+    value: aadAuthorizationEndpoint
+  }
+  {
+    name: 'AAD_TOKEN_ENDPOINT'
+    value: aadTokenEndpoint
+  }
+  {
+    name: 'AAD_USER_INFO_ENDPOINT'
+    value: aadUserInfoEndpoint
+  }
+  {
+    name: 'AAD_JWK_SET_URI'
+    value: aadJwkSetUri
+  }
+  {
+    name: 'AAD_END_SESSION_ENDPOINT'
+    value: aadEndSessionEndpoint
+  }
+  {
+    name: 'AZURE_AD_CLIENT_ID'
+    value: aadClientId
+  }
+  {
+    name: 'AZURE_AD_CLIENT_SECRET'
+    secretRef: 'aad-client-secret'
+  }
+  {
+    name: 'AZURE_AD_TENANT_ID'
+    value: aadTenantId
+  }
+] : []
+
 // JWT env vars (if Key Vault is configured)
 var jwtEnv = !empty(keyVaultName) ? [
   {
@@ -237,14 +287,18 @@ var corsEnv = !empty(corsAllowedOrigins) ? [
   }
 ] : []
 
-// Combine base env + optional App Insights + SQL + OIDC + OIDC additional params + JWT + CORS + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, oidcAdditionalParamsEnvFiltered, jwtEnv, corsEnv, envVars)
+// Combine base env + optional App Insights + SQL + OIDC + OIDC additional params + AAD + JWT + CORS + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, oidcAdditionalParamsEnvFiltered, aadEnv, jwtEnv, corsEnv, envVars)
 
 // Key Vault secrets to reference (if Key Vault is configured)
 // PKCE authentication doesn't require client secret, only JWT secret is stored
-var kvSecrets = !empty(keyVaultName) ? [
-  { name: 'jwt-secret' }
+var aadSecret = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
+  { name: 'aad-client-secret' }
 ] : []
+
+var kvSecrets = !empty(keyVaultName) ? concat([
+  { name: 'jwt-secret' }
+], aadSecret) : []
 
 // Reference existing Key Vault
 resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = if (!empty(keyVaultName)) {
