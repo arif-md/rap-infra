@@ -1,6 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # Ensures Key Vault exists before deployment (creates if missing)
+# and ensures required secrets are present (creates/updates if missing).
 # This script checks if the Key Vault exists in the resource group.
 # If it doesn't exist, it creates it with the appropriate configuration.
 # This prevents soft-delete conflicts and allows Key Vault to persist across azd down/up cycles.
@@ -14,6 +15,57 @@ success() { echo -e "\033[1;32m✓ $1\033[0m"; }
 warning() { echo -e "\033[1;33m⚠ $1\033[0m"; }
 error() { echo -e "\033[1;31m✗ $1\033[0m"; }
 header() { echo -e "\n\033[1;36m=== $1 ===\033[0m"; }
+
+###############################################################################
+# Ensure a single secret exists in Key Vault (create or update if value provided)
+###############################################################################
+ensure_secret() {
+    local vault_name="$1"
+    local secret_name="$2"
+    local secret_value="$3"
+    
+    if [ -z "$secret_value" ]; then
+        return
+    fi
+    
+    # Check if secret already exists
+    local existing_value
+    existing_value=$(az keyvault secret show --vault-name "$vault_name" --name "$secret_name" --query value -o tsv 2>/dev/null || true)
+    
+    if [ "$existing_value" = "$secret_value" ]; then
+        success "Secret '$secret_name' already exists and is up to date"
+        return
+    fi
+    
+    if [ -n "$existing_value" ]; then
+        info "Updating secret '$secret_name'..."
+    else
+        info "Creating secret '$secret_name'..."
+    fi
+    
+    if az keyvault secret set \
+        --vault-name "$vault_name" \
+        --name "$secret_name" \
+        --value "$secret_value" \
+        >/dev/null 2>&1; then
+        success "Secret '$secret_name' configured"
+    else
+        warning "Failed to set secret '$secret_name'"
+    fi
+}
+
+###############################################################################
+# Ensure all required secrets are present in Key Vault
+###############################################################################
+ensure_secrets() {
+    local vault_name="$1"
+    
+    header "Ensuring Key Vault Secrets"
+    
+    ensure_secret "$vault_name" "oidc-client-secret" "$OIDC_CLIENT_SECRET"
+    ensure_secret "$vault_name" "jwt-secret" "$JWT_SECRET"
+    ensure_secret "$vault_name" "aad-client-secret" "$AZURE_AD_CLIENT_SECRET"
+}
 
 header "Key Vault Setup Check"
 
@@ -72,6 +124,7 @@ azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME" >/dev/null
 info "Checking if Key Vault exists..."
 if az keyvault show --name "$KEY_VAULT_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
     success "Key Vault '$KEY_VAULT_NAME' already exists"
+    ensure_secrets "$KEY_VAULT_NAME"
     exit 0
 fi
 
@@ -83,6 +136,7 @@ if az keyvault show-deleted --name "$KEY_VAULT_NAME" >/dev/null 2>&1; then
     
     if az keyvault recover --name "$KEY_VAULT_NAME" --location "$LOCATION" >/dev/null 2>&1; then
         success "Key Vault recovered successfully"
+        ensure_secrets "$KEY_VAULT_NAME"
         exit 0
     else
         warning "Could not recover Key Vault (may lack permissions)"
@@ -144,45 +198,8 @@ if az keyvault create \
         warning "Could not determine current identity, skipping access policy assignment"
     fi
     
-    # Create required secrets if provided in environment
-    if [ -n "$OIDC_CLIENT_SECRET" ]; then
-        info "Creating oidc-client-secret..."
-        if az keyvault secret set \
-            --vault-name "$KEY_VAULT_NAME" \
-            --name "oidc-client-secret" \
-            --value "$OIDC_CLIENT_SECRET" \
-            >/dev/null 2>&1; then
-            success "Secret 'oidc-client-secret' created"
-        else
-            warning "Failed to create oidc-client-secret"
-        fi
-    fi
-    
-    if [ -n "$JWT_SECRET" ]; then
-        info "Creating jwt-secret..."
-        if az keyvault secret set \
-            --vault-name "$KEY_VAULT_NAME" \
-            --name "jwt-secret" \
-            --value "$JWT_SECRET" \
-            >/dev/null 2>&1; then
-            success "Secret 'jwt-secret' created"
-        else
-            warning "Failed to create jwt-secret"
-        fi
-    fi
-    
-    if [ -n "$AZURE_AD_CLIENT_SECRET" ]; then
-        info "Creating aad-client-secret..."
-        if az keyvault secret set \
-            --vault-name "$KEY_VAULT_NAME" \
-            --name "aad-client-secret" \
-            --value "$AZURE_AD_CLIENT_SECRET" \
-            >/dev/null 2>&1; then
-            success "Secret 'aad-client-secret' created"
-        else
-            warning "Failed to create aad-client-secret"
-        fi
-    fi
+    # Ensure all required secrets exist
+    ensure_secrets "$KEY_VAULT_NAME"
     
     exit 0
 else

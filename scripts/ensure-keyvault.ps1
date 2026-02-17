@@ -4,6 +4,7 @@
 <#
 .SYNOPSIS
     Ensures Key Vault exists before deployment (creates if missing)
+    and ensures required secrets are present (creates/updates if missing).
 .DESCRIPTION
     This script checks if the Key Vault exists in the resource group.
     If it doesn't exist, it creates it with the appropriate configuration.
@@ -20,6 +21,53 @@ function Write-Success { param($Message) Write-Host "✓ $Message" -ForegroundCo
 function Write-Info { param($Message) Write-Host "ℹ $Message" -ForegroundColor Blue }
 function Write-Warning { param($Message) Write-Host "⚠ $Message" -ForegroundColor Yellow }
 function Write-Error { param($Message) Write-Host "✗ $Message" -ForegroundColor Red }
+
+###############################################################################
+# Ensure a single secret exists in Key Vault (create or update if value provided)
+###############################################################################
+function Ensure-Secret {
+    param(
+        [string]$VaultName,
+        [string]$SecretName,
+        [string]$SecretValue
+    )
+    
+    if ([string]::IsNullOrEmpty($SecretValue)) { return }
+    
+    # Check if secret already exists and matches
+    $existingValue = az keyvault secret show --vault-name $VaultName --name $SecretName --query value -o tsv 2>$null
+    
+    if ($LASTEXITCODE -eq 0 -and $existingValue -eq $SecretValue) {
+        Write-Success "Secret '$SecretName' already exists and is up to date"
+        return
+    }
+    
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrEmpty($existingValue)) {
+        Write-Info "Updating secret '$SecretName'..."
+    } else {
+        Write-Info "Creating secret '$SecretName'..."
+    }
+    
+    az keyvault secret set --vault-name $VaultName --name $SecretName --value $SecretValue | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Secret '$SecretName' configured"
+    } else {
+        Write-Warning "Failed to set secret '$SecretName'"
+    }
+}
+
+###############################################################################
+# Ensure all required secrets are present in Key Vault
+###############################################################################
+function Ensure-Secrets {
+    param([string]$VaultName)
+    
+    Write-Header "Ensuring Key Vault Secrets"
+    
+    Ensure-Secret -VaultName $VaultName -SecretName "oidc-client-secret" -SecretValue $env:OIDC_CLIENT_SECRET
+    Ensure-Secret -VaultName $VaultName -SecretName "jwt-secret" -SecretValue $env:JWT_SECRET
+    Ensure-Secret -VaultName $VaultName -SecretName "aad-client-secret" -SecretValue $env:AZURE_AD_CLIENT_SECRET
+}
 
 Write-Header "Key Vault Setup Check"
 
@@ -88,6 +136,7 @@ $vaultExists = az keyvault show --name $keyVaultName --resource-group $resourceG
 
 if ($LASTEXITCODE -eq 0) {
     Write-Success "Key Vault '$keyVaultName' already exists"
+    Ensure-Secrets -VaultName $keyVaultName
     exit 0
 }
 
@@ -103,6 +152,7 @@ if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrEmpty($deletedVault)) {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Key Vault recovered successfully"
+        Ensure-Secrets -VaultName $keyVaultName
         exit 0
     } else {
         Write-Warning "Could not recover Key Vault (may lack permissions)"
@@ -154,40 +204,8 @@ if ($LASTEXITCODE -eq 0) {
         Write-Warning "Failed to set access policies, but continuing..."
     }
     
-    # Create required secrets if provided in environment
-    $oidcSecret = $env:OIDC_CLIENT_SECRET
-    $jwtSecret = $env:JWT_SECRET
-    $aadClientSecret = $env:AZURE_AD_CLIENT_SECRET
-    
-    if (![string]::IsNullOrEmpty($oidcSecret)) {
-        Write-Info "Creating oidc-client-secret..."
-        az keyvault secret set --vault-name $keyVaultName --name "oidc-client-secret" --value $oidcSecret | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Secret 'oidc-client-secret' created"
-        } else {
-            Write-Warning "Failed to create oidc-client-secret"
-        }
-    }
-    
-    if (![string]::IsNullOrEmpty($jwtSecret)) {
-        Write-Info "Creating jwt-secret..."
-        az keyvault secret set --vault-name $keyVaultName --name "jwt-secret" --value $jwtSecret | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Secret 'jwt-secret' created"
-        } else {
-            Write-Warning "Failed to create jwt-secret"
-        }
-    }
-    
-    if (![string]::IsNullOrEmpty($aadClientSecret)) {
-        Write-Info "Creating aad-client-secret..."
-        az keyvault secret set --vault-name $keyVaultName --name "aad-client-secret" --value $aadClientSecret | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Secret 'aad-client-secret' created"
-        } else {
-            Write-Warning "Failed to create aad-client-secret"
-        }
-    }
+    # Ensure all required secrets exist
+    Ensure-Secrets -VaultName $keyVaultName
     
     exit 0
 } else {
