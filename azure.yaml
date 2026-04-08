@@ -21,6 +21,15 @@ hooks:
       shell: sh
       run: ./scripts/run-preprovision-hooks.sh
       interactive: false
+  postprovision:
+    windows:
+      shell: pwsh
+      run: ./scripts/postprovision-update-fqdns.ps1
+      interactive: false
+    posix:
+      shell: sh
+      run: ./scripts/postprovision-update-fqdns.sh
+      interactive: false
 
 services:
   # - Local dev: Manual grant via Azure Portal Query Editor (one-time)

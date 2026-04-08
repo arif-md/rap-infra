@@ -212,12 +212,59 @@ var keyVaultSoftDeleteRetention = isProduction ? 90 : 7
 var keyVaultEnablePurgeProtection = true  // Required by Azure policy - cannot be disabled
 var resolvedKeyVaultName = !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}-v10'
 
-// OIDC additional parameters are passed directly as environment variables (OIDC_ADDL_REQ_PARAM_*)
-// No parsing needed in Bicep
+// OIDC additional parameters are stored in Azure App Configuration (oidc.addl.req.param.*)
+// They flow: azd env → main.parameters.json → app-configuration.bicep → App Config store → Spring Boot
 
 // Reference existing Key Vault (not deployed by this template)
 resource existingKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = {
   name: resolvedKeyVaultName
+}
+
+// ============================================================================
+// Backend Managed Identity (created here so App Config can grant access
+// before the Container App starts)
+// ============================================================================
+resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: backendIdentityName
+  location: location
+  tags: tags
+}
+
+// ============================================================================
+// Azure App Configuration — centralised non-secret config
+// ============================================================================
+var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
+
+module appConfiguration 'shared/app-configuration.bicep' = {
+  name: 'appConfiguration'
+  params: {
+    name: appConfigName
+    location: location
+    tags: tags
+    sku: 'free'
+    // Grant backend managed identity read access
+    readerPrincipalId: backendIdentity.properties.principalId
+    // OIDC provider configuration
+    oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
+    oidcTokenEndpoint: oidcTokenEndpoint
+    oidcUserInfoEndpoint: oidcUserInfoEndpoint
+    oidcJwkSetUri: oidcJwkSetUri
+    oidcEndSessionEndpoint: oidcEndSessionEndpoint
+    oidcClientId: oidcClientId
+    oidcAcrValues: oidcAcrValues
+    oidcPrompt: oidcPrompt
+    oidcResponseType: oidcResponseType
+    // Azure AD / Entra ID
+    aadClientId: aadClientId
+    aadTenantId: aadTenantId
+    // JWT (non-secret settings)
+    jwtIssuer: jwtIssuer
+    jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
+    jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
+    // CORS & frontend
+    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
+    frontendUrl: frontendUrl
+  }
 }
 
 /*
@@ -328,6 +375,7 @@ module backend 'app/backend-springboot.bicep' = {
   name: 'backendApp'
   dependsOn: [
     containerAppsEnvironment
+    // appConfiguration dependency is implicit via appConfiguration.outputs.endpoint reference
   ]
   params: {
     name: backendAppName
@@ -357,31 +405,15 @@ module backend 'app/backend-springboot.bicep' = {
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
     sqlAdminLogin: sqlAdminLogin
-    // Key Vault configuration for OIDC and JWT secrets
-    // Key Vault name is resolved from parameter or default naming pattern
+    // Key Vault configuration for secrets only (jwt-secret, aad-client-secret)
     keyVaultName: resolvedKeyVaultName
     keyVaultEndpoint: existingKeyVault.properties.vaultUri
-    // OIDC configuration
-    oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
-    oidcTokenEndpoint: oidcTokenEndpoint
-    oidcUserInfoEndpoint: oidcUserInfoEndpoint
-    oidcJwkSetUri: oidcJwkSetUri
-    oidcEndSessionEndpoint: oidcEndSessionEndpoint
-    oidcClientId: oidcClientId
-    oidcAcrValues: oidcAcrValues
-    oidcPrompt: oidcPrompt
-    oidcResponseType: oidcResponseType
-    // Azure AD / Entra ID configuration (internal user login - endpoints derived from tenant ID in backend module)
-    aadClientId: aadClientId
+    // Azure App Configuration — non-secret config loaded by Spring Cloud Azure at startup
+    appConfigEndpoint: appConfiguration.outputs.endpoint
+    // AAD client secret (stays in Key Vault — not in App Config)
     aadClientSecret: aadClientSecret
-    aadTenantId: aadTenantId
-    // JWT configuration
-    jwtIssuer: jwtIssuer
-    jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
-    jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
-    // CORS: Use provided origins or allow all during initial deployment (updated via workflow)
+    // CORS: Used at Container App ingress level (also stored in App Config for Spring Boot)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
-    frontendUrl: frontendUrl
     // Optional env vars (can be extended later)
     envVars: [
       {
@@ -502,6 +534,8 @@ output backendIdentityName string = backendIdentityName
 output backendIdentityPrincipalId string = backend.outputs.identityPrincipalId
 output processesIdentityName string = processesIdentityName
 output processesIdentityPrincipalId string = processes.outputs.identityPrincipalId
+output appConfigEndpoint string = appConfiguration.outputs.endpoint
+output appConfigName string = appConfiguration.outputs.name
 
 // SQL permission grant script for manual execution via Azure Portal
 output sqlPermissionScript string = enableSqlDatabase ? replace(replace(replace(replace(replace('''

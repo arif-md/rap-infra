@@ -69,43 +69,15 @@ param keyVaultName string = ''
 @description('Key Vault endpoint URI (e.g., https://myvault.vault.azure.net/)')
 param keyVaultEndpoint string = ''
 
-@description('OIDC Configuration')
-param oidcAuthorizationEndpoint string = ''
-param oidcTokenEndpoint string = ''
-param oidcUserInfoEndpoint string = ''
-param oidcJwkSetUri string = ''
-param oidcEndSessionEndpoint string = ''
-param oidcClientId string = ''
+@description('Azure App Configuration endpoint (centralised non-secret config)')
+param appConfigEndpoint string = ''
 
-@description('OIDC additional request parameters (optional)')
-param oidcAcrValues string = ''
-param oidcPrompt string = ''
-param oidcResponseType string = ''
-
-@description('Azure AD / Entra ID Configuration (Internal User Login - only tenantId, clientId, clientSecret needed; endpoints derived)')
-param aadClientId string = ''
+@description('Azure AD client secret (stays in Key Vault — not in App Config)')
 @secure()
 param aadClientSecret string = ''
-param aadTenantId string = ''
 
-// Derive Azure AD endpoints from tenant ID (standard Microsoft Entra ID v2.0 paths)
-var aadTenantBaseUrl = 'https://login.microsoftonline.com/${aadTenantId}'
-var aadAuthorizationEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/authorize'
-var aadTokenEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/token'
-var aadUserInfoEndpoint = 'https://graph.microsoft.com/oidc/userinfo'
-var aadJwkSetUri = '${aadTenantBaseUrl}/discovery/v2.0/keys'
-var aadEndSessionEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/logout'
-
-@description('JWT configuration')
-param jwtIssuer string = 'raptor-app'
-param jwtAccessTokenExpirationMinutes int = 15
-param jwtRefreshTokenExpirationDays int = 7
-
-@description('CORS Configuration')
+@description('CORS Allowed Origins (for Container App ingress-level CORS)')
 param corsAllowedOrigins string = ''
-
-@description('Frontend URL for redirects')
-param frontendUrl string = ''
 
 // Existing (shared) resources
 resource cai 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
@@ -120,11 +92,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = if (e
   name: applicationInsightsName
 }
 
-// User-assigned identity (for ACR pull / future use)
-resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+// User-assigned identity (created in main.bicep — referenced as existing here)
+resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
-  location: location
-  tags: tags
 }
 
 // Base env vars for Spring Boot
@@ -172,126 +142,35 @@ var sqlEnv = enableSqlDatabase ? [
   }
 ] : []
 
-// OIDC env vars (if OIDC is configured)
-// Additional parameters (OIDC_ADDL_REQ_PARAM_*) come from azd environment, not Bicep params
-var oidcEnv = !empty(oidcAuthorizationEndpoint) ? [
+// Azure App Configuration endpoint (non-secret config loaded at Spring Boot startup)
+var appConfigEnv = !empty(appConfigEndpoint) ? [
   {
-    name: 'OIDC_AUTHORIZATION_ENDPOINT'
-    value: oidcAuthorizationEndpoint
-  }
-  {
-    name: 'OIDC_TOKEN_ENDPOINT'
-    value: oidcTokenEndpoint
-  }
-  {
-    name: 'OIDC_USER_INFO_ENDPOINT'
-    value: oidcUserInfoEndpoint
-  }
-  {
-    name: 'OIDC_JWK_SET_URI'
-    value: oidcJwkSetUri
-  }
-  {
-    name: 'OIDC_END_SESSION_ENDPOINT'
-    value: oidcEndSessionEndpoint
-  }
-  {
-    name: 'OIDC_CLIENT_ID'
-    value: oidcClientId
+    name: 'APP_CONFIG_ENDPOINT'
+    value: appConfigEndpoint
   }
 ] : []
 
-// OIDC additional request parameters (optional - provider-specific)
-var oidcAdditionalParamsEnv = [
-  !empty(oidcAcrValues) ? {
-    name: 'OIDC_ADDL_REQ_PARAM_ACR_VALUES'
-    value: oidcAcrValues
-  } : null
-  !empty(oidcPrompt) ? {
-    name: 'OIDC_ADDL_REQ_PARAM_PROMPT'
-    value: oidcPrompt
-  } : null
-  !empty(oidcResponseType) ? {
-    name: 'OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE'
-    value: oidcResponseType
-  } : null
-]
-
-var oidcAdditionalParamsEnvFiltered = filter(oidcAdditionalParamsEnv, param => param != null)
-
-// Azure AD / Entra ID env vars (if AAD is configured)
-var aadEnv = !empty(aadClientId) ? [
-  {
-    name: 'AAD_AUTHORIZATION_ENDPOINT'
-    value: aadAuthorizationEndpoint
-  }
-  {
-    name: 'AAD_TOKEN_ENDPOINT'
-    value: aadTokenEndpoint
-  }
-  {
-    name: 'AAD_USER_INFO_ENDPOINT'
-    value: aadUserInfoEndpoint
-  }
-  {
-    name: 'AAD_JWK_SET_URI'
-    value: aadJwkSetUri
-  }
-  {
-    name: 'AAD_END_SESSION_ENDPOINT'
-    value: aadEndSessionEndpoint
-  }
-  {
-    name: 'AZURE_AD_CLIENT_ID'
-    value: aadClientId
-  }
+// AAD client secret (stays in Key Vault via secretRef — NOT in App Config)
+var aadSecretEnv = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
   {
     name: 'AZURE_AD_CLIENT_SECRET'
     secretRef: 'aad-client-secret'
   }
-  {
-    name: 'AZURE_AD_TENANT_ID'
-    value: aadTenantId
-  }
 ] : []
 
-// JWT env vars (if Key Vault is configured)
-var jwtEnv = !empty(keyVaultName) ? [
+// JWT secret (stays in Key Vault via secretRef — NOT in App Config)
+var jwtSecretEnv = !empty(keyVaultName) ? [
   {
     name: 'JWT_SECRET'
     secretRef: 'jwt-secret'
   }
-  {
-    name: 'JWT_ISSUER'
-    value: jwtIssuer
-  }
-  {
-    name: 'JWT_ACCESS_TOKEN_EXPIRATION_MINUTES'
-    value: string(jwtAccessTokenExpirationMinutes)
-  }
-  {
-    name: 'JWT_REFRESH_TOKEN_EXPIRATION_DAYS'
-    value: string(jwtRefreshTokenExpirationDays)
-  }
 ] : []
 
-// CORS and Frontend URL env vars
-var corsEnv = !empty(corsAllowedOrigins) ? [
-  {
-    name: 'CORS_ALLOWED_ORIGINS'
-    value: corsAllowedOrigins
-  }
-  {
-    name: 'FRONTEND_URL'
-    value: frontendUrl
-  }
-] : []
-
-// Combine base env + optional App Insights + SQL + OIDC + OIDC additional params + AAD + JWT + CORS + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appInsightsEnv, sqlEnv, oidcEnv, oidcAdditionalParamsEnvFiltered, aadEnv, jwtEnv, corsEnv, envVars)
+// Combine base env + App Config + App Insights + SQL + secrets + caller-provided env vars
+var combinedEnv = concat(baseEnvArray, appConfigEnv, appInsightsEnv, sqlEnv, jwtSecretEnv, aadSecretEnv, envVars)
 
 // Key Vault secrets to reference (if Key Vault is configured)
-// PKCE authentication doesn't require client secret, only JWT secret is stored
+// Secrets stay in Key Vault — non-secret config is in App Configuration
 var aadSecret = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
   { name: 'aad-client-secret' }
 ] : []
