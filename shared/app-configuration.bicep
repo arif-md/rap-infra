@@ -189,6 +189,19 @@ resource keyValues 'Microsoft.AppConfiguration/configurationStores/keyValues@202
   }
 }]
 
+// Sentinel key — Spring Cloud Azure App Config monitors this key for changes.
+// When its value changes, the library refreshes all configuration properties.
+// The value is a hash of all entry values so it changes whenever any config changes.
+var sentinelValue = uniqueString(string(allEntries))
+
+resource sentinel 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = {
+  parent: configStore
+  name: 'app:sentinel$azure'
+  properties: {
+    value: sentinelValue
+  }
+}
+
 // ============================================================================
 // Role Assignment — App Configuration Data Reader for backend identity
 // ============================================================================

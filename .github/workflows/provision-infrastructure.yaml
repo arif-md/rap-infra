@@ -417,6 +417,45 @@ jobs:
               echo "- **Auth0**: Applications → [Your App] → Settings → Allowed Callback URLs"
             fi
             
+            # Add Azure AD (Entra ID) Configuration section
+            if [ -z "$BACKEND_FQDN" ]; then
+              BACKEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-be" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            fi
+            FRONTEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-fe" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "### 🔐 Azure AD (Entra ID) Configuration"
+              echo ""
+              echo "**⚠️ MANUAL ACTION NEEDED**: Update the Azure AD App Registration with the following redirect URIs."
+              echo ""
+              echo "**Instructions**:"
+              echo "1. Go to [Azure Portal → Entra ID → App Registrations](https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps)"
+              echo "2. Select your app registration (client ID from \`AZURE_AD_CLIENT_ID\`)"
+              echo "3. Go to **Authentication** → **Platform configurations** → **Web**"
+              echo "4. Add or update the following **Redirect URIs**:"
+              echo ""
+              echo "   | Purpose | URI |"
+              echo "   |---------|-----|"
+              echo "   | OAuth2 callback | \`https://$BACKEND_FQDN/login/oauth2/code/azure-ad\` |"
+              if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+              echo "   | Post-logout redirect | \`https://$FRONTEND_FQDN/sign-in?logout=success\` |"
+              fi
+              echo ""
+              echo "5. Under **Front-channel logout URL** (optional):"
+              echo ""
+              echo "   \`\`\`"
+              if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+              echo "   https://$FRONTEND_FQDN/sign-in?logout=success"
+              fi
+              echo "   \`\`\`"
+              echo ""
+              echo "6. Save the configuration"
+              echo ""
+              echo "**Note**: These URIs change whenever the Container Apps Environment is recreated. Consider using a custom domain for stable URIs."
+            fi
+            
             # Add SQL permission script if available
             if [ "$HAS_SQL_SCRIPT" = "true" ]; then
               echo ""
