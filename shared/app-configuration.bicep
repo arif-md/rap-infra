@@ -120,8 +120,9 @@ resource configStore 'Microsoft.AppConfiguration/configurationStores@2023-03-01'
   }
   properties: {
     disableLocalAuth: false // allow ARM-based key-value writes during deployment
-    softDeleteRetentionInDays: softDeleteRetentionInDays
-    enablePurgeProtection: enablePurgeProtection
+    // Soft delete is only supported on the Standard SKU; Free SKU rejects these properties
+    softDeleteRetentionInDays: sku == 'standard' ? softDeleteRetentionInDays : null
+    enablePurgeProtection: sku == 'standard' ? enablePurgeProtection : null
   }
 }
 
