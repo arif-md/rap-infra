@@ -257,17 +257,14 @@ resource sqlAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023
 // ============================================================================
 var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
 
-// Derive frontend FQDN from the Container App Environment's default domain.
+// Derive frontend URL from the Container App Environment's default domain.
 // This avoids relying on stale azd env values (BACKEND_CORS_ALLOWED_ORIGINS)
 // which break after azd down + up when the CAE domain suffix changes.
-resource existingCae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
-  name: '${abbrs.appManagedEnvironments}${resourceToken}'
-}
-var computedFrontendUrl = 'https://${frontendAppName}.${existingCae.properties.defaultDomain}'
+// Uses the module output (not an 'existing' reference) so it works on first deploy.
+var computedFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.outputs.defaultDomain}'
 
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
-  dependsOn: [containerAppsEnvironment]
   params: {
     name: appConfigName
     location: location
