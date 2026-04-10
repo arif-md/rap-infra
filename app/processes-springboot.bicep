@@ -76,11 +76,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = if (e
   name: applicationInsightsName
 }
 
-// User-assigned identity (for ACR pull / future use)
-resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+// User-assigned identity (created in main.bicep — referenced as existing here)
+resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
-  location: location
-  tags: tags
 }
 
 // Base env vars for jBPM/Spring Boot processes service

@@ -21,6 +21,14 @@ param tags object = {}
 @allowed(['free', 'standard'])
 param sku string = 'free'
 
+@description('Soft-delete retention in days (1-7). Lower = faster name reuse after azd down.')
+@minValue(1)
+@maxValue(7)
+param softDeleteRetentionInDays int = 1
+
+@description('Enable purge protection (prevents permanent deletion during retention period)')
+param enablePurgeProtection bool = false
+
 @description('Principal ID to grant App Configuration Data Reader role (backend managed identity)')
 param readerPrincipalId string
 
@@ -112,6 +120,8 @@ resource configStore 'Microsoft.AppConfiguration/configurationStores@2023-03-01'
   }
   properties: {
     disableLocalAuth: false // allow ARM-based key-value writes during deployment
+    softDeleteRetentionInDays: softDeleteRetentionInDays
+    enablePurgeProtection: enablePurgeProtection
   }
 }
 

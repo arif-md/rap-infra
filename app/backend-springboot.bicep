@@ -111,6 +111,17 @@ var baseEnvArray = [
     name: 'AZURE_CLIENT_ID'
     value: uai.properties.clientId
   }
+  // CORS_ALLOWED_ORIGINS needed by Spring Security CorsFilter (reads from env var)
+  // App Config also stores this value, but the env var ensures it's available immediately
+  // without depending on App Config refresh timing
+  {
+    name: 'CORS_ALLOWED_ORIGINS'
+    value: corsAllowedOrigins
+  }
+  {
+    name: 'FRONTEND_URL'
+    value: corsAllowedOrigins
+  }
 ]
 
 // App Insights env vars (if enabled)
@@ -225,8 +236,8 @@ module backend '../modules/containerApp.bicep' = {
     minReplicas: minReplicas
     maxReplicas: maxReplicas    
     envVars: combinedEnv
-    // CORS configuration at ingress level
-    corsAllowedOrigins: corsAllowedOrigins
+    // CORS handled by Spring Boot CorsFilter (not ingress level) to avoid double-CORS conflicts
+    // corsAllowedOrigins is instead passed as CORS_ALLOWED_ORIGINS env var above
     // Key Vault configuration for secret references
     keyVaultName: keyVaultName
     keyVaultEndpoint: keyVaultEndpoint

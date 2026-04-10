@@ -158,30 +158,19 @@ jobs:
             echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
           fi
           
-          echo "DEBUG: SQL_AZURE_AD_ADMIN_OBJECT_ID : ${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID || '' }}"
-          echo "DEBUG: SQL_AZURE_AD_ADMIN_LOGIN : ${{ vars.SQL_AZURE_AD_ADMIN_LOGIN || '' }}"
+          echo "DEBUG: SQL_AD_GROUP_NAME : ${{ vars.SQL_AD_GROUP_NAME || '' }}"
+          echo "DEBUG: SQL_AD_GROUP_OBJECT_ID : ${{ vars.SQL_AD_GROUP_OBJECT_ID || '' }}"
           
-          # Set SQL Azure AD Admin - Required for passwordless authentication and managed identity permissions
-          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID || '' }}" ]; then
-            azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ vars.SQL_AZURE_AD_ADMIN_OBJECT_ID }}"
-          else
-            echo "WARNING: SQL_AZURE_AD_ADMIN_OBJECT_ID not set. Using service principal from AZURE_CLIENT_ID."
-            azd env set SQL_AZURE_AD_ADMIN_OBJECT_ID "${{ secrets.AZURE_CLIENT_ID }}"
+          # Set SQL AD security group for human admin access at database level.
+          # The dedicated SQL admin managed identity (created by Bicep) is the server-level AD admin.
+          # The AD group gets db_owner on the database via deployment script — no Directory Readers needed.
+          if [ -n "${{ vars.SQL_AD_GROUP_NAME || '' }}" ]; then
+            azd env set SQL_AD_GROUP_NAME "${{ vars.SQL_AD_GROUP_NAME }}"
+            echo "✓ SQL_AD_GROUP_NAME configured"
           fi
-          
-          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN || '' }}" ]; then
-            azd env set SQL_AZURE_AD_ADMIN_LOGIN "${{ vars.SQL_AZURE_AD_ADMIN_LOGIN }}"
-          else
-            echo "WARNING: SQL_AZURE_AD_ADMIN_LOGIN not set. Using default: sp-raptordev"
-            azd env set SQL_AZURE_AD_ADMIN_LOGIN "sp-raptordev"
-          fi
-          
-          # Set principal type - "Application" for service principals, "User" for user accounts
-          if [ -n "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE || '' }}" ]; then
-            azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "${{ vars.SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE }}"
-          else
-            echo "Using default principal type: Application (service principal)"
-            azd env set SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE "Application"
+          if [ -n "${{ vars.SQL_AD_GROUP_OBJECT_ID || '' }}" ]; then
+            azd env set SQL_AD_GROUP_OBJECT_ID "${{ vars.SQL_AD_GROUP_OBJECT_ID }}"
+            echo "✓ SQL_AD_GROUP_OBJECT_ID configured"
           fi
           
           # Set OIDC Provider Configuration - Required for OAuth2/OpenID Connect authentication
@@ -294,42 +283,8 @@ jobs:
       # handled by the postprovision hook in azure.yaml, which runs automatically
       # after every `azd provision` — no separate step needed.
 
-      - name: Extract SQL permission script
-        if: success()
-        shell: bash
-        run: |
-          echo "Extracting SQL permission script from deployment outputs..."
-          
-          # Try to get from deployment stack first (alpha feature)
-          STACK_NAME="azd-stack-$AZURE_ENV_NAME"
-          SQL_SCRIPT=$(az stack group show \
-            --name "$STACK_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --query "outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
-          
-          # Fallback to regular deployment if stack query fails
-          if [ -z "$SQL_SCRIPT" ] || [ "$SQL_SCRIPT" = "null" ]; then
-            echo "Stack query failed or returned null, trying regular deployment..."
-            DEPLOYMENT=$(az deployment group list \
-              --resource-group "$AZURE_RESOURCE_GROUP" \
-              --query "[0].name" -o tsv)
-            
-            SQL_SCRIPT=$(az deployment group show \
-              --resource-group "$AZURE_RESOURCE_GROUP" \
-              --name "$DEPLOYMENT" \
-              --query "properties.outputs.sqlPermissionScript.value" -o tsv 2>/dev/null || echo "")
-          fi
-          
-          if [ -n "$SQL_SCRIPT" ] && [ "$SQL_SCRIPT" != "null" ] && [ "$SQL_SCRIPT" != "" ]; then
-            echo "✅ SQL permission script extracted successfully"
-            echo "SQL_PERMISSION_SCRIPT<<EOF" >> $GITHUB_ENV
-            echo "$SQL_SCRIPT" >> $GITHUB_ENV
-            echo "EOF" >> $GITHUB_ENV
-            echo "HAS_SQL_SCRIPT=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ No SQL permission script found in deployment outputs"
-            echo "HAS_SQL_SCRIPT=false" >> $GITHUB_ENV
-          fi
+      # SQL permissions are now granted automatically by the Bicep deployment script
+      # (modules/sql-role-assignments.bicep) — no manual extraction needed.
 
       - name: Show deployment summary
         if: success()
@@ -456,37 +411,17 @@ jobs:
               echo "**Note**: These URIs change whenever the Container Apps Environment is recreated. Consider using a custom domain for stable URIs."
             fi
             
-            # Add SQL permission script if available
-            if [ "$HAS_SQL_SCRIPT" = "true" ]; then
-              echo ""
-              echo "---"
-              echo ""
-              echo "### 🔐 SQL Permissions Setup Required"
-              echo ""
-              echo "**⚠️ MANUAL ACTION NEEDED**: Execute the following SQL script to grant database permissions to the backend managed identity."
-              echo ""
-              echo "**Instructions**:"
-              echo "1. Go to [Azure Portal](https://portal.azure.com)"
-              echo "2. Navigate to SQL Database: \`$AZURE_RESOURCE_GROUP\` resource group"
-              echo "3. Click on the SQL Database"
-              echo "4. Click **Query editor** in the left menu"
-              echo "5. Sign in with **Azure AD** (use the SQL Server Azure AD admin account)"
-              echo "6. Copy and paste the script below"
-              echo "7. Click **Run**"
-              echo ""
-              echo "<details>"
-              echo "<summary>📋 Click to expand SQL Permission Script</summary>"
-              echo ""
-              echo "\`\`\`sql"
-              echo "$SQL_PERMISSION_SCRIPT"
-              echo "\`\`\`"
-              echo ""
-              echo "</details>"
-              echo ""
-              echo "After executing the script, restart the backend container app:"
-              echo "\`\`\`bash"
-              echo "az containerapp revision restart --name <backend-app-name> --resource-group $AZURE_RESOURCE_GROUP"
-              echo "\`\`\`"
+            # SQL permissions status
+            echo ""
+            echo "---"
+            echo ""
+            echo "### 🔐 SQL Database Permissions"
+            echo ""
+            echo "✅ SQL database permissions were granted automatically by the deployment script."
+            echo "   A dedicated managed identity (\`id-sqladmin-*\`) is the SQL AD admin and ran"
+            echo "   CREATE USER + GRANT ROLE for all service identities during provisioning."
+            if [ -n "${{ vars.SQL_AD_GROUP_NAME || '' }}" ]; then
+              echo "   AD group \`${{ vars.SQL_AD_GROUP_NAME }}\` was granted db_owner for portal admin access."
             fi
           } >> $GITHUB_STEP_SUMMARY
 
@@ -501,15 +436,3 @@ jobs:
           echo "  - Invalid Bicep configuration"
           echo "  - Missing permissions"
           echo "  - Resource quota limits"
-
-  # SQL permissions are now granted manually via Azure Portal
-  # See the "SQL Database Permissions" section in the provision job summary above
-  # for the generated SQL script and step-by-step instructions
-  #
-  # grant-sql-permissions:
-  #   needs: provision
-  #   uses: ./.github/workflows/grant-sql-permissions.yml
-  #   with:
-  #     environment: ${{ inputs.targetEnv || 'dev' }}
-  #     resource_group: ${{ needs.provision.outputs.resource_group }}
-  #   secrets: inherit

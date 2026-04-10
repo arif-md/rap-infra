@@ -87,17 +87,14 @@ param sqlAdminLogin string = 'sqladmin'
 @secure()
 param sqlAdminPassword string
 
-@description('Azure AD admin object ID (for SQL Server Azure AD admin)')
-param sqlAzureAdAdminObjectId string = ''
+@description('Azure AD security group name to grant db_owner on the SQL database (for human admin access via portal)')
+param sqlAdGroupName string = ''
 
-@description('Azure AD admin login name (display name or email)')
-param sqlAzureAdAdminLogin string = ''
+@description('Azure AD security group object ID (required when sqlAdGroupName is set)')
+param sqlAdGroupObjectId string = ''
 
 @description('Flyway validate on migrate for processes service (set to false if migrations were removed/refactored)')
 param flywayValidateOnMigrate string = 'true'
-
-@description('Azure AD admin principal type: Application (for service principals), User, or Group')
-param sqlAzureAdAdminPrincipalType string = 'Application'
 
 @description('SQL Database SKU name')
 param sqlDatabaseSku string = 'Basic'
@@ -168,6 +165,7 @@ var backendAppName = '${namePrefix}-be'
 var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
 var processesAppName = '${namePrefix}-proc'
 var processesIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}processes-${resourceToken}'
+var sqlAdminIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}sqladmin-${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
 var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
@@ -230,13 +228,46 @@ resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
   tags: tags
 }
 
+// Processes identity created here (alongside backend) so the SQL role
+// assignment deployment script can reference its principalId without
+// creating a circular dependency with the processes container module.
+resource processesIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: processesIdentityName
+  location: location
+  tags: tags
+}
+
+// ============================================================================
+// SQL Admin Managed Identity — direct Azure AD admin for SQL Server
+// ============================================================================
+// Using a dedicated managed identity as the direct SQL AD admin avoids the
+// "Directory Readers" problem: when an AD Group is the admin, SQL Server needs
+// to resolve group membership but lacks the Azure AD role to do so.
+// This identity is the direct admin (no group lookup) and is used by the
+// deployment script to grant DB-level permissions to service identities.
+// ============================================================================
+resource sqlAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (enableSqlDatabase) {
+  name: sqlAdminIdentityName
+  location: location
+  tags: tags
+}
+
 // ============================================================================
 // Azure App Configuration — centralised non-secret config
 // ============================================================================
 var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
 
+// Derive frontend FQDN from the Container App Environment's default domain.
+// This avoids relying on stale azd env values (BACKEND_CORS_ALLOWED_ORIGINS)
+// which break after azd down + up when the CAE domain suffix changes.
+resource existingCae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
+  name: '${abbrs.appManagedEnvironments}${resourceToken}'
+}
+var computedFrontendUrl = 'https://${frontendAppName}.${existingCae.properties.defaultDomain}'
+
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
+  dependsOn: [containerAppsEnvironment]
   params: {
     name: appConfigName
     location: location
@@ -261,9 +292,10 @@ module appConfiguration 'shared/app-configuration.bicep' = {
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
-    // CORS & frontend
-    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
-    frontendUrl: frontendUrl
+    // CORS & frontend — derived from CAE default domain to avoid stale azd env values
+    // after azd down + up (Container App Environment domain suffix changes each time)
+    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : computedFrontendUrl
+    frontendUrl: !empty(frontendUrl) ? frontendUrl : computedFrontendUrl
   }
 }
 
@@ -348,10 +380,10 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
     tags: tags
     administratorLogin: sqlAdminLogin
     administratorPassword: sqlAdminPassword
-    // Azure AD admin configuration (for managed identity authentication)
-    azureAdAdminObjectId: sqlAzureAdAdminObjectId
-    azureAdAdminLogin: sqlAzureAdAdminLogin
-    azureAdAdminPrincipalType: sqlAzureAdAdminPrincipalType
+    // Azure AD admin: use the dedicated SQL admin managed identity (direct admin, no group lookup)
+    azureAdAdminObjectId: sqlAdminIdentity!.properties.principalId
+    azureAdAdminLogin: sqlAdminIdentityName
+    azureAdAdminPrincipalType: 'Application'
     skuName: sqlDatabaseSku
     skuTier: sqlDatabaseTier
     // Use private endpoint only if VNet integration is enabled
@@ -376,6 +408,8 @@ module backend 'app/backend-springboot.bicep' = {
   dependsOn: [
     containerAppsEnvironment
     // appConfiguration dependency is implicit via appConfiguration.outputs.endpoint reference
+    // Wait for SQL users to be created before the container starts connecting
+    sqlRoleAssignments
   ]
   params: {
     name: backendAppName
@@ -413,7 +447,7 @@ module backend 'app/backend-springboot.bicep' = {
     // AAD client secret (stays in Key Vault — not in App Config)
     aadClientSecret: aadClientSecret
     // CORS: Used at Container App ingress level (also stored in App Config for Spring Boot)
-    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : '*'
+    corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : computedFrontendUrl
     // Optional env vars (can be extended later)
     envVars: [
       {
@@ -519,7 +553,44 @@ module processes 'app/processes-springboot.bicep' = {
   }
   dependsOn: [
     containerAppsEnvironment
+    // Wait for SQL users to be created before the container starts connecting
+    sqlRoleAssignments
   ]
+}
+
+// ============================================================================
+// SQL Permission Grants — automated via deployment script
+// ============================================================================
+// Uses the SQL admin managed identity to connect directly to the database and
+// create users + grant roles for the backend and processes managed identities.
+// Also grants db_owner to the AD security group for human admin portal access.
+// Uses SID + TYPE = E/X syntax to bypass SQL Server's need for Directory Readers.
+// ============================================================================
+module sqlRoleAssignments 'modules/sql-role-assignments.bicep' = if (enableSqlDatabase) {
+  name: 'sql-role-assignments'
+  params: {
+    location: location
+    tags: tags
+    sqlServerFqdn: sqlDatabase!.outputs.sqlServerFqdn
+    sqlDatabaseName: sqlDatabase!.outputs.sqlDatabaseName
+    sqlAdminIdentityId: sqlAdminIdentity!.id
+    identityGrants: [
+      {
+        name: backendIdentityName
+        clientId: backendIdentity.properties.clientId
+        roles: [ 'db_datareader', 'db_datawriter', 'db_ddladmin' ]
+      }
+      {
+        name: processesIdentityName
+        clientId: processesIdentity.properties.clientId
+        roles: [ 'db_datareader', 'db_datawriter', 'db_ddladmin' ]
+      }
+    ]
+    adAdminGroup: !empty(sqlAdGroupName) && !empty(sqlAdGroupObjectId) ? {
+      name: sqlAdGroupName
+      objectId: sqlAdGroupObjectId
+    } : {}
+  }
 }
 
 // Useful outputs for azd and diagnostics
@@ -533,91 +604,12 @@ output sqlDatabaseName string = enableSqlDatabase ? sqlDatabase!.outputs.sqlData
 output backendIdentityName string = backendIdentityName
 output backendIdentityPrincipalId string = backend.outputs.identityPrincipalId
 output processesIdentityName string = processesIdentityName
-output processesIdentityPrincipalId string = processes.outputs.identityPrincipalId
+output processesIdentityPrincipalId string = processesIdentity.properties.principalId
 output appConfigEndpoint string = appConfiguration.outputs.endpoint
 output appConfigName string = appConfiguration.outputs.name
 
-// SQL permission grant script for manual execution via Azure Portal
-output sqlPermissionScript string = enableSqlDatabase ? replace(replace(replace(replace(replace('''
--- ========================================
--- SQL Permissions for Backend and Processes Managed Identities
--- ========================================
--- Execute this script in Azure Portal Query Editor after deployment
--- Connect to database: __DATABASE_NAME__
---
--- Backend Identity: __BACKEND_IDENTITY_VALUE__
--- Processes Identity: __PROCESSES_IDENTITY_VALUE__
---
--- Instructions:
--- 1. Go to Azure Portal > SQL Database > __DATABASE_NAME__
--- 2. Click "Query editor" in left menu
--- 3. Sign in with Azure AD (use the SQL Server Azure AD admin account)
--- 4. Copy and paste this entire script
--- 5. Click "Run"
--- ========================================
-
--- ========================================
--- Backend Service Permissions
--- ========================================
-
--- Create user for backend managed identity
-CREATE USER [${backendIdentityName}] FROM EXTERNAL PROVIDER;
-GO
-
--- Grant read permissions
-ALTER ROLE db_datareader ADD MEMBER [${backendIdentityName}];
-GO
-
--- Grant write permissions
-ALTER ROLE db_datawriter ADD MEMBER [${backendIdentityName}];
-GO
-
--- Grant DDL permissions (for Flyway migrations)
-ALTER ROLE db_ddladmin ADD MEMBER [${backendIdentityName}];
-GO
-
--- Verify the backend user was created
-SELECT 
-    name as UserName,
-    type_desc as UserType,
-    create_date as CreatedDate
-FROM sys.database_principals 
-WHERE name = '${backendIdentityName}';
-GO
-
--- ========================================
--- Processes Service Permissions
--- ========================================
-
--- Create user for processes managed identity
-CREATE USER [${processesIdentityName}] FROM EXTERNAL PROVIDER;
-GO
-
--- Grant read permissions
-ALTER ROLE db_datareader ADD MEMBER [${processesIdentityName}];
-GO
-
--- Grant write permissions
-ALTER ROLE db_datawriter ADD MEMBER [${processesIdentityName}];
-GO
-
--- Grant DDL permissions (for jBPM schema management)
-ALTER ROLE db_ddladmin ADD MEMBER [${processesIdentityName}];
-GO
-
--- Verify the processes user was created
-SELECT 
-    name as UserName,
-    type_desc as UserType,
-    create_date as CreatedDate
-FROM sys.database_principals 
-WHERE name = '${processesIdentityName}';
-GO
-
--- ========================================
--- Script execution complete!
--- ========================================
-''', '__DATABASE_NAME__', sqlDatabase!.outputs.sqlDatabaseName), '__BACKEND_IDENTITY_VALUE__', backendIdentityName), '__PROCESSES_IDENTITY_VALUE__', processesIdentityName), '\${backendIdentityName}', backendIdentityName), '\${processesIdentityName}', processesIdentityName) : ''
+// SQL role assignment status (automated — no manual script needed)
+output sqlPermissionStatus string = enableSqlDatabase ? sqlRoleAssignments!.outputs.scriptOutput : 'skipped'
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

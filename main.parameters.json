@@ -44,14 +44,11 @@
       "sqlAdminPassword": {
         "value": "${SQL_ADMIN_PASSWORD}"
       },
-      "sqlAzureAdAdminObjectId": {
-        "value": "${SQL_AZURE_AD_ADMIN_OBJECT_ID=}"
+      "sqlAdGroupName": {
+        "value": "${SQL_AD_GROUP_NAME=}"
       },
-      "sqlAzureAdAdminLogin": {
-        "value": "${SQL_AZURE_AD_ADMIN_LOGIN=}"
-      },
-      "sqlAzureAdAdminPrincipalType": {
-        "value": "${SQL_AZURE_AD_ADMIN_PRINCIPAL_TYPE=Application}"
+      "sqlAdGroupObjectId": {
+        "value": "${SQL_AD_GROUP_OBJECT_ID=}"
       },
       "flywayValidateOnMigrate": {
         "value": "${FLYWAY_VALIDATE_ON_MIGRATE=true}"

@@ -13,13 +13,14 @@
 #   - If image is missing or invalid, queries ACR for latest
 #   - Falls back to public image if ACR repository is empty
 #
-# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT
+# Sets per-service SKIP flags: SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT, SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT
 #
 # This script is used by:
 #   - Local azd up: .\resolve-images.ps1 (resolves all services)
 #   - provision-infrastructure workflow: .\resolve-images.ps1 (resolves all services)
 #   - deploy-frontend workflow: .\resolve-images.ps1 frontend (resolves only frontend)
 #   - deploy-backend workflow: .\resolve-images.ps1 backend (resolves only backend)
+#   - deploy-processes workflow: .\resolve-images.ps1 processes (resolves only processes)
 
 param(
     [string]$TargetService = ""
@@ -101,6 +102,10 @@ if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
     Resolve-ServiceImage -ServiceKey "backend"
 }
 
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "processes") {
+    Resolve-ServiceImage -ServiceKey "processes"
+}
+
 # Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
 # Each service has independent control over whether to create ACR role assignment
 Write-Host ""
@@ -108,6 +113,7 @@ Write-Host "🔧 Setting per-service ACR pull role assignment flags..." -Foregro
 
 $frontendImg = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
 $backendImg = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
+$processesImg = azd env get-value SERVICE_PROCESSES_IMAGE_NAME 2>$null
 
 # Frontend: SKIP if image doesn't use ACR
 if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "frontend") {
@@ -128,6 +134,17 @@ if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
     } else {
         Write-Host "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
         azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+    }
+}
+
+# Processes: SKIP if image doesn't use ACR
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "processes") {
+    if (-not [string]::IsNullOrEmpty($processesImg) -and $processesImg -match "$REGISTRY") {
+        Write-Host "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+        azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+    } else {
+        Write-Host "   Processes uses public/external image - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
+        azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
     }
 }
 

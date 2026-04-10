@@ -5,7 +5,7 @@
 #   .\validate-acr-binding.ps1 [service-name]
 #
 # PARAMETERS:
-#   service-name (optional) - Specific service to validate (e.g., "frontend", "backend")
+#   service-name (optional) - Specific service to validate (e.g., "frontend", "backend", "processes")
 #                             If omitted, validates ALL services
 
 param(
@@ -26,9 +26,12 @@ $FRONTEND_IMG = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
 $BACKEND_IMG = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
 $SKIP_FRONTEND = azd env get-value SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT 2>$null
 $SKIP_BACKEND = azd env get-value SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT 2>$null
+$PROCESSES_IMG = azd env get-value SERVICE_PROCESSES_IMAGE_NAME 2>$null
+$SKIP_PROCESSES = azd env get-value SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT 2>$null
 
 if ([string]::IsNullOrEmpty($SKIP_FRONTEND)) { $SKIP_FRONTEND = "true" }
 if ([string]::IsNullOrEmpty($SKIP_BACKEND)) { $SKIP_BACKEND = "true" }
+if ([string]::IsNullOrEmpty($SKIP_PROCESSES)) { $SKIP_PROCESSES = "true" }
 
 if ([string]::IsNullOrEmpty($AZURE_ACR_NAME)) {
     Write-Host "⚠️  AZURE_ACR_NAME not set. Skipping validation." -ForegroundColor Yellow
@@ -82,6 +85,30 @@ if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
             Write-Host "      This won't cause errors, but creates unnecessary role assignment." -ForegroundColor Yellow
         } else {
             Write-Host "   ✅ SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true (correct)" -ForegroundColor Green
+        }
+    }
+}
+
+# Validate processes
+if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "processes") {
+    Write-Host ""
+    Write-Host "📦 Validating processes..." -ForegroundColor Cyan
+    if (-not [string]::IsNullOrEmpty($PROCESSES_IMG) -and $PROCESSES_IMG -match $ACR_DOMAIN) {
+        Write-Host "   Image: $PROCESSES_IMG (ACR)" -ForegroundColor Gray
+        if ($SKIP_PROCESSES -eq "true") {
+            Write-Host "   ❌ ERROR: Processes uses ACR but SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Red
+            Write-Host "      This will cause deployment failure - Container App won't be able to pull image." -ForegroundColor Red
+            $HAS_ERROR = $true
+        } else {
+            Write-Host "   ✅ SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false (correct)" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "   Image: $PROCESSES_IMG (public/external)" -ForegroundColor Gray
+        if ($SKIP_PROCESSES -eq "false") {
+            Write-Host "   ⚠️  WARNING: Processes uses public image but SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Yellow
+            Write-Host "      This won't cause errors, but creates unnecessary role assignment." -ForegroundColor Yellow
+        } else {
+            Write-Host "   ✅ SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true (correct)" -ForegroundColor Green
         }
     }
 }
