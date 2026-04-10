@@ -405,8 +405,8 @@ module backend 'app/backend-springboot.bicep' = {
   dependsOn: [
     containerAppsEnvironment
     // appConfiguration dependency is implicit via appConfiguration.outputs.endpoint reference
-    // Wait for SQL users to be created before the container starts connecting
-    sqlRoleAssignments
+    // Wait for schema bootstrap (which itself waits for SQL role assignments)
+    sqlSchemaBootstrap
   ]
   params: {
     name: backendAppName
@@ -550,8 +550,8 @@ module processes 'app/processes-springboot.bicep' = {
   }
   dependsOn: [
     containerAppsEnvironment
-    // Wait for SQL users to be created before the container starts connecting
-    sqlRoleAssignments
+    // Wait for schema bootstrap (which itself waits for SQL role assignments)
+    sqlSchemaBootstrap
   ]
 }
 
@@ -590,6 +590,28 @@ module sqlRoleAssignments 'modules/sql-role-assignments.bicep' = if (enableSqlDa
   }
 }
 
+// ============================================================================
+// SQL Schema Bootstrap — schemas, base tables, views & seed data
+// ============================================================================
+// Runs AFTER role assignments (users must exist for ALTER USER DEFAULT_SCHEMA)
+// and BEFORE container apps start (Flyway incremental migrations build on this).
+// ============================================================================
+module sqlSchemaBootstrap 'modules/sql-schema-bootstrap.bicep' = if (enableSqlDatabase) {
+  name: 'sql-schema-bootstrap'
+  params: {
+    location: location
+    tags: tags
+    sqlServerFqdn: sqlDatabase!.outputs.sqlServerFqdn
+    sqlDatabaseName: sqlDatabase!.outputs.sqlDatabaseName
+    sqlAdminIdentityId: sqlAdminIdentity!.id
+    backendIdentityName: backendIdentityName
+    processesIdentityName: processesIdentityName
+  }
+  dependsOn: [
+    sqlRoleAssignments
+  ]
+}
+
 // Useful outputs for azd and diagnostics
 // Derive login server from the provided ACR name to avoid cross-RG coupling
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
@@ -607,6 +629,7 @@ output appConfigName string = appConfiguration.outputs.name
 
 // SQL role assignment status (automated — no manual script needed)
 output sqlPermissionStatus string = enableSqlDatabase ? sqlRoleAssignments!.outputs.scriptOutput : 'skipped'
+output sqlSchemaBootstrapStatus string = enableSqlDatabase ? sqlSchemaBootstrap!.outputs.scriptOutput : 'skipped'
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
