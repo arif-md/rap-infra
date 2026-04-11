@@ -262,6 +262,8 @@ var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
 // which break after azd down + up when the CAE domain suffix changes.
 // Uses the module output (not an 'existing' reference) so it works on first deploy.
 var computedFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.outputs.defaultDomain}'
+// Pre-compute backend URL from known naming pattern (avoids frontend→backend dependency)
+var computedBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.outputs.defaultDomain}'
 
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
@@ -403,10 +405,10 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
 module backend 'app/backend-springboot.bicep' = {
   name: 'backendApp'
   dependsOn: [
-    containerAppsEnvironment
+    // containerAppsEnvironment dependency is auto-inferred by Bicep via containerAppsEnvironmentName param
     // appConfiguration dependency is implicit via appConfiguration.outputs.endpoint reference
-    // Wait for schema bootstrap (which itself waits for SQL role assignments)
-    sqlSchemaBootstrap
+    // Wait for combined SQL setup (role assignments + schema bootstrap)
+    sqlSetup
   ]
   params: {
     name: backendAppName
@@ -492,14 +494,12 @@ module frontend 'app/frontend-angular.bicep' = {
       }
       {
         name: 'API_BASE_URL'
-        value: 'https://${backend.outputs.fqdn}'
+        value: computedBackendUrl
       }
     ]
     tags: tags
   }
-  dependsOn: [
-    containerAppsEnvironment
-  ]
+  // containerAppsEnvironment dependency is auto-inferred by Bicep via containerAppsEnvironmentName param
 }
 
 // Processes jBPM Container App (can deploy in parallel with other services)
@@ -550,21 +550,20 @@ module processes 'app/processes-springboot.bicep' = {
   }
   dependsOn: [
     containerAppsEnvironment
-    // Wait for schema bootstrap (which itself waits for SQL role assignments)
-    sqlSchemaBootstrap
+    // Wait for combined SQL setup (role assignments + schema bootstrap)
+    sqlSetup
   ]
 }
 
 // ============================================================================
-// SQL Permission Grants — automated via deployment script
+// Combined SQL Setup — role assignments + schema bootstrap in ONE ACI container
 // ============================================================================
-// Uses the SQL admin managed identity to connect directly to the database and
-// create users + grant roles for the backend and processes managed identities.
-// Also grants db_owner to the AD security group for human admin portal access.
-// Uses SID + TYPE = E/X syntax to bypass SQL Server's need for Directory Readers.
+// Merging two sequential ACI deployment scripts into one eliminates an entire
+// container spin-up cycle (~4-5 min saved). Uses content-based forceUpdateTag
+// so it only re-runs when inputs actually change.
 // ============================================================================
-module sqlRoleAssignments 'modules/sql-role-assignments.bicep' = if (enableSqlDatabase) {
-  name: 'sql-role-assignments'
+module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase) {
+  name: 'sql-setup'
   params: {
     location: location
     tags: tags
@@ -587,29 +586,9 @@ module sqlRoleAssignments 'modules/sql-role-assignments.bicep' = if (enableSqlDa
       name: sqlAdGroupName
       objectId: sqlAdGroupObjectId
     } : {}
-  }
-}
-
-// ============================================================================
-// SQL Schema Bootstrap — schemas, base tables, views & seed data
-// ============================================================================
-// Runs AFTER role assignments (users must exist for ALTER USER DEFAULT_SCHEMA)
-// and BEFORE container apps start (Flyway incremental migrations build on this).
-// ============================================================================
-module sqlSchemaBootstrap 'modules/sql-schema-bootstrap.bicep' = if (enableSqlDatabase) {
-  name: 'sql-schema-bootstrap'
-  params: {
-    location: location
-    tags: tags
-    sqlServerFqdn: sqlDatabase!.outputs.sqlServerFqdn
-    sqlDatabaseName: sqlDatabase!.outputs.sqlDatabaseName
-    sqlAdminIdentityId: sqlAdminIdentity!.id
     backendIdentityName: backendIdentityName
     processesIdentityName: processesIdentityName
   }
-  dependsOn: [
-    sqlRoleAssignments
-  ]
 }
 
 // Useful outputs for azd and diagnostics
@@ -627,9 +606,8 @@ output processesIdentityPrincipalId string = processesIdentity.properties.princi
 output appConfigEndpoint string = appConfiguration.outputs.endpoint
 output appConfigName string = appConfiguration.outputs.name
 
-// SQL role assignment status (automated — no manual script needed)
-output sqlPermissionStatus string = enableSqlDatabase ? sqlRoleAssignments!.outputs.scriptOutput : 'skipped'
-output sqlSchemaBootstrapStatus string = enableSqlDatabase ? sqlSchemaBootstrap!.outputs.scriptOutput : 'skipped'
+// SQL setup status (combined — role assignments + schema bootstrap)
+output sqlSetupStatus string = enableSqlDatabase ? sqlSetup!.outputs.scriptOutput : 'skipped'
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'
