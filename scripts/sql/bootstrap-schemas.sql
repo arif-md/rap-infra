@@ -42,11 +42,11 @@ ELSE
 GO
 
 -- ============================================================================
--- 2. Base Tables — RAP Schema
+-- 2. Base Tables - RAP Schema
 --    (definitions match backend V4__Create_auth_tables.sql exactly)
 -- ============================================================================
 
--- RAP.USER_INFO — Authenticated users from OIDC provider
+-- RAP.USER_INFO - Authenticated users from OIDC provider
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'RAP' AND t.name = 'USER_INFO')
 BEGIN
     CREATE TABLE RAP.USER_INFO (
@@ -72,7 +72,7 @@ ELSE
     PRINT 'Table RAP.USER_INFO already exists';
 GO
 
--- RAP.ROLE_REF — Application roles for authorization
+-- RAP.ROLE_REF - Application roles for authorization
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'RAP' AND t.name = 'ROLE_REF')
 BEGIN
     CREATE TABLE RAP.ROLE_REF (
@@ -88,7 +88,7 @@ ELSE
     PRINT 'Table RAP.ROLE_REF already exists';
 GO
 
--- RAP.USER_ROLE — Many-to-many user-role mapping
+-- RAP.USER_ROLE - Many-to-many user-role mapping
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'RAP' AND t.name = 'USER_ROLE')
 BEGIN
     CREATE TABLE RAP.USER_ROLE (
@@ -111,7 +111,7 @@ ELSE
     PRINT 'Table RAP.USER_ROLE already exists';
 GO
 
--- RAP.refresh_tokens — JWT refresh token storage
+-- RAP.refresh_tokens - JWT refresh token storage
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'RAP' AND t.name = 'refresh_tokens')
 BEGIN
     CREATE TABLE RAP.refresh_tokens (
@@ -138,7 +138,7 @@ ELSE
     PRINT 'Table RAP.refresh_tokens already exists';
 GO
 
--- RAP.revoked_tokens — Revoked JWT tracking for immediate invalidation
+-- RAP.revoked_tokens - Revoked JWT tracking for immediate invalidation
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'RAP' AND t.name = 'revoked_tokens')
 BEGIN
     CREATE TABLE RAP.revoked_tokens (
@@ -162,11 +162,11 @@ ELSE
 GO
 
 -- ============================================================================
--- 3. Base Tables — JBPM Schema
+-- 3. Base Tables - JBPM Schema
 --    (definitions match processes V12__Create_JBPM_User_tables.sql exactly)
 -- ============================================================================
 
--- JBPM.ROLE_REF — Roles for jBPM user/group resolution
+-- JBPM.ROLE_REF - Roles for jBPM user/group resolution
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'JBPM' AND t.name = 'ROLE_REF')
 BEGIN
     CREATE TABLE JBPM.ROLE_REF (
@@ -180,7 +180,7 @@ ELSE
     PRINT 'Table JBPM.ROLE_REF already exists';
 GO
 
--- JBPM.USER_INFO — jBPM user identities
+-- JBPM.USER_INFO - jBPM user identities
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'JBPM' AND t.name = 'USER_INFO')
 BEGIN
     CREATE TABLE JBPM.USER_INFO (
@@ -198,7 +198,7 @@ ELSE
     PRINT 'Table JBPM.USER_INFO already exists';
 GO
 
--- JBPM.USER_GROUP — jBPM user-to-group mapping
+-- JBPM.USER_GROUP - jBPM user-to-group mapping
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'JBPM' AND t.name = 'USER_GROUP')
 BEGIN
     CREATE TABLE JBPM.USER_GROUP (
@@ -219,7 +219,7 @@ ELSE
     PRINT 'Table JBPM.USER_GROUP already exists';
 GO
 
--- JBPM.USER_ROLE — jBPM user-to-role mapping
+-- JBPM.USER_ROLE - jBPM user-to-role mapping
 IF NOT EXISTS (SELECT 1 FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name = 'JBPM' AND t.name = 'USER_ROLE')
 BEGIN
     CREATE TABLE JBPM.USER_ROLE (
@@ -243,7 +243,7 @@ GO
 -- 4. Base Views
 -- ============================================================================
 
--- RAP.vw_user_roles — Flattened user-role view for quick lookups
+-- RAP.vw_user_roles - Flattened user-role view for quick lookups
 IF OBJECT_ID('RAP.vw_user_roles', 'V') IS NOT NULL
     DROP VIEW RAP.vw_user_roles;
 GO
@@ -257,7 +257,7 @@ GO
 PRINT 'Created/replaced view: RAP.vw_user_roles';
 GO
 
--- JBPM.vw_user_roles — Flattened jBPM user-role view
+-- JBPM.vw_user_roles - Flattened jBPM user-role view
 IF OBJECT_ID('JBPM.vw_user_roles', 'V') IS NOT NULL
     DROP VIEW JBPM.vw_user_roles;
 GO
@@ -272,7 +272,7 @@ PRINT 'Created/replaced view: JBPM.vw_user_roles';
 GO
 
 -- ============================================================================
--- 5. Seed Data — Reference/Lookup Data
+-- 5. Seed Data - Reference/Lookup Data
 -- ============================================================================
 
 -- RAP roles (matches V4 + V8 seed data)
@@ -299,7 +299,7 @@ IF NOT EXISTS (SELECT 1 FROM JBPM.ROLE_REF WHERE role_code = 'user')
 PRINT 'Seeded JBPM.ROLE_REF';
 GO
 
--- Default JBPM service user (kieserver) — matches V12 seed data
+-- Default JBPM service user (kieserver) - matches V12 seed data
 IF NOT EXISTS (SELECT 1 FROM JBPM.USER_INFO WHERE email = 'kieserver')
 BEGIN
     INSERT INTO JBPM.USER_INFO (email, pwd, lang) VALUES ('kieserver', 'kieserver123', 'en-UK');

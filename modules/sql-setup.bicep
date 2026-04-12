@@ -44,10 +44,12 @@ param processesIdentityName string = ''
 var identityGrantsJson = string(identityGrants)
 var adAdminGroupJson = string(adAdminGroup)
 var sqlScriptContent = loadTextContent('../scripts/sql/bootstrap-schemas.sql')
+var dbUserSqlTemplate = loadTextContent('../scripts/sql/create-db-user.sql')
+var adGroupSqlTemplate = loadTextContent('../scripts/sql/create-ad-group-user.sql')
 
 // Content-based forceUpdateTag: only re-runs when inputs actually change.
 // Eliminates the ~4-5 min ACI spin-up on unchanged re-deploys.
-var changeDetectionTag = uniqueString(identityGrantsJson, adAdminGroupJson, sqlScriptContent, backendIdentityName, processesIdentityName)
+var changeDetectionTag = uniqueString(identityGrantsJson, adAdminGroupJson, sqlScriptContent, dbUserSqlTemplate, adGroupSqlTemplate, backendIdentityName, processesIdentityName)
 
 resource sqlSetup 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'sql-setup'
@@ -87,6 +89,14 @@ resource sqlSetup 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       {
         name: 'SQL_SCRIPT_CONTENT'
         value: sqlScriptContent
+      }
+      {
+        name: 'DB_USER_SQL_TEMPLATE'
+        value: dbUserSqlTemplate
+      }
+      {
+        name: 'AD_GROUP_SQL_TEMPLATE'
+        value: adGroupSqlTemplate
       }
     ]
     scriptContent: loadTextContent('../scripts/sql-setup.ps1')
