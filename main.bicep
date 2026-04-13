@@ -96,6 +96,12 @@ param sqlAdGroupObjectId string = ''
 @description('Flyway validate on migrate for processes service (set to false if migrations were removed/refactored)')
 param flywayValidateOnMigrate string = 'true'
 
+@description('Enable monitoring (Log Analytics Workspace + Application Insights). Disable for faster provisioning.')
+param enableMonitoring bool = true
+
+@description('Skip SQL setup ACI script (role assignments + schema bootstrap). Use after first successful deploy for faster iterations.')
+param skipSqlSetup bool = false
+
 @description('SQL Database SKU name')
 param sqlDatabaseSku string = 'Basic'
 
@@ -188,8 +194,8 @@ var resourceToken = toLower('${environmentName}-${uniqueString(subscription().id
   }
 }*/
 
-// Monitor application with Azure Monitor
-module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = {
+// Monitor application with Azure Monitor (optional — disable for faster provisioning)
+module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = if (enableMonitoring) {
   name: 'monitoring'
   params: {
     logAnalyticsName: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
@@ -261,9 +267,9 @@ var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
 // This avoids relying on stale azd env values (BACKEND_CORS_ALLOWED_ORIGINS)
 // which break after azd down + up when the CAE domain suffix changes.
 // Uses the module output (not an 'existing' reference) so it works on first deploy.
-var computedFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.outputs.defaultDomain}'
+var computedFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
 // Pre-compute backend URL from known naming pattern (avoids frontend→backend dependency)
-var computedBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.outputs.defaultDomain}'
+var computedBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
 
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
@@ -355,18 +361,34 @@ module sqlPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableVnetIntegrati
   }
 }
 
-module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.4.5' = {
-  name: 'container-apps-environment'
-  params: {
-    logAnalyticsWorkspaceResourceId: monitoring.outputs.logAnalyticsWorkspaceResourceId
-    name: '${abbrs.appManagedEnvironments}${resourceToken}'
-    location: location
+// Container Apps Environment — deployed directly (not via AVM) for conditional monitoring support
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: '${abbrs.appManagedEnvironments}${resourceToken}'
+  location: location
+  tags: tags
+  properties: {
+    // Only wire up Log Analytics when monitoring is enabled
+    appLogsConfiguration: enableMonitoring ? {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsWorkspace!.properties.customerId
+        sharedKey: logAnalyticsWorkspace!.listKeys().primarySharedKey
+      }
+    } : null
     zoneRedundant: false
-    // VNet integration controlled by enableVnetIntegration parameter
-    infrastructureSubnetId: enableVnetIntegration ? vnet.outputs.containerAppsSubnetId : null
-    internal: enableVnetIntegration
+    vnetConfiguration: enableVnetIntegration ? {
+      internal: true
+      infrastructureSubnetId: vnet.outputs.containerAppsSubnetId
+    } : null
   }
   dependsOn: enableVnetIntegration ? [vnet] : []
+}
+
+// Reference Log Analytics workspace (only when monitoring is enabled)
+// Must be listed AFTER monitoring module so it exists before CAE reads its properties
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = if (enableMonitoring) {
+  name: '${abbrs.operationalInsightsWorkspaces}${resourceToken}'
+  dependsOn: [monitoring]
 }
 
 // Azure SQL Database with private endpoint and managed identity
@@ -404,12 +426,12 @@ module sqlDatabase 'modules/sqlDatabase.bicep' = if (enableSqlDatabase) {
 // Backend Spring Boot Container App
 module backend 'app/backend-springboot.bicep' = {
   name: 'backendApp'
-  dependsOn: [
+  dependsOn: (enableSqlDatabase && !skipSqlSetup) ? [
     // containerAppsEnvironment dependency is auto-inferred by Bicep via containerAppsEnvironmentName param
     // appConfiguration dependency is implicit via appConfiguration.outputs.endpoint reference
     // Wait for combined SQL setup (role assignments + schema bootstrap)
     sqlSetup
-  ]
+  ] : []
   params: {
     name: backendAppName
     location: location
@@ -424,9 +446,9 @@ module backend 'app/backend-springboot.bicep' = {
     image: backendImage
     // Allow toggling AcrPull role assignment per service
     skipAcrPullRoleAssignment: skipBackendAcrPullRoleAssignment
-    // Application Insights name for backend monitoring
-    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
-    enableAppInsights: true
+    // Application Insights name for backend monitoring (only when monitoring is enabled)
+    applicationInsightsName: enableMonitoring ? '${abbrs.insightsComponents}${resourceToken}' : ''
+    enableAppInsights: enableMonitoring
     // Compute sizing (exposed as parameters)
     cpu: backendCpu
     memory: backendMemory
@@ -519,9 +541,9 @@ module processes 'app/processes-springboot.bicep' = {
     image: processesImage
     // Allow toggling AcrPull role assignment per service
     skipAcrPullRoleAssignment: skipProcessesAcrPullRoleAssignment
-    // Application Insights name for processes monitoring
-    applicationInsightsName: '${abbrs.insightsComponents}${resourceToken}'
-    enableAppInsights: true
+    // Application Insights name for processes monitoring (only when monitoring is enabled)
+    applicationInsightsName: enableMonitoring ? '${abbrs.insightsComponents}${resourceToken}' : ''
+    enableAppInsights: enableMonitoring
     // Compute sizing (exposed as parameters)
     cpu: processesCpu
     memory: processesMemory
@@ -548,10 +570,12 @@ module processes 'app/processes-springboot.bicep' = {
     ]
     tags: tags
   }
-  dependsOn: [
+  dependsOn: (enableSqlDatabase && !skipSqlSetup) ? [
     containerAppsEnvironment
     // Wait for combined SQL setup (role assignments + schema bootstrap)
     sqlSetup
+  ] : [
+    containerAppsEnvironment
   ]
 }
 
@@ -562,7 +586,7 @@ module processes 'app/processes-springboot.bicep' = {
 // container spin-up cycle (~4-5 min saved). Uses content-based forceUpdateTag
 // so it only re-runs when inputs actually change.
 // ============================================================================
-module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase) {
+module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase && !skipSqlSetup) {
   name: 'sql-setup'
   params: {
     location: location
@@ -607,7 +631,7 @@ output appConfigEndpoint string = appConfiguration.outputs.endpoint
 output appConfigName string = appConfiguration.outputs.name
 
 // SQL setup status (combined — role assignments + schema bootstrap)
-output sqlSetupStatus string = enableSqlDatabase ? sqlSetup!.outputs.scriptOutput : 'skipped'
+output sqlSetupStatus string = (enableSqlDatabase && !skipSqlSetup) ? sqlSetup!.outputs.scriptOutput : 'skipped'
 
 /*module backend 'modules/containerApp.bicep' = {
   name: 'backendApp'

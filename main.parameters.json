@@ -29,6 +29,12 @@
       "skipProcessesAcrPullRoleAssignment": {
         "value": "${SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true}"
       },
+      "enableMonitoring": {
+        "value": "${ENABLE_MONITORING=true}"
+      },
+      "skipSqlSetup": {
+        "value": "${SKIP_SQL_SETUP=false}"
+      },
       "enableSqlDatabase": {
         "value": "${ENABLE_SQL_DATABASE=true}"
       },
