@@ -21,15 +21,11 @@ hooks:
       shell: sh
       run: ./scripts/run-preprovision-hooks.sh
       interactive: false
-  postprovision:
-    windows:
-      shell: pwsh
-      run: ./scripts/postprovision-update-fqdns.ps1
-      interactive: false
-    posix:
-      shell: sh
-      run: ./scripts/postprovision-update-fqdns.sh
-      interactive: false
+  # postprovision hook removed — no longer needed.
+  # CORS and frontend URL are now computed in-deployment via computedFrontendUrl
+  # (derived from containerAppsEnvironment.properties.defaultDomain) and pushed
+  # to App Config + container env vars in a single provision pass.
+  # See scripts/postprovision-update-fqdns.ps1 for the legacy implementation.
 
 services:
   # - Local dev: Manual grant via Azure Portal Query Editor (one-time)
