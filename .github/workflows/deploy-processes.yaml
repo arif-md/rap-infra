@@ -204,7 +204,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/ensure-dns-zone.sh
           ./scripts/ensure-dns-zone.sh
 
       - name: Resolve images (preprovision)

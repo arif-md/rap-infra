@@ -537,8 +537,6 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/ensure-acr.sh
-          chmod +x ./scripts/ensure-dns-zone.sh
-          chmod +x ./scripts/bind-custom-domain-tls.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         if: steps.fastpath_test.outputs.didFastPath != 'true'
