@@ -21,7 +21,16 @@ hooks:
       shell: sh
       run: ./scripts/run-preprovision-hooks.sh
       interactive: false
-  # postprovision hook removed — no longer needed.
+  postprovision:
+    windows:
+      shell: pwsh
+      run: ./scripts/bind-custom-domain-tls.ps1
+      interactive: false
+    posix:
+      shell: sh
+      run: ./scripts/bind-custom-domain-tls.sh
+      interactive: false
+  # Legacy postprovision hook removed — no longer needed.
   # CORS and frontend URL are now computed in-deployment via computedFrontendUrl
   # (derived from containerAppsEnvironment.properties.defaultDomain) and pushed
   # to App Config + container env vars in a single provision pass.

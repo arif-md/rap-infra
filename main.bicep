@@ -102,6 +102,12 @@ param enableMonitoring bool = true
 @description('Skip SQL setup ACI script (role assignments + schema bootstrap). Use after first successful deploy for faster iterations.')
 param skipSqlSetup bool = false
 
+@description('Custom domain name for rule-based routing (e.g., nexgeninc-dev.com). When empty, custom domain is not configured.')
+param customDomainName string = ''
+
+// Derived flag — true when a custom domain is configured
+var enableCustomDomain = !empty(customDomainName)
+
 @description('SQL Database SKU name')
 param sqlDatabaseSku string = 'Basic'
 
@@ -264,12 +270,13 @@ resource sqlAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023
 var appConfigName = '${abbrs.appConfigurationStores}${resourceToken}'
 
 // Derive frontend URL from the Container App Environment's default domain.
-// This avoids relying on stale azd env values (BACKEND_CORS_ALLOWED_ORIGINS)
-// which break after azd down + up when the CAE domain suffix changes.
-// Uses the module output (not an 'existing' reference) so it works on first deploy.
-var computedFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
-// Pre-compute backend URL from known naming pattern (avoids frontend→backend dependency)
-var computedBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
+// When a custom domain is configured, use that instead (same-origin for all services).
+var defaultFrontendUrl = 'https://${frontendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
+var computedFrontendUrl = enableCustomDomain ? 'https://${customDomainName}' : defaultFrontendUrl
+// When custom domain is active, backend is accessed via custom domain routing (same-origin).
+// When not, use the direct backend URL.
+var defaultBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
+var computedBackendUrl = enableCustomDomain ? 'https://${customDomainName}' : defaultBackendUrl
 
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
@@ -615,12 +622,32 @@ module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase && !skipSqlSet
   }
 }
 
+// ============================================================================
+// Custom Domain with Rule-Based Routing (conditional)
+// ============================================================================
+module customDomain 'modules/custom-domain.bicep' = if (enableCustomDomain) {
+  name: 'customDomain'
+  params: {
+    containerAppsEnvironmentName: containerAppsEnvironment.name
+    frontendAppName: frontendAppName
+    backendAppName: backendAppName
+    processesAppName: processesAppName
+  }
+  dependsOn: [
+    frontend
+    backend
+    processes
+  ]
+}
+
 // Useful outputs for azd and diagnostics
 // Derive login server from the provided ACR name to avoid cross-RG coupling
 output containerRegistryLoginServer string = '${resolvedAcrName}.azurecr.io'
 output frontendFqdn string = frontend.outputs.fqdn
 output backendFqdn string = backend.outputs.fqdn
 output processesFqdn string = processes.outputs.fqdn
+output customDomainUrl string = enableCustomDomain ? 'https://${customDomainName}' : ''
+output routeConfigFqdn string = enableCustomDomain ? customDomain!.outputs.routeConfigFqdn : ''
 output sqlServerFqdn string = enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
 output sqlDatabaseName string = enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
 output backendIdentityName string = backendIdentityName

@@ -474,6 +474,13 @@ jobs:
           else
             echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
           fi
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -515,6 +522,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/ensure-acr.sh
+          chmod +x ./scripts/ensure-dns-zone.sh
+          chmod +x ./scripts/bind-custom-domain-tls.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         if: steps.fastpath_test.outputs.didFastPath != 'true'
@@ -900,6 +909,13 @@ jobs:
           else
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -941,6 +957,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/ensure-acr.sh
+          chmod +x ./scripts/ensure-dns-zone.sh
+          chmod +x ./scripts/bind-custom-domain-tls.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         if: steps.fastpath_train.outputs.didFastPath != 'true'
@@ -1326,6 +1344,13 @@ jobs:
           else
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -1367,6 +1392,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/ensure-acr.sh
+          chmod +x ./scripts/ensure-dns-zone.sh
+          chmod +x ./scripts/bind-custom-domain-tls.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         if: steps.fastpath_prod.outputs.didFastPath != 'true'

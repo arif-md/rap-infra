@@ -239,6 +239,16 @@ jobs:
             azd env set AZURE_AD_CLIENT_SECRET "${{ secrets.AZURE_AD_CLIENT_SECRET }}"
             echo "✓ AZURE_AD_CLIENT_SECRET configured"
           fi
+          
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+            echo "✓ CUSTOM_DOMAIN_NAME configured: ${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+            echo "✓ ENABLE_AZURE_DNS configured: ${{ vars.ENABLE_AZURE_DNS }}"
+          fi
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
@@ -246,6 +256,13 @@ jobs:
           set -euo pipefail
           chmod +x scripts/ensure-acr.sh
           ./scripts/ensure-acr.sh
+
+      - name: Ensure DNS Zone exists (preprovision)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-dns-zone.sh
+          ./scripts/ensure-dns-zone.sh
 
       - name: Resolve images (preprovision)
         shell: bash

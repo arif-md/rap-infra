@@ -489,6 +489,13 @@ jobs:
           else
             echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
           fi
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
 
@@ -530,6 +537,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x ./scripts/ensure-acr.sh
+          chmod +x ./scripts/ensure-dns-zone.sh
+          chmod +x ./scripts/bind-custom-domain-tls.sh
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         if: steps.fastpath_test.outputs.didFastPath != 'true'
@@ -872,6 +881,13 @@ jobs:
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
           azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 
@@ -1086,6 +1102,13 @@ jobs:
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
           azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
+          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
+          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
+            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
+          fi
+          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
+            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 

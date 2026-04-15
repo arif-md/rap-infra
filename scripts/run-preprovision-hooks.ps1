@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Running Pre-Provision Hooks ===" -ForegroundColor Cyan
 
 # Key Vault Setup - ensures Key Vault exists before deployment
-Write-Host "`n[1/4] Setting up Key Vault..." -ForegroundColor Yellow
+Write-Host "`n[1/5] Setting up Key Vault..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-keyvault.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Key Vault setup failed!" -ForegroundColor Red
@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ Key Vault setup completed" -ForegroundColor Green
 
 # Resolve container images
-Write-Host "`n[2/4] Resolving container images..." -ForegroundColor Yellow
+Write-Host "`n[2/5] Resolving container images..." -ForegroundColor Yellow
 & "$PSScriptRoot\resolve-images.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Image resolution failed!" -ForegroundColor Red
@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ Image resolution completed" -ForegroundColor Green
 
 # Validate ACR binding
-Write-Host "`n[3/4] Validating ACR binding..." -ForegroundColor Yellow
+Write-Host "`n[3/5] Validating ACR binding..." -ForegroundColor Yellow
 & "$PSScriptRoot\validate-acr-binding.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ ACR validation failed!" -ForegroundColor Red
@@ -43,13 +43,22 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ ACR validation completed" -ForegroundColor Green
 
 # Ensure ACR exists
-Write-Host "`n[4/4] Ensuring ACR exists..." -ForegroundColor Yellow
+Write-Host "`n[4/5] Ensuring ACR exists..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-acr.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ ACR setup failed!" -ForegroundColor Red
     exit 1
 }
 Write-Host "✓ ACR setup completed" -ForegroundColor Green
+
+# Ensure DNS Zone exists (survives azd down/up — not in deployment stack)
+Write-Host "`n[5/5] Ensuring DNS Zone exists..." -ForegroundColor Yellow
+& "$PSScriptRoot\ensure-dns-zone.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ DNS Zone setup failed!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ DNS Zone setup completed" -ForegroundColor Green
 
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0

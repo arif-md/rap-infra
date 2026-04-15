@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 header "Running Pre-Provision Hooks"
 
 # Key Vault Setup
-step "[1/4] Setting up Key Vault..."
+step "[1/5] Setting up Key Vault..."
 if ! "${SCRIPT_DIR}/ensure-keyvault.sh"; then
     error "Key Vault setup failed!"
     exit 1
@@ -29,7 +29,7 @@ fi
 success "Key Vault setup completed"
 
 # Resolve container images
-step "[2/4] Resolving container images..."
+step "[2/5] Resolving container images..."
 if ! "${SCRIPT_DIR}/resolve-images.sh"; then
     error "Image resolution failed!"
     exit 1
@@ -37,7 +37,7 @@ fi
 success "Image resolution completed"
 
 # Validate ACR binding
-step "[3/4] Validating ACR binding..."
+step "[3/5] Validating ACR binding..."
 if ! "${SCRIPT_DIR}/validate-acr-binding.sh"; then
     error "ACR validation failed!"
     exit 1
@@ -45,12 +45,20 @@ fi
 success "ACR validation completed"
 
 # Ensure ACR exists
-step "[4/4] Ensuring ACR exists..."
+step "[4/5] Ensuring ACR exists..."
 if ! "${SCRIPT_DIR}/ensure-acr.sh"; then
     error "ACR setup failed!"
     exit 1
 fi
 success "ACR setup completed"
+
+# Ensure DNS Zone exists (outside deployment stack)
+step "[5/5] Ensuring DNS Zone exists..."
+if ! "${SCRIPT_DIR}/ensure-dns-zone.sh"; then
+    error "DNS Zone setup failed!"
+    exit 1
+fi
+success "DNS Zone setup completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0
