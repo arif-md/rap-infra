@@ -137,7 +137,7 @@ if ($enableAzureDns -eq "true") {
     # A record: customDomain → CAE static IP
     # Delete entire record set and recreate to avoid stale IPs accumulating
     # (add-record appends; after azd down/up the CAE IP changes)
-    $existingARecords = az network dns record-set a show -g $rg -z $customDomain -n "@" --query "aRecords[].ipv4Address" -o tsv 2>$null
+    $existingARecords = az network dns record-set a show -g $rg -z $customDomain -n "@" --query "ARecords[].ipv4Address" -o tsv 2>$null
     $aRecordList = if ($existingARecords) { ($existingARecords -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
     $aRecordCorrect = ($aRecordList.Count -eq 1) -and ($aRecordList[0] -eq $staticIp)
 
@@ -153,7 +153,7 @@ if ($enableAzureDns -eq "true") {
 
     # TXT record: asuid.customDomain → verification ID
     # Same approach: delete entire record set and recreate to avoid stale values
-    $existingTxtRecords = az network dns record-set txt show -g $rg -z $customDomain -n "asuid" --query "txtRecords[].value[0]" -o tsv 2>$null
+    $existingTxtRecords = az network dns record-set txt show -g $rg -z $customDomain -n "asuid" --query "TXTRecords[].value[0]" -o tsv 2>$null
     $txtRecordList = if ($existingTxtRecords) { ($existingTxtRecords -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
     $txtRecordCorrect = ($txtRecordList.Count -eq 1) -and ($txtRecordList[0] -eq $verificationId)
 

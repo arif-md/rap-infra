@@ -156,7 +156,7 @@ if [ "$ENABLE_AZURE_DNS" = "true" ]; then
     # A record: customDomain → CAE static IP
     # Delete entire record set and recreate to avoid stale IPs accumulating
     # (add-record appends; after azd down/up the CAE IP changes)
-    EXISTING_A_RECORDS=$(az network dns record-set a show -g "$RG" -z "$CUSTOM_DOMAIN" -n "@" --query "aRecords[].ipv4Address" -o tsv 2>/dev/null || true)
+    EXISTING_A_RECORDS=$(az network dns record-set a show -g "$RG" -z "$CUSTOM_DOMAIN" -n "@" --query "ARecords[].ipv4Address" -o tsv 2>/dev/null || true)
     A_RECORD_COUNT=$(echo "$EXISTING_A_RECORDS" | grep -c . 2>/dev/null || echo 0)
     A_RECORD_CORRECT=false
     if [ "$A_RECORD_COUNT" -eq 1 ] && [ "$(echo "$EXISTING_A_RECORDS" | tr -d '\r\n')" = "$STATIC_IP" ]; then
@@ -175,7 +175,7 @@ if [ "$ENABLE_AZURE_DNS" = "true" ]; then
 
     # TXT record: asuid.customDomain → verification ID
     # Same approach: delete entire record set and recreate to avoid stale values
-    EXISTING_TXT_RECORDS=$(az network dns record-set txt show -g "$RG" -z "$CUSTOM_DOMAIN" -n "asuid" --query "txtRecords[].value[0]" -o tsv 2>/dev/null || true)
+    EXISTING_TXT_RECORDS=$(az network dns record-set txt show -g "$RG" -z "$CUSTOM_DOMAIN" -n "asuid" --query "TXTRecords[].value[0]" -o tsv 2>/dev/null || true)
     TXT_RECORD_COUNT=$(echo "$EXISTING_TXT_RECORDS" | grep -c . 2>/dev/null || echo 0)
     TXT_RECORD_CORRECT=false
     if [ "$TXT_RECORD_COUNT" -eq 1 ] && [ "$(echo "$EXISTING_TXT_RECORDS" | tr -d '\r\n')" = "$VERIFICATION_ID" ]; then
