@@ -66,7 +66,10 @@ resource sqlServer 'Microsoft.Sql/servers@2023-05-01-preview' = {
     administratorLoginPassword: administratorPassword
     version: '12.0'
     minimalTlsVersion: '1.2'
-    publicNetworkAccess: enablePrivateEndpoint ? 'Disabled' : 'Enabled'
+    // Keep public access enabled even with private endpoint — required for
+    // Azure deployment scripts (ACI-based sql-setup) that cannot use the PE.
+    // Access is restricted via firewall rules; VNet traffic uses the PE.
+    publicNetworkAccess: 'Enabled'
     administrators: !empty(azureAdAdminObjectId) ? {
       administratorType: 'ActiveDirectory'
       principalType: azureAdAdminPrincipalType
@@ -107,8 +110,8 @@ resource firewallRulesResource 'Microsoft.Sql/servers/firewallRules@2023-05-01-p
   }
 }]
 
-// Allow Azure services rule
-resource allowAzureServicesRule 'Microsoft.Sql/servers/firewallRules@2023-05-01-preview' = if (allowAzureServices && !enablePrivateEndpoint) {
+// Allow Azure services rule (needed for deployment scripts even with private endpoint)
+resource allowAzureServicesRule 'Microsoft.Sql/servers/firewallRules@2023-05-01-preview' = if (allowAzureServices) {
   parent: sqlServer
   name: 'AllowAllWindowsAzureIps'
   properties: {

@@ -9,7 +9,8 @@
 #   2. Creates/updates DNS A + TXT records in Azure DNS zone (if managed)
 #   3. Waits for DNS TXT propagation
 #   4. Adds the custom domain to the route config (bindingType=Disabled)
-#   5. Creates or reuses a managed TLS certificate (HTTP validation)
+#   5. Creates or reuses a managed TLS certificate (TXT for internal CAE, HTTP otherwise)
+#      For TXT validation: also creates _dnsauth DNS record with validation token
 #   6. Binds the certificate to the route config (SniEnabled)
 #
 # Why not in Bicep?
@@ -40,6 +41,12 @@ if (-not $caeName) {
     Write-Host "No Container Apps Environment found in $rg. Skipping." -ForegroundColor Yellow
     exit 0
 }
+
+# Detect if CAE is internal (VNet-only, no public IP) → must use TXT cert validation
+$caeInternal = az containerapp env show -g $rg -n $caeName `
+    --query "properties.vnetConfiguration.internal" -o tsv 2>$null
+$certValidationMethod = if ($caeInternal -eq "true") { "TXT" } else { "HTTP" }
+Write-Host "  CAE internal=$caeInternal → cert validation: $certValidationMethod" -ForegroundColor Gray
 
 # Check route config exists
 $routeExists = az containerapp env http-route-config show -g $rg -n $caeName -r raptorrouting --query "name" -o tsv 2>$null
@@ -245,12 +252,25 @@ if (-not $existingCert) {
         }
     }
 
-    Write-Host "  Creating managed certificate (HTTP validation)..." -ForegroundColor Yellow
-    az containerapp env certificate create `
+    Write-Host "  Creating managed certificate ($certValidationMethod validation)..." -ForegroundColor Yellow
+    $certOutput = az containerapp env certificate create `
         -g $rg -n $caeName `
         --hostname $customDomain `
-        --validation-method HTTP `
+        --validation-method $certValidationMethod `
         --only-show-errors 2>$null
+
+    # For TXT validation: create the _dnsauth DNS record with the validation token
+    if ($certValidationMethod -eq "TXT" -and $enableAzureDns -eq "true") {
+        $validationToken = ($certOutput | ConvertFrom-Json).properties.validationToken
+        if ($validationToken) {
+            Write-Host "  Creating _dnsauth TXT record for cert validation..." -ForegroundColor Yellow
+            az network dns record-set txt delete -g $rg -z $customDomain -n "_dnsauth" --yes --only-show-errors 2>$null
+            az network dns record-set txt add-record -g $rg -z $customDomain -n "_dnsauth" -v $validationToken --only-show-errors 2>$null
+            Write-Host "    TXT record: _dnsauth.$customDomain → $validationToken" -ForegroundColor Gray
+        } else {
+            Write-Host "  WARNING: Could not extract validationToken from cert output." -ForegroundColor Yellow
+        }
+    }
 
     # Poll for provisioning (5s interval, max 5 minutes)
     $maxAttempts = 60

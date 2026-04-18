@@ -41,6 +41,16 @@ if [ -z "$CAE_NAME" ]; then
     exit 0
 fi
 
+# Detect if CAE is internal (VNet-only, no public IP) → must use TXT cert validation
+CAE_INTERNAL=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
+    --query "properties.vnetConfiguration.internal" -o tsv 2>/dev/null || true)
+if [ "$CAE_INTERNAL" = "true" ]; then
+    CERT_VALIDATION_METHOD="TXT"
+else
+    CERT_VALIDATION_METHOD="HTTP"
+fi
+echo "  CAE internal=$CAE_INTERNAL → cert validation: $CERT_VALIDATION_METHOD"
+
 # Check route config exists
 ROUTE_EXISTS=$(az containerapp env http-route-config show -g "$RG" -n "$CAE_NAME" -r raptorrouting --query "name" -o tsv 2>/dev/null || true)
 if [ -z "$ROUTE_EXISTS" ]; then
@@ -271,12 +281,25 @@ if [ -z "$EXISTING_CERT" ]; then
         done
     fi
 
-    echo "  Creating managed certificate (HTTP validation)..."
-    az containerapp env certificate create \
+    echo "  Creating managed certificate ($CERT_VALIDATION_METHOD validation)..."
+    CERT_OUTPUT=$(az containerapp env certificate create \
         -g "$RG" -n "$CAE_NAME" \
         --hostname "$CUSTOM_DOMAIN" \
-        --validation-method HTTP \
-        --only-show-errors 2>/dev/null
+        --validation-method "$CERT_VALIDATION_METHOD" \
+        --only-show-errors 2>/dev/null)
+
+    # For TXT validation: create the _dnsauth DNS record with the validation token
+    if [ "$CERT_VALIDATION_METHOD" = "TXT" ] && [ "$ENABLE_AZURE_DNS" = "true" ]; then
+        VALIDATION_TOKEN=$(echo "$CERT_OUTPUT" | jq -r '.properties.validationToken // empty')
+        if [ -n "$VALIDATION_TOKEN" ]; then
+            echo "  Creating _dnsauth TXT record for cert validation..."
+            az network dns record-set txt delete -g "$RG" -z "$CUSTOM_DOMAIN" -n "_dnsauth" --yes --only-show-errors 2>/dev/null || true
+            az network dns record-set txt add-record -g "$RG" -z "$CUSTOM_DOMAIN" -n "_dnsauth" -v "$VALIDATION_TOKEN" --only-show-errors 2>/dev/null
+            echo "    TXT record: _dnsauth.$CUSTOM_DOMAIN → $VALIDATION_TOKEN"
+        else
+            echo "  WARNING: Could not extract validationToken from cert output."
+        fi
+    fi
 
     # Poll for provisioning (5s interval, max 5 minutes)
     MAX_CERT_ATTEMPTS=60
