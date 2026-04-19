@@ -599,8 +599,28 @@ module processes 'app/processes-springboot.bicep' = {
 // container spin-up cycle (~4-5 min saved). Uses content-based forceUpdateTag
 // so it only re-runs when inputs actually change.
 // ============================================================================
+
+// Grant the SQL admin identity "SQL Server Contributor" on the SQL server
+// so the deployment script can add/remove temporary firewall rules for its
+// ACI container's outbound IP (AllowAzureServices rule doesn't always cover ACI).
+// Deployed as a sub-module so it can dependsOn the sqlDatabase module (existing
+// resources in Bicep don't support dependsOn, causing ResourceNotFound on fresh deploys).
+module sqlAdminServerContributor 'modules/sql-server-role.bicep' = if (enableSqlDatabase && !skipSqlSetup) {
+  name: 'sql-admin-server-contributor'
+  dependsOn: [
+    sqlDatabase
+  ]
+  params: {
+    sqlServerName: sqlServerName
+    principalId: sqlAdminIdentity!.properties.principalId
+  }
+}
+
 module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase && !skipSqlSetup) {
   name: 'sql-setup'
+  dependsOn: [
+    sqlAdminServerContributor
+  ]
   params: {
     location: location
     tags: tags

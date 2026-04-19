@@ -68,7 +68,7 @@ resource sqlSetup 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     timeout: 'PT10M'
     forceUpdateTag: changeDetectionTag
     cleanupPreference: 'OnSuccess'
-    arguments: '-SqlServerFqdn \'${sqlServerFqdn}\' -DatabaseName \'${sqlDatabaseName}\''
+    arguments: '-SqlServerFqdn \'${sqlServerFqdn}\' -DatabaseName \'${sqlDatabaseName}\' -ResourceGroupName \'${resourceGroup().name}\''
     environmentVariables: [
       {
         name: 'IDENTITY_GRANTS_JSON'
