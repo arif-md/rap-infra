@@ -207,6 +207,7 @@ jobs:
           # Set Azure AD (Entra ID) Configuration (internal SSO - endpoints derived from tenant ID)
           if [ -n "${{ vars.AZURE_AD_CLIENT_ID || '' }}" ]; then
             azd env set AZURE_AD_CLIENT_ID "${{ vars.AZURE_AD_CLIENT_ID }}"
+            echo "✓ AZURE_AD_CLIENT_ID configured"
           fi
           # Reuse existing AZURE_TENANT_ID secret (same tenant for Azure CLI login and AAD SSO)
           if [ -n "${{ secrets.AZURE_TENANT_ID || '' }}" ]; then
