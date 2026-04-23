@@ -250,6 +250,12 @@ jobs:
             echo "✓ ENABLE_AZURE_DNS configured: ${{ vars.ENABLE_AZURE_DNS }}"
           fi
 
+          # Set VNet integration flag (controls private endpoints for SQL, App Config, Key Vault)
+          if [ -n "${{ vars.ENABLE_VNET_INTEGRATION || '' }}" ]; then
+            azd env set ENABLE_VNET_INTEGRATION "${{ vars.ENABLE_VNET_INTEGRATION }}"
+            echo "✓ ENABLE_VNET_INTEGRATION configured: ${{ vars.ENABLE_VNET_INTEGRATION }}"
+          fi
+
       - name: Ensure ACR exists (preprovision)
         shell: bash
         run: |
