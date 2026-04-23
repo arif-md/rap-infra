@@ -390,7 +390,7 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01'
     ]
     zoneRedundant: false
     vnetConfiguration: enableVnetIntegration ? {
-      internal: true
+      internal: false
       infrastructureSubnetId: vnet.outputs.containerAppsSubnetId
     } : null
   }
