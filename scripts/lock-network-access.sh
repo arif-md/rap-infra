@@ -48,7 +48,7 @@ if [ -n "$KV_NAME" ]; then
     az keyvault update \
         --name "$KV_NAME" \
         --resource-group "$RG" \
-        --enable-public-network false \
+        --public-network-access Disabled \
         --output none
     echo "  ✅ Key Vault public access disabled."
 else

@@ -51,7 +51,7 @@ if ($kvName) {
     az keyvault update `
         --name $kvName `
         --resource-group $rg `
-        --enable-public-network false `
+        --public-network-access Disabled `
         --output none
     Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
 } else {
