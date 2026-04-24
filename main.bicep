@@ -114,6 +114,10 @@ param sqlDatabaseSku string = 'Basic'
 @description('SQL Database tier')
 param sqlDatabaseTier string = 'Basic'
 
+@description('App Configuration SKU (free, developer, standard, premium). Developer is the default — supports private endpoints and is suitable for all environments.')
+@allowed(['free', 'developer', 'standard', 'premium'])
+param appConfigSku string = 'developer'
+
 @description('OIDC Provider Authorization Endpoint URL')
 param oidcAuthorizationEndpoint string = ''
 
@@ -284,9 +288,13 @@ module appConfiguration 'shared/app-configuration.bicep' = {
     name: appConfigName
     location: location
     tags: tags
-    sku: 'free'
+    sku: appConfigSku
     // Grant backend managed identity read access
     readerPrincipalId: backendIdentity.properties.principalId
+    // Private endpoint — only when VNet integration is enabled
+    enablePrivateEndpoint: enableVnetIntegration
+    privateEndpointSubnetId: enableVnetIntegration ? vnet.outputs.privateEndpointsSubnetId : ''
+    privateDnsZoneId: enableVnetIntegration ? appConfigPrivateDnsZone.outputs.privateDnsZoneId : ''
     // OIDC provider configuration
     oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
     oidcTokenEndpoint: oidcTokenEndpoint
@@ -368,6 +376,40 @@ module sqlPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableVnetIntegrati
   }
 }
 
+// Private DNS Zone for App Configuration private endpoints
+module appConfigPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableVnetIntegration) {
+  name: 'appconfig-private-dns-zone'
+  params: {
+    zoneName: 'privatelink.azconfig.io'
+    vnetId: vnet.outputs.vnetId
+    tags: tags
+  }
+}
+
+// Private DNS Zone for Key Vault private endpoints
+module keyVaultPrivateDnsZone 'shared/privateDnsZone.bicep' = if (enableVnetIntegration) {
+  name: 'keyvault-private-dns-zone'
+  params: {
+    zoneName: 'privatelink.vaultcore.azure.net'
+    vnetId: vnet.outputs.vnetId
+    tags: tags
+  }
+}
+
+// Key Vault Private Endpoint — connects existing Key Vault to the VNet so containers
+// resolve *.vault.azure.net to the private IP (via privatelink.vaultcore.azure.net DNS zone).
+// Key Vault public network access is intentionally left unchanged (managed externally).
+module keyVaultPrivateEndpoint 'modules/keyvault-private-endpoint.bicep' = if (enableVnetIntegration) {
+  name: 'keyvault-private-endpoint'
+  params: {
+    keyVaultName: resolvedKeyVaultName
+    location: location
+    tags: tags
+    subnetId: vnet.outputs.privateEndpointsSubnetId
+    privateDnsZoneId: keyVaultPrivateDnsZone.outputs.privateDnsZoneId
+  }
+}
+
 // Container Apps Environment — deployed directly (not via AVM) for conditional monitoring support
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${abbrs.appManagedEnvironments}${resourceToken}'
@@ -389,6 +431,14 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01'
       }
     ]
     zoneRedundant: false
+    // internal: false keeps the CAE's public IP so the custom domain and DNS zone
+    // continue to work without any Application Gateway or Front Door.
+    // VNet injection (infrastructureSubnetId) routes container OUTBOUND traffic through
+    // the VNet, giving containers access to private endpoints (SQL, App Config, Key Vault)
+    // via the private DNS zones — without losing public accessibility.
+    //
+    // Set internal: true only if you want the environment to be VNet-only (no public IP),
+    // which requires an Application Gateway or similar public-facing proxy in front.
     vnetConfiguration: enableVnetIntegration ? {
       internal: false
       infrastructureSubnetId: vnet.outputs.containerAppsSubnetId

@@ -283,6 +283,75 @@ jobs:
           chmod +x scripts/validate-acr-binding.sh
           ./scripts/validate-acr-binding.sh
 
+      - name: Preview infrastructure changes (what-if)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍  What-if: resources that will be created/modified/deleted"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Render azd parameters into a temp file so we can pass them to what-if
+          PARAMS_FILE=$(mktemp /tmp/whatif-params-XXXX.json)
+          azd env get-values --output json 2>/dev/null | \
+            python3 -c "
+          import sys, json
+          env = json.load(sys.stdin)
+          # Map azd env vars → Bicep parameter names (matching main.parameters.json substitutions)
+          mapping = {
+            'AZURE_ENV_NAME':                   'environmentName',
+            'AZURE_LOCATION':                   'location',
+            'ENABLE_VNET_INTEGRATION':          'enableVnetIntegration',
+            'ENABLE_SQL_DATABASE':              'enableSqlDatabase',
+            'APP_CONFIG_SKU':                   'appConfigSku',
+            'CUSTOM_DOMAIN_NAME':               'customDomainName',
+            'ENABLE_AZURE_DNS':                 'enableAzureDns',
+          }
+          params = {}
+          for env_key, param_key in mapping.items():
+            val = env.get(env_key)
+            if val is not None:
+              # Cast booleans
+              if val.lower() in ('true','false'):
+                val = val.lower() == 'true'
+              params[param_key] = {'value': val}
+          # Dummy secure params (what-if needs them to be present)
+          params['sqlAdminPassword'] = {'value': 'WhatIf-Dummy-1!'}
+          print(json.dumps({'parameters': params}))
+          " > "$PARAMS_FILE"
+
+          az deployment group what-if \
+            -g "$AZURE_RESOURCE_GROUP" \
+            --template-file main.bicep \
+            --parameters main.parameters.json \
+            --parameters "$PARAMS_FILE" \
+            --result-format FullResourcePayloads \
+            --no-pretty-print 2>/dev/null | \
+            python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          changes = data.get('properties', {}).get('changes', [])
+          by_type = {}
+          for c in changes:
+            rt = c.get('resourceId','').split('/')
+            # extract type like Microsoft.App/managedEnvironments
+            try:
+              t = rt[rt.index('providers')+1] + '/' + rt[rt.index('providers')+2]
+            except (ValueError, IndexError):
+              t = 'Unknown'
+            name = rt[-1] if rt else '?'
+            op = c.get('changeType','?')
+            by_type.setdefault(t, []).append((op, name))
+          ops_order = {'Create': 0, 'Modify': 1, 'Delete': 2, 'NoChange': 3, 'Ignore': 4}
+          for rtype in sorted(by_type):
+            for op, name in sorted(by_type[rtype], key=lambda x: ops_order.get(x[0], 9)):
+              icon = {'Create': '✚', 'Modify': '~', 'Delete': '✖', 'NoChange': '=', 'Ignore': '*'}.get(op, '?')
+              print(f'  {icon} [{op:9s}] {rtype}/{name}')
+          if not changes:
+            print('  (no changes — resources already match template)')
+          " || echo "  (what-if unavailable — continuing with provision)"
+          rm -f "$PARAMS_FILE"
+
       - name: Provision infrastructure (azd provision)
         run: |
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -314,136 +383,130 @@ jobs:
         run: |
           echo "✅ Infrastructure provisioning completed successfully!"
           echo ""
-          echo "📊 Deployed Resources:"
-          
-          # Get Container Apps
-          APPS=$(az containerapp list -g "$AZURE_RESOURCE_GROUP" --query "[].{Name:name,Status:properties.provisioningState,Fqdn:properties.configuration.ingress.fqdn}" -o tsv 2>/dev/null || true)
-          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦  All provisioned resources in $AZURE_RESOURCE_GROUP"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          az resource list -g "$AZURE_RESOURCE_GROUP" \
+            --query "sort_by([].{Type:type, Name:name, State:provisioningState}, &Type)" \
+            -o table 2>/dev/null || true
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🌐  Container Apps endpoints"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          APPS=$(az containerapp list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[].{Name:name,Status:properties.provisioningState,Fqdn:properties.configuration.ingress.fqdn}" \
+            -o tsv 2>/dev/null || true)
           if [ -n "$APPS" ]; then
-            echo ""
-            echo "Container Apps:"
             echo "$APPS" | while IFS=$'\t' read -r name status fqdn; do
-              echo "  - $name"
-              echo "    Status: $status"
-              if [ -n "$fqdn" ] && [ "$fqdn" != "null" ]; then
-                echo "    URL: https://$fqdn"
+              echo "  $name  →  ${fqdn:-(no ingress)}  [$status]"
+            done
+          fi
+
+          # CAE info — internal flag tells us if custom domain is accessible
+          CAE=$(az containerapp env list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[0].{Name:name,IP:properties.staticIp,Internal:properties.vnetConfiguration.internal,Domain:properties.defaultDomain}" \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$CAE" ]; then
+            echo ""
+            echo "Container Apps Environment:"
+            echo "$CAE" | while IFS=$'\t' read -r name ip internal domain; do
+              echo "  $name  staticIp=$ip  internal=$internal"
+              echo "  defaultDomain=$domain"
+              if [ "$internal" = "true" ]; then
+                echo "  ⚠️  CAE is INTERNAL (private IP only) — custom domain will NOT be publicly reachable"
+              else
+                echo "  ✅  CAE is PUBLIC — custom domain is reachable from internet"
               fi
             done
           fi
-          
-          # Get ACR
-          ACR_INFO=$(az acr show -n "$AZURE_ACR_NAME" -g "${AZURE_ACR_RESOURCE_GROUP:-$AZURE_RESOURCE_GROUP}" --query "{Name:name,LoginServer:loginServer,Sku:sku.name}" -o tsv 2>/dev/null || true)
-          if [ -n "$ACR_INFO" ]; then
+
+          # VNet (conditional)
+          VNET=$(az network vnet list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[].{Name:name,AddressSpace:addressSpace.addressPrefixes[0]}" \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$VNET" ]; then
             echo ""
-            echo "Container Registry:"
-            echo "$ACR_INFO" | while IFS=$'\t' read -r name login sku; do
-              echo "  - $name ($sku)"
-              echo "    Login Server: $login"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔒  VNet integration resources"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "VNet: $VNET"
+            echo ""
+            echo "Private Endpoints:"
+            az network private-endpoint list -g "$AZURE_RESOURCE_GROUP" \
+              --query "[].{Name:name,State:provisioningState,Subnet:subnet.id}" \
+              -o table 2>/dev/null || echo "  (none)"
+            echo ""
+            echo "Private DNS Zones:"
+            az network private-dns zone list -g "$AZURE_RESOURCE_GROUP" \
+              --query "[].{Zone:name,State:provisioningState}" \
+              -o table 2>/dev/null || echo "  (none)"
+          fi
+
+          # SQL (conditional)
+          SQL=$(az sql server list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[].{Server:name,FQDN:fullyQualifiedDomainName}" \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$SQL" ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🗄️  SQL resources"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "$SQL" | while IFS=$'\t' read -r server fqdn; do
+              echo "  Server: $server  ($fqdn)"
+              az sql db list --server "$server" -g "$AZURE_RESOURCE_GROUP" \
+                --query "[].{DB:name,SKU:currentSku.name,State:status}" -o table 2>/dev/null || true
             done
           fi
-          
+
+          # OIDC redirect URIs for manual update
+          BACKEND_FQDN=$(az containerapp list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[?ends_with(name,'-be')].properties.configuration.ingress.fqdn | [0]" \
+            -o tsv 2>/dev/null || true)
+          FRONTEND_FQDN=$(az containerapp list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[?ends_with(name,'-fe')].properties.configuration.ingress.fqdn | [0]" \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "🔑  OIDC / AAD redirect URIs (update your IdP registrations)"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  OIDC callback : https://$BACKEND_FQDN/login/oauth2/code/oidc-provider"
+            echo "  AAD callback  : https://$BACKEND_FQDN/login/oauth2/code/azure-ad"
+            if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+              echo "  Post-logout   : https://$FRONTEND_FQDN/sign-in?logout=success"
+            fi
+          fi
+
           {
-            echo "### 🏗️ Infrastructure Provisioning Complete"
+            echo "### ✅ Infrastructure Provisioning Complete"
             echo ""
-            echo "**Environment**: $AZURE_ENV_NAME"
-            echo "**Resource Group**: $AZURE_RESOURCE_GROUP"
-            echo ""
-            if [ -n "$APPS" ]; then
-              echo "**Container Apps**:"
-              echo "$APPS" | while IFS=$'\t' read -r name status fqdn; do
-                echo "- **$name**: $status"
-                if [ -n "$fqdn" ] && [ "$fqdn" != "null" ]; then
-                  echo "  - URL: https://$fqdn"
-                  
-                  # Add OIDC redirect URI info for backend
-                  if [[ "$name" == *"-be" ]]; then
-                    echo "  - **OIDC Redirect URI**: \`https://$fqdn/login/oauth2/code/oidc-provider\`"
-                  fi
-                fi
-              done
-            fi
-            
-            # Add OIDC Provider Configuration section
-            BACKEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-be" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Environment** | \`$AZURE_ENV_NAME\` |"
+            echo "| **Resource Group** | \`$AZURE_RESOURCE_GROUP\` |"
             if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
-              echo ""
-              echo "---"
-              echo ""
-              echo "### 🔐 OIDC Provider Configuration"
-              echo ""
-              echo "**⚠️ MANUAL ACTION NEEDED**: Update your OIDC provider settings with the following redirect URI."
-              echo ""
-              echo "**Instructions**:"
-              echo "1. Log in to your OIDC provider's admin console"
-              echo "2. Navigate to your application/client configuration"
-              echo "3. Add or update the **Redirect URI** / **Callback URL**:"
-              echo ""
-              echo "   \`\`\`"
-              echo "   https://$BACKEND_FQDN/login/oauth2/code/oidc-provider"
-              echo "   \`\`\`"
-              echo ""
-              echo "4. Save the configuration"
-              echo ""
-              echo "**Note**: The redirect URI must exactly match the URL above (including the path). Most OIDC providers require this to be configured before authentication will work."
-              echo ""
-              echo "**Example OIDC Providers**:"
-              echo "- **Identity Sandbox**: Update in your application settings at identity sandbox admin console"
-              echo "- **Keycloak**: Client Settings → Valid Redirect URIs"
-              echo "- **Azure AD**: App Registration → Authentication → Redirect URIs"
-              echo "- **Okta**: Applications → [Your App] → General → Login → Redirect URIs"
-              echo "- **Auth0**: Applications → [Your App] → Settings → Allowed Callback URLs"
+              echo "| **Backend FQDN** | \`$BACKEND_FQDN\` |"
             fi
-            
-            # Add Azure AD (Entra ID) Configuration section
-            if [ -z "$BACKEND_FQDN" ]; then
-              BACKEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-be" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
+              echo "| **Frontend FQDN** | \`$FRONTEND_FQDN\` |"
             fi
-            FRONTEND_FQDN=$(az containerapp show -n "${AZURE_ENV_NAME}-rap-fe" -g "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
+            echo ""
             if [ -n "$BACKEND_FQDN" ] && [ "$BACKEND_FQDN" != "null" ]; then
-              echo ""
-              echo "---"
-              echo ""
-              echo "### 🔐 Azure AD (Entra ID) Configuration"
-              echo ""
-              echo "**⚠️ MANUAL ACTION NEEDED**: Update the Azure AD App Registration with the following redirect URIs."
-              echo ""
-              echo "**Instructions**:"
-              echo "1. Go to [Azure Portal → Entra ID → App Registrations](https://portal.azure.com/#view/Microsoft_AAD_IAM/ActiveDirectoryMenuBlade/~/RegisteredApps)"
-              echo "2. Select your app registration (client ID from \`AZURE_AD_CLIENT_ID\`)"
-              echo "3. Go to **Authentication** → **Platform configurations** → **Web**"
-              echo "4. Add or update the following **Redirect URIs**:"
-              echo ""
-              echo "   | Purpose | URI |"
-              echo "   |---------|-----|"
-              echo "   | OAuth2 callback | \`https://$BACKEND_FQDN/login/oauth2/code/azure-ad\` |"
+              echo "#### 🔐 OIDC / AAD URIs to update in your IdP"
+              echo "| Purpose | URI |"
+              echo "|---------|-----|"
+              echo "| OIDC callback | \`https://$BACKEND_FQDN/login/oauth2/code/oidc-provider\` |"
+              echo "| AAD callback  | \`https://$BACKEND_FQDN/login/oauth2/code/azure-ad\` |"
               if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
-              echo "   | Post-logout redirect | \`https://$FRONTEND_FQDN/sign-in?logout=success\` |"
+                echo "| Post-logout   | \`https://$FRONTEND_FQDN/sign-in?logout=success\` |"
               fi
-              echo ""
-              echo "5. Under **Front-channel logout URL** (optional):"
-              echo ""
-              echo "   \`\`\`"
-              if [ -n "$FRONTEND_FQDN" ] && [ "$FRONTEND_FQDN" != "null" ]; then
-              echo "   https://$FRONTEND_FQDN/sign-in?logout=success"
-              fi
-              echo "   \`\`\`"
-              echo ""
-              echo "6. Save the configuration"
-              echo ""
-              echo "**Note**: These URIs change whenever the Container Apps Environment is recreated. Consider using a custom domain for stable URIs."
             fi
-            
-            # SQL permissions status
             echo ""
-            echo "---"
-            echo ""
-            echo "### 🔐 SQL Database Permissions"
-            echo ""
-            echo "✅ SQL database permissions were granted automatically by the deployment script."
-            echo "   A dedicated managed identity (\`id-sqladmin-*\`) is the SQL AD admin and ran"
-            echo "   CREATE USER + GRANT ROLE for all service identities during provisioning."
+            echo "#### 🔐 SQL Database Permissions"
+            echo "✅ Granted automatically by deployment script (id-sqladmin-* identity)."
             if [ -n "${{ vars.SQL_AD_GROUP_NAME || '' }}" ]; then
-              echo "   AD group \`${{ vars.SQL_AD_GROUP_NAME }}\` was granted db_owner for portal admin access."
+              echo "AD group \`${{ vars.SQL_AD_GROUP_NAME }}\` granted db_owner for portal admin access."
             fi
           } >> $GITHUB_STEP_SUMMARY
 

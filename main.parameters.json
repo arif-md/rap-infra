@@ -65,6 +65,9 @@
       "sqlDatabaseTier": {
         "value": "${SQL_DATABASE_TIER=Basic}"
       },
+      "appConfigSku": {
+        "value": "${APP_CONFIG_SKU=developer}"
+      },
       "oidcAuthorizationEndpoint": {
         "value": "${OIDC_AUTHORIZATION_ENDPOINT}"
       },

@@ -17,17 +17,26 @@ param location string = resourceGroup().location
 @description('Resource tags')
 param tags object = {}
 
-@description('App Configuration SKU (free or standard)')
-@allowed(['free', 'standard'])
-param sku string = 'free'
+@description('App Configuration SKU')
+@allowed(['free', 'developer', 'standard', 'premium'])
+param sku string = 'developer'
 
-@description('Soft-delete retention in days (1-7). Lower = faster name reuse after azd down.')
+@description('Soft-delete retention in days (1-7). Lower = faster name reuse after azd down. Only applies to Standard/Premium SKUs.')
 @minValue(1)
 @maxValue(7)
 param softDeleteRetentionInDays int = 1
 
-@description('Enable purge protection (prevents permanent deletion during retention period)')
+@description('Enable purge protection (prevents permanent deletion during retention period). Only applies to Standard/Premium SKUs.')
 param enablePurgeProtection bool = false
+
+@description('Enable private endpoint (requires Developer SKU or higher and VNet integration)')
+param enablePrivateEndpoint bool = false
+
+@description('Subnet resource ID for the private endpoint (required when enablePrivateEndpoint is true)')
+param privateEndpointSubnetId string = ''
+
+@description('Private DNS zone resource ID for privatelink.azconfig.io (required when enablePrivateEndpoint is true)')
+param privateDnsZoneId string = ''
 
 @description('Principal ID to grant App Configuration Data Reader role (backend managed identity)')
 param readerPrincipalId string
@@ -120,9 +129,11 @@ resource configStore 'Microsoft.AppConfiguration/configurationStores@2023-03-01'
   }
   properties: {
     disableLocalAuth: false // allow ARM-based key-value writes during deployment
-    // Soft delete is only supported on the Standard SKU; Free SKU rejects these properties
-    softDeleteRetentionInDays: sku == 'standard' ? softDeleteRetentionInDays : null
-    enablePurgeProtection: sku == 'standard' ? enablePurgeProtection : null
+    // Public network access: disabled when private endpoint is enabled, enabled otherwise
+    publicNetworkAccess: enablePrivateEndpoint ? 'Disabled' : 'Enabled'
+    // Soft delete and purge protection are only supported on Standard/Premium SKUs
+    softDeleteRetentionInDays: (sku == 'standard' || sku == 'premium') ? softDeleteRetentionInDays : null
+    enablePurgeProtection: (sku == 'standard' || sku == 'premium') ? enablePurgeProtection : null
   }
 }
 
@@ -214,6 +225,50 @@ resource sentinel 'Microsoft.AppConfiguration/configurationStores/keyValues@2023
 }
 
 // ============================================================================
+// Private Endpoint (optional — only when enablePrivateEndpoint is true)
+// ============================================================================
+// Connects the App Config store to the private-endpoints subnet so that all
+// containers within the VNet resolve <name>.azconfig.io to a private IP.
+// One private endpoint is shared by all containers (backend, processes, replicas).
+// ============================================================================
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-05-01' = if (enablePrivateEndpoint) {
+  name: 'pe-${name}'
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'appcs-connection'
+        properties: {
+          privateLinkServiceId: configStore.id
+          groupIds: [
+            'configurationStores'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-05-01' = if (enablePrivateEndpoint) {
+  parent: privateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-azconfig-io'
+        properties: {
+          privateDnsZoneId: privateDnsZoneId
+        }
+      }
+    ]
+  }
+}
+
+// ============================================================================
 // Role Assignment — App Configuration Data Reader for backend identity
 // ============================================================================
 // Role ID: 516239f1-63e1-4d78-a4de-a74fb236a071 (App Configuration Data Reader)
@@ -235,3 +290,4 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 output endpoint string = configStore.properties.endpoint
 output name string = configStore.name
 output id string = configStore.id
+output privateEndpointId string = enablePrivateEndpoint ? privateEndpoint.id : ''
