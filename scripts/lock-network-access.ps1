@@ -34,7 +34,7 @@ if ($appConfigName) {
     az appconfig update `
         --name $appConfigName `
         --resource-group $rg `
-        --public-network-access Disabled `
+        --enable-public-network false `
         --output none
     Write-Host "  ✅ App Config public access disabled." -ForegroundColor Green
 } else {
@@ -51,7 +51,7 @@ if ($kvName) {
     az keyvault update `
         --name $kvName `
         --resource-group $rg `
-        --public-network-access Disabled `
+        --enable-public-network false `
         --output none
     Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
 } else {

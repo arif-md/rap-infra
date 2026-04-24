@@ -34,7 +34,7 @@ if [ -n "$APP_CONFIG_NAME" ]; then
     az appconfig update \
         --name "$APP_CONFIG_NAME" \
         --resource-group "$RG" \
-        --public-network-access Disabled \
+        --enable-public-network false \
         --output none
     echo "  ✅ App Config public access disabled."
 else
@@ -48,7 +48,7 @@ if [ -n "$KV_NAME" ]; then
     az keyvault update \
         --name "$KV_NAME" \
         --resource-group "$RG" \
-        --public-network-access Disabled \
+        --enable-public-network false \
         --output none
     echo "  ✅ Key Vault public access disabled."
 else
