@@ -23,6 +23,12 @@
 
 $ErrorActionPreference = "Stop"
 
+# Lock down App Config + Key Vault public network access when VNet is enabled.
+# Runs before the custom-domain early-exit so it executes even when no custom domain is configured.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$lockScript = Join-Path $scriptDir "lock-network-access.ps1"
+if (Test-Path $lockScript) { & $lockScript } else { Write-Host "lock-network-access.ps1 not found — skipping." -ForegroundColor Yellow }
+
 $customDomain = azd env get-value CUSTOM_DOMAIN_NAME 2>$null
 if (-not $customDomain) {
     Write-Host "CUSTOM_DOMAIN_NAME not set. Skipping custom domain setup." -ForegroundColor Yellow

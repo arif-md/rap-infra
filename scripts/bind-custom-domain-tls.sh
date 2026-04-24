@@ -22,6 +22,15 @@
 
 set -e
 
+# Lock down App Config + Key Vault public network access when VNet is enabled.
+# Runs before the custom-domain early-exit so it executes even when no custom domain is configured.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)"
+if [ -f "$SCRIPT_DIR/lock-network-access.sh" ]; then
+  bash "$SCRIPT_DIR/lock-network-access.sh"
+else
+  echo "lock-network-access.sh not found — skipping."
+fi
+
 CUSTOM_DOMAIN=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || true)
 if [ -z "$CUSTOM_DOMAIN" ]; then
     echo "CUSTOM_DOMAIN_NAME not set. Skipping custom domain setup."

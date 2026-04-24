@@ -129,8 +129,13 @@ resource configStore 'Microsoft.AppConfiguration/configurationStores@2023-03-01'
   }
   properties: {
     disableLocalAuth: false // allow ARM-based key-value writes during deployment
-    // Public network access: disabled when private endpoint is enabled, enabled otherwise
-    publicNetworkAccess: enablePrivateEndpoint ? 'Disabled' : 'Enabled'
+    // Keep public network access ENABLED even when a private endpoint exists.
+    // Reason: the ARM deployment engine writes key-value entries from Azure's
+    // public infrastructure — disabling public access blocks those writes and
+    // causes "Forbidden: Access to the requested resource is forbidden" errors.
+    // Security is provided by RBAC (Managed Identity) not by network firewall;
+    // the private endpoint ensures containers inside the VNet use private routing.
+    publicNetworkAccess: 'Enabled'
     // Soft delete and purge protection are only supported on Standard/Premium SKUs
     softDeleteRetentionInDays: (sku == 'standard' || sku == 'premium') ? softDeleteRetentionInDays : null
     enablePurgeProtection: (sku == 'standard' || sku == 'premium') ? enablePurgeProtection : null

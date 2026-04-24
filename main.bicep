@@ -282,13 +282,21 @@ var computedFrontendUrl = enableCustomDomain ? 'https://${customDomainName}' : d
 var defaultBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
 var computedBackendUrl = enableCustomDomain ? 'https://${customDomainName}' : defaultBackendUrl
 
+// Auto-select App Config SKU:
+//   VNet enabled  → Standard  (required for private endpoint support)
+//   VNet disabled → Free      (no PE needed; Standard has hourly cost)
+// The appConfigSku param is still accepted for explicit overrides.
+// VNet disabled → always free (no private endpoint needed, saves cost).
+// VNet enabled  → use appConfigSku param (default 'standard', override via azd env set APP_CONFIG_SKU premium).
+var resolvedAppConfigSku = enableVnetIntegration ? appConfigSku : 'free'
+
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
   params: {
     name: appConfigName
     location: location
     tags: tags
-    sku: appConfigSku
+    sku: resolvedAppConfigSku
     // Grant backend managed identity read access
     readerPrincipalId: backendIdentity.properties.principalId
     // Private endpoint — only when VNet integration is enabled
@@ -732,6 +740,7 @@ output processesIdentityName string = processesIdentityName
 output processesIdentityPrincipalId string = processesIdentity.properties.principalId
 output appConfigEndpoint string = appConfiguration.outputs.endpoint
 output appConfigName string = appConfiguration.outputs.name
+output keyVaultName string = resolvedKeyVaultName
 
 // SQL setup status (combined — role assignments + schema bootstrap)
 output sqlSetupStatus string = (enableSqlDatabase && !skipSqlSetup) ? sqlSetup!.outputs.scriptOutput : 'skipped'

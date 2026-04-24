@@ -286,17 +286,23 @@ jobs:
       - name: Preview infrastructure changes (what-if)
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail   # no -e: allow what-if failures to use the || fallback
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔍  What-if: resources that will be created/modified/deleted"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           # Render azd parameters into a temp file so we can pass them to what-if
           PARAMS_FILE=$(mktemp /tmp/whatif-params-XXXX.json)
-          azd env get-values --output json 2>/dev/null | \
+          # azd env get-values outputs KEY="VALUE" pairs (not JSON) — parse accordingly
+          azd env get-values 2>/dev/null | \
             python3 -c "
           import sys, json
-          env = json.load(sys.stdin)
+          env = {}
+          for line in sys.stdin:
+            line = line.strip()
+            if '=' in line:
+              k, _, v = line.partition('=')
+              env[k.strip()] = v.strip().strip('\"')
           # Map azd env vars → Bicep parameter names (matching main.parameters.json substitutions)
           mapping = {
             'AZURE_ENV_NAME':                   'environmentName',
@@ -327,9 +333,12 @@ jobs:
             --parameters "$PARAMS_FILE" \
             --result-format FullResourcePayloads \
             --no-pretty-print 2>/dev/null | \
-            python3 -c "
+            python3 2>/dev/null -c "
           import sys, json
-          data = json.load(sys.stdin)
+          try:
+            data = json.load(sys.stdin)
+          except Exception:
+            sys.exit(1)
           changes = data.get('properties', {}).get('changes', [])
           by_type = {}
           for c in changes:
