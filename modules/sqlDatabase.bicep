@@ -122,7 +122,7 @@ resource allowAzureServicesRule 'Microsoft.Sql/servers/firewallRules@2023-05-01-
 
 // Private Endpoint for SQL Server
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-05-01' = if (enablePrivateEndpoint) {
-  name: '${sqlServerName}-pe'
+  name: 'pe-${sqlServerName}'
   location: location
   tags: tags
   properties: {

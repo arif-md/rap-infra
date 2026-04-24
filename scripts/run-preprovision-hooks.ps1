@@ -52,13 +52,22 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ ACR setup completed" -ForegroundColor Green
 
 # Ensure DNS Zone exists (survives azd down/up — not in deployment stack)
-Write-Host "`n[5/5] Ensuring DNS Zone exists..." -ForegroundColor Yellow
+Write-Host "`n[5/6] Ensuring DNS Zone exists..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-dns-zone.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ DNS Zone setup failed!" -ForegroundColor Red
     exit 1
 }
 Write-Host "✓ DNS Zone setup completed" -ForegroundColor Green
+
+# Purge any soft-deleted App Config store (Standard SKU + VNet only)
+Write-Host "`n[6/6] Checking for soft-deleted App Config stores..." -ForegroundColor Yellow
+& "$PSScriptRoot\recover-or-purge-appconfig.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ App Config purge check failed!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ App Config purge check completed" -ForegroundColor Green
 
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0

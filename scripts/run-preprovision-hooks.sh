@@ -53,12 +53,20 @@ fi
 success "ACR setup completed"
 
 # Ensure DNS Zone exists (outside deployment stack)
-step "[5/5] Ensuring DNS Zone exists..."
+step "[5/6] Ensuring DNS Zone exists..."
 if ! "${SCRIPT_DIR}/ensure-dns-zone.sh"; then
     error "DNS Zone setup failed!"
     exit 1
 fi
 success "DNS Zone setup completed"
+
+# Purge any soft-deleted App Config store (Standard SKU + VNet only)
+step "[6/6] Checking for soft-deleted App Config stores..."
+if ! "${SCRIPT_DIR}/recover-or-purge-appconfig.sh"; then
+    error "App Config purge check failed!"
+    exit 1
+fi
+success "App Config purge check completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0
