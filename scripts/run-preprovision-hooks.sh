@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 header "Running Pre-Provision Hooks"
 
 # Key Vault Setup
-step "[1/5] Setting up Key Vault..."
+step "[1/7] Setting up Key Vault..."
 if ! "${SCRIPT_DIR}/ensure-keyvault.sh"; then
     error "Key Vault setup failed!"
     exit 1
@@ -29,7 +29,7 @@ fi
 success "Key Vault setup completed"
 
 # Resolve container images
-step "[2/5] Resolving container images..."
+step "[2/7] Resolving container images..."
 if ! "${SCRIPT_DIR}/resolve-images.sh"; then
     error "Image resolution failed!"
     exit 1
@@ -37,7 +37,7 @@ fi
 success "Image resolution completed"
 
 # Validate ACR binding
-step "[3/5] Validating ACR binding..."
+step "[3/7] Validating ACR binding..."
 if ! "${SCRIPT_DIR}/validate-acr-binding.sh"; then
     error "ACR validation failed!"
     exit 1
@@ -45,7 +45,7 @@ fi
 success "ACR validation completed"
 
 # Ensure ACR exists
-step "[4/5] Ensuring ACR exists..."
+step "[4/7] Ensuring ACR exists..."
 if ! "${SCRIPT_DIR}/ensure-acr.sh"; then
     error "ACR setup failed!"
     exit 1
@@ -53,7 +53,7 @@ fi
 success "ACR setup completed"
 
 # Ensure DNS Zone exists (outside deployment stack)
-step "[5/6] Ensuring DNS Zone exists..."
+step "[5/7] Ensuring DNS Zone exists..."
 if ! "${SCRIPT_DIR}/ensure-dns-zone.sh"; then
     error "DNS Zone setup failed!"
     exit 1
@@ -61,12 +61,20 @@ fi
 success "DNS Zone setup completed"
 
 # Purge any soft-deleted App Config store (Standard SKU + VNet only)
-step "[6/6] Checking for soft-deleted App Config stores..."
+step "[6/7] Checking for soft-deleted App Config stores..."
 if ! "${SCRIPT_DIR}/recover-or-purge-appconfig.sh"; then
     error "App Config purge check failed!"
     exit 1
 fi
 success "App Config purge check completed"
+
+# Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
+step "[7/7] Checking for stranded Container Apps Environment..."
+if ! "${SCRIPT_DIR}/ensure-cae-vnet.sh"; then
+    error "CAE VNet guard failed!"
+    exit 1
+fi
+success "CAE VNet guard completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0
