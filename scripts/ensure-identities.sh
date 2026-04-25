@@ -40,10 +40,10 @@
 
 set -e
 
-info()    { echo -e "\033[1;34mℹ $1\033[0m"; }
-success() { echo -e "\033[1;32m✓ $1\033[0m"; }
-warning() { echo -e "\033[1;33m⚠ $1\033[0m"; }
-error()   { echo -e "\033[1;31m✗ $1\033[0m"; }
+info()    { echo -e "\033[1;34mℹ $1\033[0m" >&2; }
+success() { echo -e "\033[1;32m✓ $1\033[0m" >&2; }
+warning() { echo -e "\033[1;33m⚠ $1\033[0m" >&2; }
+error()   { echo -e "\033[1;31m✗ $1\033[0m" >&2; }
 
 ENVIRONMENT_NAME="${AZURE_ENV_NAME}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP}"
