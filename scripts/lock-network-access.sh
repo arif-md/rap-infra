@@ -28,6 +28,9 @@ fi
 echo "==> Locking public network access (VNet mode)..."
 
 # ── App Configuration ────────────────────────────────────────────────────────
+# App Config has no "trusted Azure services" bypass: ARM deployment engine
+# writes key-values over the public endpoint, so we keep public access open
+# during Bicep deployment and lock it down here in postprovision.
 APP_CONFIG_NAME=$(azd env get-value appConfigName 2>/dev/null || true)
 if [ -n "$APP_CONFIG_NAME" ]; then
     echo "  Disabling App Config public access: $APP_CONFIG_NAME"
@@ -42,17 +45,13 @@ else
 fi
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
-KV_NAME=$(azd env get-value keyVaultName 2>/dev/null || true)
-if [ -n "$KV_NAME" ]; then
-    echo "  Disabling Key Vault public access: $KV_NAME"
-    az keyvault update \
-        --name "$KV_NAME" \
-        --resource-group "$RG" \
-        --public-network-access Disabled \
-        --output none
-    echo "  ✅ Key Vault public access disabled."
-else
-    echo "  WARNING: keyVaultName not in azd env — skipping Key Vault lockdown."
-fi
+# Key Vault public access is intentionally NOT restricted here.
+# Azure Container Apps resolves KV secret references at deployment time from
+# Azure's shared infrastructure (outside the VNet). Disabling public access
+# causes 'azd deploy' to fail when it creates new revisions that validate
+# KV secret refs. Security is provided by access policies scoped to the
+# backend managed identity — the public endpoint cannot be used without
+# the correct identity credentials.
+echo "  Key Vault: public access left enabled (required for Container Apps secret ref resolution)."
 
 echo "==> Network lockdown complete."

@@ -72,6 +72,10 @@ param keyVaultEndpoint string = ''
 @description('Azure App Configuration endpoint (centralised non-secret config)')
 param appConfigEndpoint string = ''
 
+@description('JWT signing secret (stays in Key Vault — not in App Config)')
+@secure()
+param jwtSecret string = ''
+
 @description('Azure AD client secret (stays in Key Vault — not in App Config)')
 @secure()
 param aadClientSecret string = ''
@@ -169,8 +173,8 @@ var aadSecretEnv = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
   }
 ] : []
 
-// JWT secret (stays in Key Vault via secretRef — NOT in App Config)
-var jwtSecretEnv = !empty(keyVaultName) ? [
+// JWT secret (stays in Key Vault via secretRef — only when jwtSecret param is provided)
+var jwtSecretEnv = (!empty(keyVaultName) && !empty(jwtSecret)) ? [
   {
     name: 'JWT_SECRET'
     secretRef: 'jwt-secret'
@@ -180,15 +184,17 @@ var jwtSecretEnv = !empty(keyVaultName) ? [
 // Combine base env + App Config + App Insights + SQL + secrets + caller-provided env vars
 var combinedEnv = concat(baseEnvArray, appConfigEnv, appInsightsEnv, sqlEnv, jwtSecretEnv, aadSecretEnv, envVars)
 
-// Key Vault secrets to reference (if Key Vault is configured)
-// Secrets stay in Key Vault — non-secret config is in App Configuration
+// Key Vault secrets to reference — only include each secret if the value was provided
+// (prevents Container Apps deployment failure when secrets don't exist in KV)
+var jwtKvSecret = (!empty(keyVaultName) && !empty(jwtSecret)) ? [
+  { name: 'jwt-secret' }
+] : []
+
 var aadSecret = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
   { name: 'aad-client-secret' }
 ] : []
 
-var kvSecrets = !empty(keyVaultName) ? concat([
-  { name: 'jwt-secret' }
-], aadSecret) : []
+var kvSecrets = concat(jwtKvSecret, aadSecret)
 
 // Reference existing Key Vault
 resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = if (!empty(keyVaultName)) {

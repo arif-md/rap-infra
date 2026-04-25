@@ -536,7 +536,8 @@ module backend 'app/backend-springboot.bicep' = {
     keyVaultEndpoint: existingKeyVault.properties.vaultUri
     // Azure App Configuration — non-secret config loaded by Spring Cloud Azure at startup
     appConfigEndpoint: appConfiguration.outputs.endpoint
-    // AAD client secret (stays in Key Vault — not in App Config)
+    // JWT and AAD secrets (stay in Key Vault — not in App Config)
+    jwtSecret: jwtSecret
     aadClientSecret: aadClientSecret
     // CORS: Used at Container App ingress level (also stored in App Config for Spring Boot)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : computedFrontendUrl

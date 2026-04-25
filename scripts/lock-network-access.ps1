@@ -26,8 +26,9 @@ if (-not $rg) {
 Write-Host "==> Locking public network access (VNet mode)..." -ForegroundColor Cyan
 
 # ── App Configuration ────────────────────────────────────────────────────────
-# Bicep keeps publicNetworkAccess=Enabled during deployment so ARM can write
-# key-values. Now that provision succeeded, disable it so only PE traffic works.
+# App Config has no "trusted Azure services" bypass: ARM deployment engine
+# writes key-values over the public endpoint, so we keep public access open
+# during Bicep deployment and lock it down here in postprovision.
 $appConfigName = azd env get-value appConfigName 2>$null
 if ($appConfigName) {
     Write-Host "  Disabling App Config public access: $appConfigName" -ForegroundColor Yellow
@@ -42,20 +43,13 @@ if ($appConfigName) {
 }
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
-# Key Vault is externally managed (not in Bicep deployment stack), but the
-# private endpoint is deployed by Bicep. Lock down public access here so only
-# containers inside the VNet (via PE) can reach the vault.
-$kvName = azd env get-value keyVaultName 2>$null
-if ($kvName) {
-    Write-Host "  Disabling Key Vault public access: $kvName" -ForegroundColor Yellow
-    az keyvault update `
-        --name $kvName `
-        --resource-group $rg `
-        --public-network-access Disabled `
-        --output none
-    Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
-} else {
-    Write-Host "  WARNING: keyVaultName not in azd env — skipping Key Vault lockdown." -ForegroundColor Yellow
-}
+# Key Vault public access is intentionally NOT restricted here.
+# Azure Container Apps resolves KV secret references at deployment time from
+# Azure's shared infrastructure (outside the VNet). Disabling public access
+# causes 'azd deploy' to fail when it creates new revisions that validate
+# KV secret refs. Security is provided by access policies scoped to the
+# backend managed identity — the public endpoint cannot be used without
+# the correct identity credentials.
+Write-Host "  Key Vault: public access left enabled (required for Container Apps secret ref resolution)." -ForegroundColor Gray
 
 Write-Host "==> Network lockdown complete." -ForegroundColor Green
