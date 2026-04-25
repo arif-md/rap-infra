@@ -311,7 +311,6 @@ jobs:
             'ENABLE_SQL_DATABASE':              'enableSqlDatabase',
             'APP_CONFIG_SKU':                   'appConfigSku',
             'CUSTOM_DOMAIN_NAME':               'customDomainName',
-            'ENABLE_AZURE_DNS':                 'enableAzureDns',
           }
           params = {}
           for env_key, param_key in mapping.items():
