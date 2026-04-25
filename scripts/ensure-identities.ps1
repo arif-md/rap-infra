@@ -175,17 +175,20 @@ if (-not $KvExists) {
 # Only the backend Container App reads secrets from KV.
 # ---------------------------------------------------------------------------
 Write-Info "Granting Key Vault secret access (get, list) to backend identity..."
+Write-Info "  Identity name : $BackendIdentityName"
+Write-Info "  Principal ID  : $BackendPrincipalId"
 az keyvault set-policy `
     --name $KeyVaultName `
     --resource-group $ResourceGroup `
     --object-id $BackendPrincipalId `
     --secret-permissions get list `
-    --output none 2>&1 | Out-Null
+    --output none
 if ($LASTEXITCODE -eq 0) {
     Write-Success "Key Vault access policy set for '$BackendIdentityName'"
 } else {
-    Write-Warn "Failed to set KV access policy — may lack permissions"
-    Write-Warn "Container Apps may fail to read KV secrets if policy has not propagated"
+    Write-Err "Failed to set KV access policy for '$BackendIdentityName' (object-id: $BackendPrincipalId)"
+    Write-Err "Check that the deploying principal has 'Key Vault Contributor' on '$ResourceGroup'"
+    exit 1
 }
 
 # ---------------------------------------------------------------------------
@@ -224,8 +227,9 @@ while ($Elapsed -lt $MaxWait) {
 }
 
 if (-not $Confirmed) {
-    Write-Warn "Access policy not confirmed after ${MaxWait}s — proceeding anyway"
-    Write-Warn "Container Apps may fail to read KV secrets if data-plane has not propagated"
+    Write-Err "Access policy not confirmed in ARM after ${MaxWait}s"
+    Write-Err "KV data-plane propagation cannot be guaranteed — aborting to prevent Container App deployment failure"
+    exit 1
 }
 
 # ---------------------------------------------------------------------------
@@ -234,161 +238,3 @@ if (-not $Confirmed) {
 Write-Info "Waiting 15 seconds for KV data plane to sync after ARM confirmation..."
 Start-Sleep -Seconds 15
 Write-Success "Identity pre-provisioning complete"
-
-.DESCRIPTION
-    Container Apps validates Key Vault URL secret references at deployment time
-    by calling the KV data plane using the managed identity. If the identity is
-    freshly created in the same Bicep deployment, the KV access policy may not
-    have propagated to the KV data plane yet when Container Apps runs that
-    validation, causing:
-
-        "unable to fetch secret 'jwt-secret' using Managed identity"
-
-    This race condition only manifests on a clean azd up (after azd down) when
-    no VNet is configured — with VNet the parallel subnet/DNS/PE resources add
-    enough time that propagation completes before Container Apps deploys.
-
-    This script pre-creates the backend managed identity (same name Bicep will
-    use) and grants it KV secret access, then waits 30 seconds for propagation.
-    Bicep finds the identity already exists and updates it in-place (idempotent).
-#>
-
-$ErrorActionPreference = "Stop"
-
-$EnvironmentName = $env:AZURE_ENV_NAME
-$ResourceGroup   = $env:AZURE_RESOURCE_GROUP
-$Location        = $env:AZURE_LOCATION
-$KeyVaultName    = $env:KEY_VAULT_NAME
-
-if (-not $EnvironmentName) { Write-Host "✗ AZURE_ENV_NAME is not set" -ForegroundColor Red; exit 1 }
-if (-not $ResourceGroup)   { Write-Host "✗ AZURE_RESOURCE_GROUP is not set" -ForegroundColor Red; exit 1 }
-if (-not $Location)        { Write-Host "✗ AZURE_LOCATION is not set" -ForegroundColor Red; exit 1 }
-
-# ---------------------------------------------------------------------------
-# Compute resource token — matches main.bicep:
-#   resourceToken = toLower('${environmentName}-${uniqueString(subscription().id, environmentName)}')
-# We approximate uniqueString with SHA-256 truncated to 13 hex chars, matching
-# the same approach used in ensure-keyvault.ps1.
-# ---------------------------------------------------------------------------
-$SubscriptionId = az account show --query id -o tsv
-$HashInput = "${SubscriptionId}${EnvironmentName}"
-$Bytes = [System.Text.Encoding]::UTF8.GetBytes($HashInput)
-$Sha256 = [System.Security.Cryptography.SHA256]::Create()
-$Hash = $Sha256.ComputeHash($Bytes)
-$UniqueString = ($Hash | ForEach-Object { $_.ToString("x2") }) -join '' | Select-Object -First 1
-$UniqueString = (($Hash | ForEach-Object { $_.ToString("x2") }) -join '').Substring(0, 13)
-$ResourceToken = "$($EnvironmentName.ToLower())-$UniqueString"
-
-$BackendIdentityName = "id-backend-$ResourceToken"
-
-Write-Host "ℹ Environment     : $EnvironmentName" -ForegroundColor Blue
-Write-Host "ℹ Resource group  : $ResourceGroup" -ForegroundColor Blue
-Write-Host "ℹ Backend identity: $BackendIdentityName" -ForegroundColor Blue
-
-# ---------------------------------------------------------------------------
-# Resolve Key Vault name
-# ---------------------------------------------------------------------------
-if (-not $KeyVaultName) {
-    $KeyVaultName = "kv-$ResourceToken-v10"
-    Write-Host "ℹ Calculated Key Vault name: $KeyVaultName" -ForegroundColor Blue
-} else {
-    Write-Host "ℹ Using provided Key Vault name: $KeyVaultName" -ForegroundColor Blue
-}
-
-# ---------------------------------------------------------------------------
-# Verify Key Vault exists
-# ---------------------------------------------------------------------------
-$KvExists = az keyvault show --name $KeyVaultName --resource-group $ResourceGroup --query name -o tsv 2>$null
-if (-not $KvExists) {
-    Write-Host "⚠ Key Vault '$KeyVaultName' not found — skipping identity pre-provision" -ForegroundColor Yellow
-    Write-Host "⚠ KV access policy will be set by Bicep; race condition risk remains" -ForegroundColor Yellow
-    exit 0
-}
-
-# ---------------------------------------------------------------------------
-# Create the backend managed identity if it doesn't exist
-# ---------------------------------------------------------------------------
-$IdentityExists = az identity show --name $BackendIdentityName --resource-group $ResourceGroup --query name -o tsv 2>$null
-if ($IdentityExists) {
-    Write-Host "✓ Backend identity '$BackendIdentityName' already exists" -ForegroundColor Green
-} else {
-    Write-Host "ℹ Creating backend managed identity '$BackendIdentityName'..." -ForegroundColor Blue
-    az identity create `
-        --name $BackendIdentityName `
-        --resource-group $ResourceGroup `
-        --location $Location `
-        --output none
-    Write-Host "✓ Backend identity created" -ForegroundColor Green
-}
-
-$PrincipalId = az identity show `
-    --name $BackendIdentityName `
-    --resource-group $ResourceGroup `
-    --query principalId -o tsv
-
-Write-Host "ℹ Principal ID: $PrincipalId" -ForegroundColor Blue
-
-# ---------------------------------------------------------------------------
-# Grant Key Vault secret access (get + list) — idempotent
-# ---------------------------------------------------------------------------
-Write-Host "ℹ Granting Key Vault secret access to backend identity..." -ForegroundColor Blue
-$PolicyResult = az keyvault set-policy `
-    --name $KeyVaultName `
-    --resource-group $ResourceGroup `
-    --object-id $PrincipalId `
-    --secret-permissions get list `
-    --output none 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "✓ Key Vault access policy set for '$BackendIdentityName'" -ForegroundColor Green
-} else {
-    Write-Host "⚠ Failed to set KV access policy — may lack permissions; continuing" -ForegroundColor Yellow
-    Write-Host "⚠ Container Apps may fail to read KV secrets if policy hasn't propagated" -ForegroundColor Yellow
-}
-
-# ---------------------------------------------------------------------------
-# Poll ARM control plane until the access policy entry is confirmed.
-#
-# WHY POLL INSTEAD OF SLEEP
-# We cannot verify KV *data-plane* propagation from outside the managed
-# identity — that would require calling the KV REST endpoint as id-backend-*,
-# which the script cannot do (it runs as the GitHub Actions SP). However,
-# polling the ARM control plane (az keyvault show → accessPolicies) confirms
-# that Azure has recorded the policy write. Once ARM confirms it, the KV data
-# plane typically propagates within 5–10 seconds. A short fixed buffer after
-# ARM confirmation is therefore far more reliable than a blind sleep, which
-# starts the timer before ARM has even processed the write.
-# ---------------------------------------------------------------------------
-Write-Host "ℹ Polling ARM control plane until access policy is confirmed..." -ForegroundColor Blue
-$MaxWait = 120
-$Interval = 10
-$Elapsed = 0
-$Confirmed = $false
-
-while ($Elapsed -lt $MaxWait) {
-    $PolicyCheck = az keyvault show `
-        --name $KeyVaultName `
-        --resource-group $ResourceGroup `
-        --query "properties.accessPolicies[?objectId=='$PrincipalId'].objectId" `
-        -o tsv 2>$null
-
-    if ($PolicyCheck) {
-        Write-Host "✓ Access policy confirmed in ARM control plane (${Elapsed}s elapsed)" -ForegroundColor Green
-        $Confirmed = $true
-        break
-    }
-
-    Write-Host "  Policy not yet visible in ARM (${Elapsed}s elapsed) — retrying in ${Interval}s..." -ForegroundColor Gray
-    Start-Sleep -Seconds $Interval
-    $Elapsed += $Interval
-}
-
-if (-not $Confirmed) {
-    Write-Host "⚠ Access policy not confirmed after ${MaxWait}s — proceeding anyway" -ForegroundColor Yellow
-    Write-Host "⚠ Container Apps may fail to read KV secrets if data-plane hasn't propagated" -ForegroundColor Yellow
-}
-
-# Short fixed buffer after ARM confirmation so KV data plane can sync.
-# ARM confirmation → data plane propagation is typically < 10 seconds.
-Write-Host "ℹ Waiting 15 seconds for KV data plane to sync after ARM confirmation..." -ForegroundColor Blue
-Start-Sleep -Seconds 15
-Write-Host "✓ Identity pre-provisioning complete" -ForegroundColor Green

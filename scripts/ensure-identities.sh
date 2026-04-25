@@ -187,16 +187,19 @@ fi
 # Idempotent: re-running overwrites with the same permissions.
 # ---------------------------------------------------------------------------
 info "Granting Key Vault secret access (get, list) to backend identity..."
+info "  Identity name : $BACKEND_IDENTITY_NAME"
+info "  Principal ID  : $BACKEND_PRINCIPAL_ID"
 if az keyvault set-policy \
     --name "$KEY_VAULT_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --object-id "$BACKEND_PRINCIPAL_ID" \
     --secret-permissions get list \
-    --output none 2>&1; then
+    --output none; then
   success "Key Vault access policy set for '$BACKEND_IDENTITY_NAME'"
 else
-  warning "Failed to set KV access policy — may lack permissions"
-  warning "Container Apps may fail to read KV secrets if policy has not propagated"
+  error "Failed to set KV access policy for '$BACKEND_IDENTITY_NAME' (object-id: $BACKEND_PRINCIPAL_ID)"
+  error "Check that the deploying principal has 'Key Vault Contributor' on '$RESOURCE_GROUP'"
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -239,8 +242,9 @@ while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
 done
 
 if [ "$CONFIRMED" = false ]; then
-  warning "Access policy not confirmed after ${MAX_WAIT}s — proceeding anyway"
-  warning "Container Apps may fail to read KV secrets if data-plane has not propagated"
+  error "Access policy not confirmed in ARM after ${MAX_WAIT}s"
+  error "KV data-plane propagation cannot be guaranteed — aborting to prevent Container App deployment failure"
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------
