@@ -2,7 +2,181 @@
 
 ## Overview
 
-The infrastructure uses environment-aware Key Vault configuration to balance security, cost, and operational flexibility across different deployment environments.
+Key Vault is managed **outside** the `azd` deployment stack. It is created and maintained by the `ensure-keyvault.sh` / `ensure-keyvault.ps1` pre-provision hook, which runs automatically before every `azd up`. Bicep references the vault as an `existing` resource — this means the deployment stack never tracks it, and `azd down` never deletes or soft-deletes it.
+
+---
+
+## Lifecycle at a Glance
+
+```
+azd up
+  └─ Pre-provision hooks (in order)
+       ├─ ensure-keyvault.sh   → creates KV if missing; seeds secrets (create-only)
+       ├─ ensure-identities.sh → creates managed identities; grants backend identity KV access
+       │                         (ARM-polled until confirmed; +15s data-plane buffer)
+       └─ … other hooks …
+  └─ Bicep deployment
+       ├─ references KV as 'existing' (not in stack)
+       ├─ references identities as 'existing' (not in stack)
+       └─ deploys Container Apps, SQL, App Config, CAE, …
+
+azd down
+  └─ deletes only stack-managed resources
+  └─ Key Vault untouched (not in stack)
+  └─ Managed identities untouched (not in stack)
+```
+
+---
+
+## Key Vault Naming
+
+The vault name is derived by `ensure-keyvault.sh` using an md5 hash of `subscriptionId + environmentName`, then stored in the azd environment and passed to Bicep as the `KEY_VAULT_NAME` parameter override.
+
+```
+kv-{environmentName}-{13-char-hash}-v10
+```
+
+Example: `kv-dev-aa00584401909-v10`
+
+The version suffix (`-v10`) is incremented in `ensure-keyvault.sh` whenever a naming change is needed to avoid soft-delete conflicts with old vaults.
+
+---
+
+## Secret Management
+
+### How Secrets Are Seeded (Initial Creation Only)
+
+Secrets are seeded by `ensure-keyvault.sh` during the pre-provision hook. The function is **create-only**: if a secret already exists in Key Vault, it is skipped regardless of the value in the azd environment variable. Key Vault is the source of truth after initial seeding.
+
+```
+ensure-keyvault.sh runs:
+  secret 'jwt-secret' exists? → skip
+  secret 'jwt-secret' missing? → create from $JWT_SECRET env var
+```
+
+Secrets managed:
+- `jwt-secret` — JWT signing key (from `JWT_SECRET` azd env var on first run)
+- `aad-client-secret` — Azure AD client secret (from `AZURE_AD_CLIENT_SECRET`)
+- `oidc-client-secret` — OIDC provider client secret (from `OIDC_CLIENT_SECRET`)
+
+### What Bicep Does With Secrets
+
+Bicep does **not** create or update secrets. It only:
+1. References the existing Key Vault as `existing`
+2. Wires KV URL secret references into the Container App (`keyVaultUrl: '${kv.properties.vaultUri}secrets/jwt-secret'`)
+
+### How Secrets Reach the Running Container
+
+Container Apps fetches each KV-referenced secret **once per revision**, at revision activation time, and caches the value as an OS environment variable. The Spring Boot process reads `${JWT_SECRET}` from the environment at startup.
+
+```
+KV secret value
+  └─ fetched at revision activation → cached in Container App revision
+       └─ injected as OS env var when container process starts
+            └─ Spring Boot reads it at startup (static for life of the process)
+```
+
+**Consequence:** Rotating a secret in KV alone does not affect the currently running revision. A new revision must be created to pick up the rotated value.
+
+---
+
+## Secret Rotation
+
+Key Vault is the authoritative source. The GitHub environment variable for a secret is used only for the initial seed. Rotation does **not** require updating GitHub secrets.
+
+### Rotation Procedure
+
+```bash
+# Step 1 — Update the secret directly in Key Vault
+az keyvault secret set \
+  --vault-name kv-dev-aa00584401909-v10 \
+  --name jwt-secret \
+  --value "<new-value>"
+
+# Step 2 — Create a new Container App revision to pick up the new value
+# Option A: run azd provision (creates a new revision as part of deployment)
+azd provision
+
+# Option B: copy the current revision (faster, no full deployment needed)
+az containerapp revision copy \
+  --name dev-rap-be \
+  --resource-group rg-raptor-dev
+```
+
+The new revision fetches the updated KV secret value at activation. The old revision continues running with the cached old value until traffic is shifted to the new revision (or replicas are cycled).
+
+> **Do NOT run `azd provision` expecting it to push the new secret value from the GitHub env var into KV** — `ensure-keyvault.sh` is create-only and will skip the secret if it already exists.
+
+---
+
+## Managed Identity Access to Key Vault
+
+Access policies (backend identity gets `get` + `list` on KV secrets) are set by `ensure-identities.sh`, not by Bicep. This happens in the same pre-provision hook run as KV creation.
+
+The script polls the ARM control plane until the policy write is confirmed (up to 120s), then waits a 15-second fixed buffer for KV data-plane propagation. This eliminates the race condition where Container Apps validates KV URL secret references before the access policy has replicated.
+
+```
+ensure-identities.sh:
+  1. Create identity (if missing)
+  2. az keyvault set-policy (get, list)
+  3. Poll ARM until policy appears in accessPolicies[]
+  4. Wait 15s (KV data-plane sync buffer)
+  → Bicep deploys Container App → KV validation succeeds
+```
+
+---
+
+## Environment-Specific Configuration
+
+```bicep
+softDeleteRetentionInDays: isProduction ? 90 : 7
+enablePurgeProtection: true   // Required by Azure policy — cannot be disabled
+```
+
+| Environment | Soft-delete retention | Purge protection |
+|-------------|----------------------|------------------|
+| dev / test  | 7 days               | enabled          |
+| prod        | 90 days              | enabled          |
+
+Because KV is never deleted by `azd down`, the soft-delete retention is only relevant if the vault is manually deleted.
+
+---
+
+## Troubleshooting
+
+### "unable to fetch secret using Managed identity" (Container App deployment failure)
+
+This is the KV data-plane propagation race condition. `ensure-identities.sh` was designed to prevent it. If it still occurs:
+
+1. Check that `ensure-identities.sh` ran in the pre-provision hook and completed successfully
+2. Check that the backend identity name in Azure matches `BACKEND_IDENTITY_NAME` in the azd env
+3. Verify the KV access policy exists: `az keyvault show --name <kv> --query "properties.accessPolicies"`
+
+### "Vault with same name exists in deleted state"
+
+This happens if the vault was manually deleted (not via `azd down`):
+
+```bash
+# Recover (preserves secrets)
+az keyvault recover --name kv-dev-aa00584401909-v10 --location eastus2
+
+# Or purge (permanent — requires Key Vault Contributor on subscription)
+az keyvault purge --name kv-dev-aa00584401909-v10 --location eastus2
+```
+
+### Secret value not updating after rotation
+
+The running revision still has the old cached value. Create a new revision:
+```bash
+az containerapp revision copy --name dev-rap-be --resource-group rg-raptor-dev
+```
+
+---
+
+## Related Documentation
+
+- [KEYVAULT-RETENTION-FLAG.md](KEYVAULT-RETENTION-FLAG.md) — Why the old retention flag was removed
+- [MANUAL-KEYVAULT-SETUP.md](MANUAL-KEYVAULT-SETUP.md) — First-time Key Vault creation (if pre-provision hook cannot create it)
 
 ## Environment-Specific Configuration
 

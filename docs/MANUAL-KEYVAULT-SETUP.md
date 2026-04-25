@@ -1,8 +1,145 @@
 # Manual Key Vault Creation Guide
 
-## Current Situation
+## When Is This Needed?
 
-Due to Azure subscription policies requiring purge protection on Key Vaults, and limited permissions to recover soft-deleted vaults, you need to manually create the Key Vault before running `azd up`.
+The `ensure-keyvault.sh` / `ensure-keyvault.ps1` pre-provision hook creates the Key Vault automatically on the first `azd up`. You only need this guide if:
+
+- The hook fails due to insufficient permissions (e.g., the deploying principal lacks `Key Vault Contributor`)
+- You need to create the vault before anyone has run `azd up` for the first time (e.g., infrastructure hand-off)
+- A vault was accidentally purged and needs to be recreated manually
+
+---
+
+## Step 1: Determine the Key Vault Name
+
+The name is computed by `ensure-keyvault.sh` using an md5 hash of `subscriptionId + environmentName`:
+
+```bash
+# On Linux/macOS (same formula as the script)
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+UNIQUE=$(printf '%s' "${SUBSCRIPTION_ID}<env-name>" | md5sum | cut -c1-13)
+echo "kv-<env-name>-${UNIQUE}-v10"
+```
+
+```powershell
+# On Windows PowerShell (same formula as ensure-keyvault.ps1)
+$SubId = az account show --query id -o tsv
+$Bytes = [System.Text.Encoding]::UTF8.GetBytes("$SubId<env-name>")
+$Hash  = [System.Security.Cryptography.MD5]::Create().ComputeHash($Bytes)
+$Uniq  = ($Hash | ForEach-Object { $_.ToString("x2") }) -join ''
+"kv-<env-name>-$($Uniq.Substring(0,13))-v10"
+```
+
+Replace `<env-name>` with your actual environment name (e.g., `dev`, `test`, `prod`).
+
+Alternatively, after running `azd up` once (even if it fails partway through), the name is exported:
+```bash
+azd env get-value KEY_VAULT_NAME
+```
+
+---
+
+## Step 2: Create the Key Vault
+
+```bash
+# Replace <kv-name>, <resource-group>, and <location> with your values
+az keyvault create \
+  --name <kv-name> \
+  --resource-group <resource-group> \
+  --location <location> \
+  --retention-days 7 \
+  --enable-purge-protection true \
+  --sku standard
+```
+
+Use `--retention-days 90` for production environments.
+
+**Note:** `--enable-purge-protection` is required by Azure subscription policy and cannot be disabled after creation.
+
+---
+
+## Step 3: Seed the Required Secrets
+
+Secrets are normally seeded by `ensure-keyvault.sh` during the pre-provision hook (create-only — never overwrites). If you are creating the vault manually, seed the secrets yourself:
+
+```bash
+az keyvault secret set --vault-name <kv-name> --name jwt-secret         --value "<JWT_SECRET value>"
+az keyvault secret set --vault-name <kv-name> --name aad-client-secret  --value "<AZURE_AD_CLIENT_SECRET value>"
+az keyvault secret set --vault-name <kv-name> --name oidc-client-secret --value "<OIDC_CLIENT_SECRET value>"
+```
+
+> **Important:** Once secrets are seeded in KV, they are the source of truth. Subsequent `azd up` runs will skip secrets that already exist. Rotate secrets directly in KV — see [KEYVAULT-LIFECYCLE.md](KEYVAULT-LIFECYCLE.md#secret-rotation).
+
+---
+
+## Step 4: Register the Name in the azd Environment
+
+```bash
+azd env set KEY_VAULT_NAME <kv-name>
+```
+
+This ensures Bicep and all pre-provision scripts use the vault you just created rather than trying to compute or create a new one.
+
+---
+
+## Step 5: Run azd up
+
+```bash
+azd up
+```
+
+`ensure-keyvault.sh` will detect the vault already exists and skip creation. `ensure-identities.sh` will create the managed identities and set the KV access policy for the backend identity. Bicep will then reference both the vault and the identities as `existing` resources.
+
+---
+
+## Verification
+
+```bash
+# Confirm vault is accessible
+az keyvault show --name <kv-name> --resource-group <resource-group> --query "{name:name, state:properties.provisioningState}"
+
+# Confirm secrets exist
+az keyvault secret list --vault-name <kv-name> --query "[].name" -o table
+
+# Confirm backend identity has access
+az keyvault show --name <kv-name> --query "properties.accessPolicies[].{objectId:objectId, permissions:permissions.secrets}" -o table
+```
+
+---
+
+## Troubleshooting
+
+### "Vault already exists in deleted state"
+
+The vault was previously deleted (manually or by an old deployment). Recover it to restore secrets:
+
+```bash
+# Option 1: Recover (preserves all secrets)
+az keyvault recover --name <kv-name> --location <location>
+
+# Option 2: Purge then recreate (secrets lost — requires Key Vault Contributor on subscription)
+az keyvault purge --name <kv-name> --location <location>
+# Then repeat Steps 2–5 above
+```
+
+### "Insufficient privileges to complete the operation"
+
+The deploying principal needs `Key Vault Contributor` on the resource group (to create the vault) and `Key Vault Secrets Officer` (or an access policy granting `set`) to seed secrets. Ask your Azure admin to:
+
+```bash
+# Grant Key Vault Contributor to the deploying principal
+az role assignment create \
+  --role "Key Vault Contributor" \
+  --assignee <principal-id-or-upn> \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>
+```
+
+---
+
+## Related Documentation
+
+- [KEYVAULT-LIFECYCLE.md](KEYVAULT-LIFECYCLE.md) — How KV is managed, secret rotation, propagation to containers
+- [KEYVAULT-RETENTION-FLAG.md](KEYVAULT-RETENTION-FLAG.md) — Why the old `DEPLOY_KEY_VAULT` flag was removed
 
 ## Calculate Key Vault Name for Your Environment
 

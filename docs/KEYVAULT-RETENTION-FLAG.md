@@ -1,8 +1,45 @@
-# Key Vault Retention Flag
+# Key Vault Retention — Architecture Note
 
-## Overview
+> **Note: The `DEPLOY_KEY_VAULT` flag described in older versions of this document no longer exists.**
+> Key Vault is now permanently managed outside the `azd` deployment stack. No flag, no manual steps.
+> See [KEYVAULT-LIFECYCLE.md](KEYVAULT-LIFECYCLE.md) for the current design.
 
-The `DEPLOY_KEY_VAULT` environment variable controls whether the Key Vault is managed by `azd` deployment stacks. This is useful when dealing with Key Vault soft-delete conflicts during development.
+---
+
+## How Key Vault Retention Works Today
+
+Key Vault is **never** inside the `azd` deployment stack. It is created and managed exclusively by the `ensure-keyvault.sh` / `ensure-keyvault.ps1` pre-provision hook that runs as part of every `azd up`.
+
+Because Bicep references the Key Vault as an `existing` resource (not a `resource =` declaration), the deployment stack does **not** track it. `azd down` therefore **never** touches the Key Vault — not deletion, not soft-delete, nothing.
+
+```
+azd up   → ensure-keyvault.sh creates KV (if missing) → Bicep references it as existing
+azd down → deletes only stack-managed resources → Key Vault untouched
+azd up   → ensure-keyvault.sh finds KV already exists → continues
+```
+
+### Managed Identity Access Policies
+
+Similarly, managed identities are now pre-created by `ensure-identities.sh` / `ensure-identities.ps1` and referenced as `existing` in Bicep. They also survive `azd down`.
+
+Access policies (backend identity → KV secret `get`/`list`) are set by `ensure-identities.sh`, not by Bicep.
+
+---
+
+## Why the Old Flag Was Removed
+
+The previous `DEPLOY_KEY_VAULT` flag required a brittle two-step workflow:
+1. Run `azd up` with flag=false (to remove KV from the stack)
+2. Then run `azd down`
+
+This was error-prone: if the sequence was not followed exactly, `azd down` would delete the Key Vault. The current design eliminates this entirely — KV retention is unconditional and requires no operator action.
+
+---
+
+## Related Documentation
+
+- [KEYVAULT-LIFECYCLE.md](KEYVAULT-LIFECYCLE.md) — Full lifecycle, secret seeding, rotation
+- [MANUAL-KEYVAULT-SETUP.md](MANUAL-KEYVAULT-SETUP.md) — First-time Key Vault creation steps
 
 ## How It Works
 
