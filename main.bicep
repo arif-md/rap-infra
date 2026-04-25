@@ -80,6 +80,24 @@ param enableVnetIntegration bool = false
 @description('Key Vault name to use (if empty, will use default naming pattern). Key Vault is never deleted by azd down.')
 param keyVaultName string = ''
 
+// ---------------------------------------------------------------------------
+// Identity name overrides — set by ensure-identities.sh/ps1 (pre-provision).
+// When provided, Bicep uses these exact names and references identities as
+// 'existing' resources (excluded from the deployment stack → survive azd down).
+// When empty, Bicep falls back to names derived from resourceToken.
+// ---------------------------------------------------------------------------
+@description('Backend managed identity name (set by ensure-identities script; falls back to computed name)')
+param backendIdentityNameOverride string = ''
+
+@description('Frontend managed identity name (set by ensure-identities script; falls back to computed name)')
+param frontendIdentityNameOverride string = ''
+
+@description('Processes managed identity name (set by ensure-identities script; falls back to computed name)')
+param processesIdentityNameOverride string = ''
+
+@description('SQL admin managed identity name (set by ensure-identities script; falls back to computed name)')
+param sqlAdminIdentityNameOverride string = ''
+
 @description('SQL Server administrator login')
 param sqlAdminLogin string = 'sqladmin'
 
@@ -176,12 +194,12 @@ var namePrefix = toLower('${environmentName}-rap')
 var resolvedAcrName = !empty(acrName) ? acrName : toLower(replace('${environmentName}rapacr','-',''))
 var acrResourceGroup = empty(acrResourceGroupOverride) ? resourceGroup().name : acrResourceGroupOverride
 var frontendAppName = '${namePrefix}-fe'
-var frontendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
+var frontendIdentityName = !empty(frontendIdentityNameOverride) ? frontendIdentityNameOverride : '${abbrs.managedIdentityUserAssignedIdentities}frontend-${resourceToken}'
 var backendAppName = '${namePrefix}-be'
-var backendIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
+var backendIdentityName = !empty(backendIdentityNameOverride) ? backendIdentityNameOverride : '${abbrs.managedIdentityUserAssignedIdentities}backend-${resourceToken}'
 var processesAppName = '${namePrefix}-proc'
-var processesIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}processes-${resourceToken}'
-var sqlAdminIdentityName = '${abbrs.managedIdentityUserAssignedIdentities}sqladmin-${resourceToken}'
+var processesIdentityName = !empty(processesIdentityNameOverride) ? processesIdentityNameOverride : '${abbrs.managedIdentityUserAssignedIdentities}processes-${resourceToken}'
+var sqlAdminIdentityName = !empty(sqlAdminIdentityNameOverride) ? sqlAdminIdentityNameOverride : '${abbrs.managedIdentityUserAssignedIdentities}sqladmin-${resourceToken}'
 var sqlServerName = '${abbrs.sqlServers}${resourceToken}'
 var sqlDatabaseName = '${abbrs.sqlServersDatabases}raptor-${environmentName}'
 var vnetName = '${abbrs.networkVirtualNetworks}${resourceToken}'
@@ -235,37 +253,27 @@ resource existingKeyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = {
 }
 
 // ============================================================================
-// Backend Managed Identity (created here so App Config can grant access
-// before the Container App starts)
+// Managed Identities — referenced as 'existing' (NOT created by this template)
 // ============================================================================
-resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+// All four identities are pre-created by ensure-identities.sh/ps1 in the
+// pre-provision hook, which also grants the backend identity Key Vault access
+// and polls ARM until the policy is confirmed. Because identities are
+// 'existing' references, the deployment stack does not track them — they
+// survive 'azd down' and are never deleted by azd.
+//
+// If an identity is manually deleted, the next 'azd up' pre-provision run
+// will recreate it (with ARM poll + 15-second buffer) before Bicep runs.
+// ============================================================================
+resource backendIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: backendIdentityName
-  location: location
-  tags: tags
 }
 
-// Processes identity created here (alongside backend) so the SQL role
-// assignment deployment script can reference its principalId without
-// creating a circular dependency with the processes container module.
-resource processesIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource processesIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: processesIdentityName
-  location: location
-  tags: tags
 }
 
-// ============================================================================
-// SQL Admin Managed Identity — direct Azure AD admin for SQL Server
-// ============================================================================
-// Using a dedicated managed identity as the direct SQL AD admin avoids the
-// "Directory Readers" problem: when an AD Group is the admin, SQL Server needs
-// to resolve group membership but lacks the Azure AD role to do so.
-// This identity is the direct admin (no group lookup) and is used by the
-// deployment script to grant DB-level permissions to service identities.
-// ============================================================================
-resource sqlAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (enableSqlDatabase) {
+resource sqlAdminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = if (enableSqlDatabase) {
   name: sqlAdminIdentityName
-  location: location
-  tags: tags
 }
 
 // ============================================================================

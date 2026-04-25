@@ -58,11 +58,10 @@ var isImageFromConfiguredAcr = split(image, '/')[0] == '${containerRegistryName}
 
 // Optional App Insights omitted
 
-// User-assigned identity (for ACR pull / future use)
-resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+// User-assigned identity — pre-created by ensure-identities script; referenced
+// as 'existing' so it is excluded from the deployment stack and survives azd down.
+resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
-  location: location
-  tags: tags
 }
 
 // Base env as array

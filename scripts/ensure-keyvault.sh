@@ -17,7 +17,18 @@ error() { echo -e "\033[1;31m✗ $1\033[0m"; }
 header() { echo -e "\n\033[1;36m=== $1 ===\033[0m"; }
 
 ###############################################################################
-# Ensure a single secret exists in Key Vault (create or update if value provided)
+# Ensure a single secret exists in Key Vault (CREATE ONLY — never overwrites).
+#
+# Key Vault is the source of truth for secrets after initial seeding. If a
+# secret already exists, this function skips it regardless of value. This
+# preserves any rotation done directly in KV (via Portal, CLI, or automation)
+# without being overwritten on the next 'azd provision' run.
+#
+# Rotation procedure:
+#   1. Update the secret value directly in KV (Portal / az keyvault secret set)
+#   2. Run 'azd provision' (or az containerapp revision copy) to create a new
+#      Container App revision — the new revision fetches the latest KV value
+#   3. The GitHub environment variable does NOT need to be updated for rotation
 ###############################################################################
 ensure_secret() {
     local vault_name="$1"
@@ -28,29 +39,24 @@ ensure_secret() {
         return
     fi
     
-    # Check if secret already exists
+    # Check if secret already exists — if it does, KV is the source of truth
     local existing_value
     existing_value=$(az keyvault secret show --vault-name "$vault_name" --name "$secret_name" --query value -o tsv 2>/dev/null || true)
     
-    if [ "$existing_value" = "$secret_value" ]; then
-        success "Secret '$secret_name' already exists and is up to date"
+    if [ -n "$existing_value" ]; then
+        success "Secret '$secret_name' already exists — skipping (KV is source of truth)"
         return
     fi
     
-    if [ -n "$existing_value" ]; then
-        info "Updating secret '$secret_name'..."
-    else
-        info "Creating secret '$secret_name'..."
-    fi
-    
+    info "Creating secret '$secret_name'..."
     if az keyvault secret set \
         --vault-name "$vault_name" \
         --name "$secret_name" \
         --value "$secret_value" \
         >/dev/null 2>&1; then
-        success "Secret '$secret_name' configured"
+        success "Secret '$secret_name' created"
     else
-        warning "Failed to set secret '$secret_name'"
+        warning "Failed to create secret '$secret_name'"
     fi
 }
 

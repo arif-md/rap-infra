@@ -291,7 +291,10 @@ jobs:
           echo "🔍  What-if: resources that will be created/modified/deleted"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-          # Render azd parameters into a temp file so we can pass them to what-if
+          # Build a resolved parameters file from azd env values.
+          # We do NOT pass main.parameters.json directly — it contains unresolved
+          # azd substitution tokens (${VAR}) that `az` cannot interpret and that
+          # would cause what-if to fail with a parameter-type error.
           PARAMS_FILE=$(mktemp /tmp/whatif-params-XXXX.json)
           # azd env get-values outputs KEY="VALUE" pairs (not JSON) — parse accordingly
           azd env get-values 2>/dev/null | \
@@ -303,24 +306,62 @@ jobs:
             if '=' in line:
               k, _, v = line.partition('=')
               env[k.strip()] = v.strip().strip('\"')
-          # Map azd env vars → Bicep parameter names (matching main.parameters.json substitutions)
+          # Map azd env vars → Bicep parameter names (must match main.bicep param declarations)
+          # All params with defaults are optional; only environmentName is required.
           mapping = {
-            'AZURE_ENV_NAME':                   'environmentName',
-            'AZURE_LOCATION':                   'location',
-            'ENABLE_VNET_INTEGRATION':          'enableVnetIntegration',
-            'ENABLE_SQL_DATABASE':              'enableSqlDatabase',
-            'APP_CONFIG_SKU':                   'appConfigSku',
-            'CUSTOM_DOMAIN_NAME':               'customDomainName',
+            'AZURE_ENV_NAME':                        'environmentName',
+            'AZURE_LOCATION':                        'location',
+            'AZURE_ACR_NAME':                        'acrName',
+            'AZURE_ACR_RESOURCE_GROUP':              'acrResourceGroupOverride',
+            'SERVICE_FRONTEND_IMAGE_NAME':           'frontendImage',
+            'SERVICE_BACKEND_IMAGE_NAME':            'backendImage',
+            'SERVICE_PROCESSES_IMAGE_NAME':          'processesImage',
+            'ENABLE_VNET_INTEGRATION':               'enableVnetIntegration',
+            'ENABLE_SQL_DATABASE':                   'enableSqlDatabase',
+            'ENABLE_MONITORING':                     'enableMonitoring',
+            'SKIP_SQL_SETUP':                        'skipSqlSetup',
+            'SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT':'skipFrontendAcrPullRoleAssignment',
+            'SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT': 'skipBackendAcrPullRoleAssignment',
+            'SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT':'skipProcessesAcrPullRoleAssignment',
+            'APP_CONFIG_SKU':                        'appConfigSku',
+            'CUSTOM_DOMAIN_NAME':                    'customDomainName',
+            'SQL_ADMIN_LOGIN':                       'sqlAdminLogin',
+            'SQL_DATABASE_SKU':                      'sqlDatabaseSku',
+            'SQL_DATABASE_TIER':                     'sqlDatabaseTier',
+            'KEY_VAULT_NAME':                        'keyVaultName',
+            'BACKEND_IDENTITY_NAME':                  'backendIdentityNameOverride',
+            'FRONTEND_IDENTITY_NAME':                 'frontendIdentityNameOverride',
+            'PROCESSES_IDENTITY_NAME':                'processesIdentityNameOverride',
+            'SQL_ADMIN_IDENTITY_NAME':                'sqlAdminIdentityNameOverride',
+            'OIDC_AUTHORIZATION_ENDPOINT':           'oidcAuthorizationEndpoint',
+            'OIDC_TOKEN_ENDPOINT':                   'oidcTokenEndpoint',
+            'OIDC_USER_INFO_ENDPOINT':               'oidcUserInfoEndpoint',
+            'OIDC_JWK_SET_URI':                      'oidcJwkSetUri',
+            'OIDC_END_SESSION_ENDPOINT':             'oidcEndSessionEndpoint',
+            'OIDC_CLIENT_ID':                        'oidcClientId',
+            'OIDC_ADDL_REQ_PARAM_ACR_VALUES':        'oidcAcrValues',
+            'OIDC_ADDL_REQ_PARAM_PROMPT':            'oidcPrompt',
+            'OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE':     'oidcResponseType',
+            'AZURE_AD_CLIENT_ID':                    'aadClientId',
+            'AZURE_AD_TENANT_ID':                    'aadTenantId',
+            'JWT_ISSUER':                            'jwtIssuer',
+            'CORS_ALLOWED_ORIGINS':                  'corsAllowedOrigins',
+            'FRONTEND_URL':                          'frontendUrl',
+          }
+          # Bool params that must be cast (string → bool) when present
+          bool_params = {
+            'enableVnetIntegration', 'enableSqlDatabase', 'enableMonitoring',
+            'skipSqlSetup', 'skipFrontendAcrPullRoleAssignment',
+            'skipBackendAcrPullRoleAssignment', 'skipProcessesAcrPullRoleAssignment',
           }
           params = {}
           for env_key, param_key in mapping.items():
             val = env.get(env_key)
-            if val is not None:
-              # Cast booleans
-              if val.lower() in ('true','false'):
+            if val is not None and val != '':
+              if param_key in bool_params:
                 val = val.lower() == 'true'
               params[param_key] = {'value': val}
-          # Dummy secure params (what-if needs them to be present)
+          # Dummy secure params — required by ARM validation but not secret for what-if
           params['sqlAdminPassword'] = {'value': 'WhatIf-Dummy-1!'}
           print(json.dumps({'parameters': params}))
           " > "$PARAMS_FILE"
@@ -331,7 +372,6 @@ jobs:
           az deployment group what-if \
             -g "$AZURE_RESOURCE_GROUP" \
             --template-file main.bicep \
-            --parameters main.parameters.json \
             --parameters "$PARAMS_FILE" \
             --result-format ResourceIdOnly \
             --output json \
@@ -366,7 +406,7 @@ jobs:
           " "$WHATIF_OUT"
           else
             echo "  (what-if unavailable — see error below, continuing with provision)"
-            cat "$WHATIF_ERR" | head -20 || true
+            cat "$WHATIF_ERR" | head -40 || true
           fi
 
           rm -f "$WHATIF_OUT" "$WHATIF_ERR"

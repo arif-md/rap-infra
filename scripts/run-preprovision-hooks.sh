@@ -69,12 +69,23 @@ fi
 success "App Config purge check completed"
 
 # Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
-step "[7/7] Checking for stranded Container Apps Environment..."
+step "[7/8] Checking for stranded Container Apps Environment..."
 if ! "${SCRIPT_DIR}/ensure-cae-vnet.sh"; then
     error "CAE VNet guard failed!"
     exit 1
 fi
 success "CAE VNet guard completed"
+
+# Pre-provision backend managed identity and grant KV access before Bicep runs.
+# Eliminates the KV access-policy propagation race condition that causes:
+#   "unable to fetch secret using Managed identity"
+# when the identity is freshly created in the same deployment as the Container App.
+step "[8/8] Pre-provisioning backend identity for Key Vault access..."
+if ! "${SCRIPT_DIR}/ensure-identities.sh"; then
+    error "Identity pre-provisioning failed!"
+    exit 1
+fi
+success "Identity pre-provisioning completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0

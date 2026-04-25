@@ -70,13 +70,25 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ App Config purge check completed" -ForegroundColor Green
 
 # Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
-Write-Host "`n[7/7] Checking for stranded Container Apps Environment..." -ForegroundColor Yellow
+Write-Host "`n[7/8] Checking for stranded Container Apps Environment..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-cae-vnet.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ CAE VNet guard failed!" -ForegroundColor Red
     exit 1
 }
 Write-Host "✓ CAE VNet guard completed" -ForegroundColor Green
+
+# Pre-provision backend managed identity and grant KV access before Bicep runs.
+# Eliminates the KV access-policy propagation race condition that causes:
+#   "unable to fetch secret using Managed identity"
+# when the identity is freshly created in the same deployment as the Container App.
+Write-Host "`n[8/8] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
+& "$PSScriptRoot\ensure-identities.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ Identity pre-provisioning failed!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ Identity pre-provisioning completed" -ForegroundColor Green
 
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0

@@ -44,6 +44,18 @@
       "keyVaultName": {
         "value": "${KEY_VAULT_NAME=}"
       },
+      "backendIdentityNameOverride": {
+        "value": "${BACKEND_IDENTITY_NAME=}"
+      },
+      "frontendIdentityNameOverride": {
+        "value": "${FRONTEND_IDENTITY_NAME=}"
+      },
+      "processesIdentityNameOverride": {
+        "value": "${PROCESSES_IDENTITY_NAME=}"
+      },
+      "sqlAdminIdentityNameOverride": {
+        "value": "${SQL_ADMIN_IDENTITY_NAME=}"
+      },
       "sqlAdminLogin": {
         "value": "${SQL_ADMIN_LOGIN=sqladmin}"
       },

@@ -23,7 +23,18 @@ function Write-Warning { param($Message) Write-Host "⚠ $Message" -ForegroundCo
 function Write-Error { param($Message) Write-Host "✗ $Message" -ForegroundColor Red }
 
 ###############################################################################
-# Ensure a single secret exists in Key Vault (create or update if value provided)
+# Ensure a single secret exists in Key Vault (CREATE ONLY — never overwrites).
+#
+# Key Vault is the source of truth for secrets after initial seeding. If a
+# secret already exists, this function skips it regardless of value. This
+# preserves any rotation done directly in KV without being overwritten on the
+# next 'azd provision' run.
+#
+# Rotation procedure:
+#   1. Update the secret value directly in KV (Portal / az keyvault secret set)
+#   2. Run 'azd provision' (or az containerapp revision copy) to create a new
+#      Container App revision — the new revision fetches the latest KV value
+#   3. The GitHub environment variable does NOT need to be updated for rotation
 ###############################################################################
 function Ensure-Secret {
     param(
@@ -34,25 +45,20 @@ function Ensure-Secret {
     
     if ([string]::IsNullOrEmpty($SecretValue)) { return }
     
-    # Check if secret already exists and matches
+    # Check if secret already exists — if it does, KV is the source of truth
     $existingValue = az keyvault secret show --vault-name $VaultName --name $SecretName --query value -o tsv 2>$null
     
-    if ($LASTEXITCODE -eq 0 -and $existingValue -eq $SecretValue) {
-        Write-Success "Secret '$SecretName' already exists and is up to date"
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrEmpty($existingValue)) {
+        Write-Success "Secret '$SecretName' already exists — skipping (KV is source of truth)"
         return
     }
     
-    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrEmpty($existingValue)) {
-        Write-Info "Updating secret '$SecretName'..."
-    } else {
-        Write-Info "Creating secret '$SecretName'..."
-    }
-    
+    Write-Info "Creating secret '$SecretName'..."
     az keyvault secret set --vault-name $VaultName --name $SecretName --value $SecretValue | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Success "Secret '$SecretName' configured"
+        Write-Success "Secret '$SecretName' created"
     } else {
-        Write-Warning "Failed to set secret '$SecretName'"
+        Write-Warning "Failed to create secret '$SecretName'"
     }
 }
 
