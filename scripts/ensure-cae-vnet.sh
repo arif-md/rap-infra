@@ -8,9 +8,9 @@
 # provision, Bicep tries to set infrastructureSubnetId on the existing CAE
 # which Azure rejects with ManagedEnvironmentCannotAddVnetToExistingEnv.
 #
-# Fix: Delete the stranded CAE so Bicep can recreate it with VNet from scratch.
-# The container apps inside it are also deleted by Azure automatically; Bicep
-# will recreate all of them in the same provision run.
+# Also handles CAEs still in ScheduledForDelete/Deleting state from a prior
+# manual or automated delete, by waiting for them to fully disappear before
+# allowing Bicep to proceed (prevents ManagedEnvironmentNotReadyForAppCreation).
 ###############################################################################
 
 set -e
@@ -38,14 +38,83 @@ if [ -z "$RG" ] || [ -z "$ENV" ]; then
     exit 0
 fi
 
-# Find any CAE in the resource group that has no VNet subnet configured
-info "Checking for stranded CAE (exists without VNet config)..."
+###############################################################################
+# wait_for_cae_gone: polls until the named CAE no longer appears in the list.
+###############################################################################
+wait_for_cae_gone() {
+    local CAE_NAME="$1"
+    local TIMEOUT=300   # 5 minutes
+    local ELAPSED=0
+    local INTERVAL=20
 
-STRANDED=$(az containerapp env list -g "$RG" \
-    --query "[?properties.vnetConfiguration.infrastructureSubnetId==null].name" \
-    -o tsv 2>/dev/null || true)
+    info "Waiting for CAE '$CAE_NAME' to finish deleting (timeout ${TIMEOUT}s)..."
+    while [ $ELAPSED -lt $TIMEOUT ]; do
+        local STILL_EXISTS
+        STILL_EXISTS=$(az containerapp env list -g "$RG" \
+            --query "[?name=='$CAE_NAME'].name" -o tsv 2>/dev/null || true)
+        if [ -z "$STILL_EXISTS" ]; then
+            success "CAE '$CAE_NAME' is fully deleted."
+            return 0
+        fi
+        info "  Still deleting... (${ELAPSED}s elapsed, checking again in ${INTERVAL}s)"
+        sleep $INTERVAL
+        ELAPSED=$((ELAPSED + INTERVAL))
+    done
+    error "CAE '$CAE_NAME' did not finish deleting within ${TIMEOUT}s."
+    return 1
+}
 
-if [ -z "$STRANDED" ]; then
+###############################################################################
+# Fetch all CAEs once and classify them.
+###############################################################################
+ALL_CAES=$(az containerapp env list -g "$RG" \
+    --query "[].{name:name,state:properties.provisioningState,subnet:properties.vnetConfiguration.infrastructureSubnetId}" \
+    -o json 2>/dev/null || echo "[]")
+
+###############################################################################
+# Step 1: Wait for any CAEs already in a deleting state (ScheduledForDelete /
+# Deleting / Canceled). These are left from a prior manual delete or azd down.
+# Prevents ManagedEnvironmentNotReadyForAppCreation.
+###############################################################################
+info "Checking for CAEs currently being deleted..."
+
+DELETING_CAES=$(echo "$ALL_CAES" | python3 -c "
+import json, sys
+caes = json.load(sys.stdin)
+for c in caes:
+    if c.get('state','') in ('ScheduledForDelete','Deleting','Canceled'):
+        print(c['name'])
+" 2>/dev/null || true)
+
+FOUND_DELETING=false
+while IFS= read -r CAE_NAME; do
+    [ -z "$CAE_NAME" ] && continue
+    FOUND_DELETING=true
+    warning "CAE '$CAE_NAME' is in state '$(echo "$ALL_CAES" | python3 -c "import json,sys; [print(c['state']) for c in json.load(sys.stdin) if c['name']=='$CAE_NAME']" 2>/dev/null)' — waiting for it to disappear..."
+    wait_for_cae_gone "$CAE_NAME"
+done <<< "$DELETING_CAES"
+
+# Re-query if we waited for anything
+if [ "$FOUND_DELETING" = "true" ]; then
+    ALL_CAES=$(az containerapp env list -g "$RG" \
+        --query "[].{name:name,state:properties.provisioningState,subnet:properties.vnetConfiguration.infrastructureSubnetId}" \
+        -o json 2>/dev/null || echo "[]")
+fi
+
+###############################################################################
+# Step 2: Detect stranded CAEs (Succeeded but no VNet subnet) and delete them.
+###############################################################################
+info "Checking for stranded CAE (Succeeded but no VNet config)..."
+
+STRANDED_CAES=$(echo "$ALL_CAES" | python3 -c "
+import json, sys
+caes = json.load(sys.stdin)
+for c in caes:
+    if c.get('state') == 'Succeeded' and not c.get('subnet'):
+        print(c['name'])
+" 2>/dev/null || true)
+
+if [ -z "$STRANDED_CAES" ]; then
     success "No stranded CAE found."
     exit 0
 fi
@@ -55,12 +124,13 @@ while IFS= read -r CAE_NAME; do
     warning "Found stranded CAE '$CAE_NAME' (no VNet config) — deleting so Bicep can recreate with VNet."
 
     # Container Apps must be deleted before the environment can be deleted.
-    # Retrieve the full environment resource ID so we can filter apps by it.
     CAE_ID=$(az containerapp env show -g "$RG" -n "$CAE_NAME" --query id -o tsv 2>/dev/null || true)
 
     if [ -n "$CAE_ID" ]; then
         info "Deleting container apps in '$CAE_NAME' before removing the environment..."
-        APPS=$(az containerapp list -g "$RG" --query "[?properties.managedEnvironmentId=='$CAE_ID'].name" -o tsv 2>/dev/null || true)
+        APPS=$(az containerapp list -g "$RG" \
+            --query "[?properties.managedEnvironmentId=='$CAE_ID'].name" \
+            -o tsv 2>/dev/null || true)
 
         while IFS= read -r APP_NAME; do
             [ -z "$APP_NAME" ] && continue
@@ -72,12 +142,10 @@ while IFS= read -r CAE_NAME; do
     fi
 
     warning "Deleting stranded CAE '$CAE_NAME'. All apps will be recreated by Bicep."
-    if az containerapp env delete -g "$RG" -n "$CAE_NAME" --yes 2>&1; then
-        success "Deleted stranded CAE '$CAE_NAME'."
-    else
-        error "Failed to delete stranded CAE '$CAE_NAME'."
-        exit 1
-    fi
-done <<< "$STRANDED"
+    az containerapp env delete -g "$RG" -n "$CAE_NAME" --yes 2>&1 \
+        || { error "Failed to delete stranded CAE '$CAE_NAME'."; exit 1; }
+
+    wait_for_cae_gone "$CAE_NAME"
+done <<< "$STRANDED_CAES"
 
 success "CAE VNet guard complete."
