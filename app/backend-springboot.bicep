@@ -196,34 +196,13 @@ var aadSecret = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
 
 var kvSecrets = concat(jwtKvSecret, aadSecret)
 
-// Reference existing Key Vault
-resource keyVault 'Microsoft.KeyVault/vaults@2022-07-01' existing = if (!empty(keyVaultName)) {
-  name: keyVaultName
-}
-
-// Grant backend identity access to Key Vault secrets
-resource kvAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2022-07-01' = if (!empty(keyVaultName)) {
-  name: 'add'
-  parent: keyVault
-  properties: {
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: uai.properties.principalId
-        permissions: {
-          secrets: ['get', 'list']
-        }
-      }
-    ]
-  }
-}
-
 module backend '../modules/containerApp.bicep' = {
   name: 'backendContainer'
-  // Ensure role assignment is in place before the app tries to pull the image
+  // Ensure ACR role assignment is in place before the app tries to pull the image.
+  // Key Vault access policy is managed by ensure-identities.sh (pre-provision hook)
+  // and fully propagated before Bicep runs — no Bicep-side policy resource needed.
   dependsOn: [
     acrPull
-    kvAccessPolicy
   ]
   params: {
     name: name
