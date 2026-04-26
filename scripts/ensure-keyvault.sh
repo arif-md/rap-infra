@@ -130,6 +130,26 @@ azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME" >/dev/null
 info "Checking if Key Vault exists..."
 if az keyvault show --name "$KEY_VAULT_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
     success "Key Vault '$KEY_VAULT_NAME' already exists"
+
+    # Enforce public network access — must be Enabled when VNet is not used.
+    # Spring Cloud Azure App Config resolves KV references via the public endpoint
+    # at container startup using the managed identity. 'Disabled' causes startup
+    # failures even when the managed identity has the correct access policy.
+    VNET_ENABLED=$(azd env get-value ENABLE_VNET_INTEGRATION 2>/dev/null || echo "false")
+    if [ "$VNET_ENABLED" != "true" ]; then
+        CURRENT_PNA=$(az keyvault show --name "$KEY_VAULT_NAME" --resource-group "$RESOURCE_GROUP" --query properties.publicNetworkAccess -o tsv 2>/dev/null || true)
+        if [ "$CURRENT_PNA" != "Enabled" ]; then
+            info "Key Vault public network access is '$CURRENT_PNA' — re-enabling (required for non-VNet deployments)..."
+            az keyvault update \
+                --name "$KEY_VAULT_NAME" \
+                --resource-group "$RESOURCE_GROUP" \
+                --public-network-access Enabled \
+                >/dev/null 2>&1 && success "Public network access re-enabled" || warning "Could not update public network access — check manually"
+        else
+            success "Key Vault public network access is already Enabled"
+        fi
+    fi
+
     ensure_secrets "$KEY_VAULT_NAME"
     exit 0
 fi
@@ -171,6 +191,7 @@ if az keyvault create \
     --retention-days "$RETENTION_DAYS" \
     --enable-purge-protection true \
     --enable-rbac-authorization false \
+    --public-network-access Enabled \
     >/dev/null 2>&1; then
     
     success "Key Vault created successfully: $KEY_VAULT_NAME"

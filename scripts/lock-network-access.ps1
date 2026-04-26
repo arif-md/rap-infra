@@ -43,13 +43,19 @@ if ($appConfigName) {
 }
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
-# Key Vault public access is intentionally NOT restricted here.
-# Azure Container Apps resolves KV secret references at deployment time from
-# Azure's shared infrastructure (outside the VNet). Disabling public access
-# causes 'azd deploy' to fail when it creates new revisions that validate
-# KV secret refs. Security is provided by access policies scoped to the
-# backend managed identity — the public endpoint cannot be used without
-# the correct identity credentials.
-Write-Host "  Key Vault: public access left enabled (required for Container Apps secret ref resolution)." -ForegroundColor Gray
+# Key Vault public access is intentionally NOT disabled here, even in VNet mode.
+#
+# Reason: there is no Key Vault private endpoint in the current architecture.
+# The Key Vault is managed outside azd (by ensure-keyvault.sh) and no private
+# endpoint is provisioned for it. Spring Cloud Azure App Config resolves KV
+# references (jwt.secret, aad-client-secret) at Spring Boot startup by calling
+# the KV URI directly from the container. Without a private endpoint, the
+# container must reach KV over the public endpoint — disabling it causes
+# startup failures.
+#
+# To lock down KV in VNet mode, first provision a KV private endpoint in the
+# same subnet and add a privatelink.vaultcore.azure.net DNS zone. Then this
+# script can safely set --public-network-access Disabled.
+Write-Host "  Key Vault: public access left enabled (no private endpoint provisioned — required for App Config KV reference resolution)." -ForegroundColor Gray
 
 Write-Host "==> Network lockdown complete." -ForegroundColor Green
