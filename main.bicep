@@ -257,13 +257,15 @@ var computedFrontendUrl = enableCustomDomain ? 'https://${customDomainName}' : d
 var defaultBackendUrl = 'https://${backendAppName}.${containerAppsEnvironment.properties.defaultDomain}'
 var computedBackendUrl = enableCustomDomain ? 'https://${customDomainName}' : defaultBackendUrl
 
-// Auto-select App Config SKU:
-//   VNet enabled  → Standard  (required for private endpoint support)
-//   VNet disabled → Free      (no PE needed; Standard has hourly cost)
-// The appConfigSku param is still accepted for explicit overrides.
-// VNet disabled → always free (no private endpoint needed, saves cost).
-// VNet enabled  → use appConfigSku param (default 'standard', override via azd env set APP_CONFIG_SKU premium).
-var resolvedAppConfigSku = enableVnetIntegration ? appConfigSku : 'free'
+// App Config SKU selection:
+//   Default (developer): no extra cost, no daily request limit, supports private endpoints.
+//   The Free tier allows only 1000 request units/day — sentinel polling alone (2 req/min)
+//   needs 2880/day, exhausting the limit in under 9 hours. Once the limit is hit, the App Config
+//   service returns HTTP 429. Spring Cloud Azure then fails to resolve KV references (jwt.secret,
+//   aad-client-secret) on container restart, and OIDC/AAD falls back to empty secrets → broken auth.
+//   Free SKU: only safe when sentinel polling is disabled and App Config is used very sparingly.
+//   VNet enabled + Free: blocked — private endpoints require Developer or higher.
+var resolvedAppConfigSku = (enableVnetIntegration && appConfigSku == 'free') ? 'developer' : appConfigSku
 
 module appConfiguration 'shared/app-configuration.bicep' = {
   name: 'appConfiguration'
@@ -391,14 +393,18 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01'
   location: location
   tags: tags
   properties: {
-    // Only wire up Log Analytics when monitoring is enabled
-    appLogsConfiguration: enableMonitoring ? {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logAnalyticsWorkspace!.properties.customerId
-        sharedKey: logAnalyticsWorkspace!.listKeys().primarySharedKey
+    // Only wire up Log Analytics when monitoring is enabled.
+    // Spread an empty object instead of null when monitoring is off — some ARM providers
+    // reject explicit null for properties that were previously set on an existing resource.
+    ...(enableMonitoring ? {
+      appLogsConfiguration: {
+        destination: 'log-analytics'
+        logAnalyticsConfiguration: {
+          customerId: logAnalyticsWorkspace!.properties.customerId
+          sharedKey: logAnalyticsWorkspace!.listKeys().primarySharedKey
+        }
       }
-    } : null
+    } : {})
     workloadProfiles: [
       {
         name: 'Consumption'
