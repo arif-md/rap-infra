@@ -60,15 +60,6 @@ param sqlServerFqdn string = ''
 @description('SQL Database name')
 param sqlDatabaseName string = ''
 
-@description('SQL admin login username')
-param sqlAdminLogin string = ''
-
-@description('Key Vault name (informational — secrets are fetched via App Config KV references, not Container App secretRefs)')
-param keyVaultName string = ''
-
-@description('Key Vault endpoint URI (informational — used only if additional secretRefs are added in future)')
-param keyVaultEndpoint string = ''
-
 @description('Azure App Configuration endpoint (all non-secret config + KV references loaded by Spring Cloud Azure at startup)')
 param appConfigEndpoint string = ''
 

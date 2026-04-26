@@ -209,9 +209,6 @@ module monitoring 'br/public:avm/ptn/azd/monitoring:0.1.0' = if (enableMonitorin
 // Key Vault is NEVER deployed or deleted by azd - it's managed externally
 // If it doesn't exist, create it manually using docs/MANUAL-KEYVAULT-SETUP.md
 // This prevents soft-delete conflicts and preserves secrets across azd down/up cycles
-var isProduction = environmentName == 'prod' || environmentName == 'production'
-var keyVaultSoftDeleteRetention = isProduction ? 90 : 7
-var keyVaultEnablePurgeProtection = true  // Required by Azure policy - cannot be disabled
 var resolvedKeyVaultName = !empty(keyVaultName) ? keyVaultName : '${abbrs.keyVaultVaults}${resourceToken}-v10'
 
 // OIDC additional parameters are stored in Azure App Configuration (oidc.addl.req.param.*)
@@ -500,10 +497,6 @@ module backend 'app/backend-springboot.bicep' = {
     enableSqlDatabase: enableSqlDatabase
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
-    sqlAdminLogin: sqlAdminLogin
-    // Key Vault — informational only; secrets are loaded via App Config KV references at startup
-    keyVaultName: resolvedKeyVaultName
-    keyVaultEndpoint: existingKeyVault.properties.vaultUri
     // Spring profile — matches environmentName (dev/test/train/prod)
     // Controls which application-{profile}.properties and bootstrap-{profile}.properties are loaded
     springProfile: environmentName
@@ -596,7 +589,6 @@ module processes 'app/processes-springboot.bicep' = {
     enableSqlDatabase: enableSqlDatabase
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
-    sqlAdminLogin: sqlAdminLogin
     // Flyway configuration
     flywayValidateOnMigrate: flywayValidateOnMigrate
     // Optional env vars (can be extended later)

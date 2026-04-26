@@ -57,9 +57,6 @@ param sqlServerFqdn string = ''
 @description('SQL Database name')
 param sqlDatabaseName string = ''
 
-@description('SQL admin login username')
-param sqlAdminLogin string = ''
-
 @description('Flyway validate on migrate (set to false if migrations were removed/refactored)')
 param flywayValidateOnMigrate string = 'true'
 
@@ -198,8 +195,6 @@ module processes '../modules/containerApp.bicep' = {
     envVars: combinedEnv
     // No CORS configuration needed for processes service
     corsAllowedOrigins: ''
-    // No Key Vault configuration needed for processes service
-    keyVaultName: ''
     keyVaultEndpoint: ''
     keyVaultSecrets: []
     tags: union(tags, {

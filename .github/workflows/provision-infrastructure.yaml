@@ -200,6 +200,12 @@ jobs:
             echo "✓ ENABLE_VNET_INTEGRATION configured: ${{ vars.ENABLE_VNET_INTEGRATION }}"
           fi
 
+          # Set monitoring flag (controls Log Analytics + Application Insights creation)
+          if [ -n "${{ vars.ENABLE_MONITORING || '' }}" ]; then
+            azd env set ENABLE_MONITORING "${{ vars.ENABLE_MONITORING }}"
+            echo "✓ ENABLE_MONITORING configured: ${{ vars.ENABLE_MONITORING }}"
+          fi
+
       - name: Ensure ACR exists (preprovision)
         shell: bash
         run: |

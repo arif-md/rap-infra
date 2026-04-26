@@ -17,9 +17,6 @@ param administratorLogin string = 'sqladmin'
 @secure()
 param administratorPassword string
 
-@description('Enable Azure AD authentication only (passwordless)')
-param azureAdOnlyAuthentication bool = false
-
 @description('Azure AD admin object ID (user or service principal)')
 param azureAdAdminObjectId string = ''
 

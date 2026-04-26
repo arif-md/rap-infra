@@ -25,9 +25,6 @@ param minReplicas int = 1
 param maxReplicas int = 3
 param acrLoginServer string
 
-@description('Key Vault name for secret references (optional)')
-param keyVaultName string = ''
-
 @description('Key Vault endpoint URI (e.g., https://myvault.vault.azure.net/)')
 param keyVaultEndpoint string = ''
 
