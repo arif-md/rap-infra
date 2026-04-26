@@ -1,11 +1,16 @@
 // ============================================================================
 // Azure App Configuration — Centralized Configuration Store
 // ============================================================================
-// Stores non-secret configuration values (OIDC, AAD, JWT, CORS, frontend).
-// Secrets remain in Key Vault via Container App secretRef.
+// Stores non-secret operational config (JWT settings, CORS, frontend URL)
+// and Key Vault references for secrets (jwt.secret, azure-ad client-secret).
 //
-// Spring Boot reads these properties at startup via:
-//   spring-cloud-azure-starter-appconfiguration-config
+// OIDC/AAD provider configuration is hardcoded in Spring Boot profile-specific
+// application properties (application-dev.properties, application-test.properties,
+// etc.) — not stored here. Those values are environment constants that don't
+// need runtime refresh.
+//
+// Spring Boot reads these entries at startup via:
+//   spring-cloud-azure-starter-appconfiguration-config (bootstrap phase)
 // ============================================================================
 
 @description('App Configuration store name')
@@ -41,53 +46,11 @@ param privateDnsZoneId string = ''
 @description('Principal ID to grant App Configuration Data Reader role (backend managed identity)')
 param readerPrincipalId string
 
-// ---------------------------------------------------------------------------
-// OIDC Provider (Login.gov / Keycloak) configuration
-// ---------------------------------------------------------------------------
-@description('OIDC Provider Authorization Endpoint URL')
-param oidcAuthorizationEndpoint string = ''
-
-@description('OIDC Provider Token Endpoint URL')
-param oidcTokenEndpoint string = ''
-
-@description('OIDC Provider User Info Endpoint URL')
-param oidcUserInfoEndpoint string = ''
-
-@description('OIDC Provider JWK Set URI')
-param oidcJwkSetUri string = ''
-
-@description('OIDC Provider End Session Endpoint (logout)')
-param oidcEndSessionEndpoint string = ''
-
-@description('OIDC Client ID (public client — PKCE)')
-param oidcClientId string = ''
-
-@description('Include id_token_hint on OIDC logout (false for Login.gov)')
-param oidcLogoutIncludeIdTokenHint bool = false
+@description('Label applied to all key-value entries. Must match the Spring Boot profile name (e.g. dev, test, train, prod). bootstrap-{profile}.properties sets label-filter to this value.')
+param environmentLabel string
 
 // ---------------------------------------------------------------------------
-// OIDC additional request parameters (Login.gov-specific)
-// ---------------------------------------------------------------------------
-@description('acr_values request parameter')
-param oidcAcrValues string = ''
-
-@description('prompt request parameter')
-param oidcPrompt string = ''
-
-@description('response_type request parameter')
-param oidcResponseType string = ''
-
-// ---------------------------------------------------------------------------
-// Azure AD / Entra ID (Internal SSO) — endpoints derived from tenant ID
-// ---------------------------------------------------------------------------
-@description('Azure AD client ID')
-param aadClientId string = ''
-
-@description('Azure AD tenant ID (used to derive endpoints)')
-param aadTenantId string = ''
-
-// ---------------------------------------------------------------------------
-// JWT (non-secret settings)
+// JWT (non-secret settings — safe for App Config, support runtime refresh)
 // ---------------------------------------------------------------------------
 @description('JWT issuer string')
 param jwtIssuer string = 'raptor-app'
@@ -107,15 +70,14 @@ param corsAllowedOrigins string = ''
 @description('Frontend URL for redirects')
 param frontendUrl string = ''
 
-// ============================================================================
-// Derived values — Azure AD endpoints computed from tenant ID
-// ============================================================================
-var aadTenantBaseUrl = '${environment().authentication.loginEndpoint}${aadTenantId}'
-var aadAuthorizationEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/authorize'
-var aadTokenEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/token'
-var aadUserInfoEndpoint = 'https://graph.microsoft.com/oidc/userinfo'
-var aadJwkSetUri = '${aadTenantBaseUrl}/discovery/v2.0/keys'
-var aadEndSessionEndpoint = '${aadTenantBaseUrl}/oauth2/v2.0/logout'
+// ---------------------------------------------------------------------------
+// Key Vault — for Key Vault reference entries (secrets resolved by Spring library)
+// ---------------------------------------------------------------------------
+@description('Key Vault endpoint URI (e.g. https://kv-name.vault.azure.net/). Required for KV reference entries.')
+param keyVaultEndpoint string = ''
+
+@description('Enable Azure AD SSO — when true, adds a KV reference entry for the AAD client secret.')
+param enableAadSso bool = true
 
 // ============================================================================
 // App Configuration Store
@@ -143,49 +105,16 @@ resource configStore 'Microsoft.AppConfiguration/configurationStores@2023-03-01'
 }
 
 // ============================================================================
-// Key-Value entries — Spring Boot property names as keys
+// Key-Value entries — operational config only (no OIDC/AAD — those are in
+// Spring Boot profile-specific properties files)
 // ============================================================================
-// These are loaded automatically by spring-cloud-azure-starter-appconfiguration-config
-// using the Spring Cloud Bootstrap mechanism (BootstrapConfiguration in spring.factories).
-//
-// KEY CONVENTION: Keys use the 'app:' prefix (e.g., app:jwt.issuer).
-// The Spring Cloud Azure library's default key-filter (/application/) requires
-// forward slashes which are illegal in ARM resource names (% is forbidden in
-// App Config keys, so URL-encoding doesn't work either). Using 'app:' avoids
-// slashes entirely. The bootstrap config sets selects[0].key-filter=app: and
-// the library appends '*' internally, querying 'app:*'. It then strips the
-// 'app:' prefix so app:jwt.issuer becomes the Spring property jwt.issuer.
-//
-// LABEL CONVENTION: Entries are labeled 'azure' to match the active Spring
-// profile (SPRING_PROFILES_ACTIVE=azure). The library's default label-filter
-// uses active profile names, so no selects override is needed.
+// KEY CONVENTION: 'app:' prefix avoids slashes in ARM resource names.
+//   The library queries 'app:*' and strips the prefix, so
+//   'app:jwt.issuer' → Spring property 'jwt.issuer'.
+// LABEL CONVENTION: environmentLabel (e.g. 'dev') — must match the value in
+//   bootstrap-{profile}.properties label-filter and the Container App's
+//   SPRING_PROFILES_ACTIVE env var.
 // ============================================================================
-
-// Build array of entries, filtering out empty values
-var oidcEntries = !empty(oidcAuthorizationEndpoint) ? [
-  { key: 'spring.security.oauth2.client.provider.oidc-provider.authorization-uri', value: oidcAuthorizationEndpoint }
-  { key: 'spring.security.oauth2.client.provider.oidc-provider.token-uri', value: oidcTokenEndpoint }
-  { key: 'spring.security.oauth2.client.provider.oidc-provider.user-info-uri', value: oidcUserInfoEndpoint }
-  { key: 'spring.security.oauth2.client.provider.oidc-provider.jwk-set-uri', value: oidcJwkSetUri }
-  { key: 'spring.security.oauth2.client.provider.oidc-provider.end-session-endpoint', value: oidcEndSessionEndpoint }
-  { key: 'spring.security.oauth2.client.registration.oidc-provider.client-id', value: oidcClientId }
-  { key: 'oidc.logout.include-id-token-hint', value: string(oidcLogoutIncludeIdTokenHint) }
-] : []
-
-var oidcAdditionalParamEntries = concat(
-  !empty(oidcAcrValues) ? [{ key: 'oidc.addl.req.param.acr.values', value: oidcAcrValues }] : [],
-  !empty(oidcPrompt) ? [{ key: 'oidc.addl.req.param.prompt', value: oidcPrompt }] : [],
-  !empty(oidcResponseType) ? [{ key: 'oidc.addl.req.param.response.type', value: oidcResponseType }] : []
-)
-
-var aadEntries = !empty(aadClientId) ? [
-  { key: 'spring.security.oauth2.client.provider.azure-ad.authorization-uri', value: aadAuthorizationEndpoint }
-  { key: 'spring.security.oauth2.client.provider.azure-ad.token-uri', value: aadTokenEndpoint }
-  { key: 'spring.security.oauth2.client.provider.azure-ad.user-info-uri', value: aadUserInfoEndpoint }
-  { key: 'spring.security.oauth2.client.provider.azure-ad.jwk-set-uri', value: aadJwkSetUri }
-  { key: 'app.azure-ad.end-session-endpoint', value: aadEndSessionEndpoint }
-  { key: 'spring.security.oauth2.client.registration.azure-ad.client-id', value: aadClientId }
-] : []
 
 var jwtEntries = [
   { key: 'jwt.issuer', value: jwtIssuer }
@@ -201,31 +130,61 @@ var frontendEntries = !empty(frontendUrl) ? [
   { key: 'frontend.url', value: frontendUrl }
 ] : []
 
-var allEntries = concat(oidcEntries, oidcAdditionalParamEntries, aadEntries, jwtEntries, corsEntries, frontendEntries)
+var allEntries = concat(jwtEntries, corsEntries, frontendEntries)
 
-// Deploy key-value pairs
-// ARM resource name format: {key}${label}
-//   - Key uses 'app:' prefix (no slashes to avoid ARM naming issues)
-//   - Label 'azure' appended after $ separator
-// Example: app:jwt.issuer with label azure → app:jwt.issuer$azure
+// Plain key-value pairs (non-secret operational config)
+// ARM resource name: app:{key}${environmentLabel}
 resource keyValues 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = [for (entry, index) in allEntries: {
   parent: configStore
-  name: 'app:${entry.key}$azure'
+  name: 'app:${entry.key}$${environmentLabel}'
   properties: {
     value: entry.value
   }
 }]
 
-// Sentinel key — Spring Cloud Azure App Config monitors this key for changes.
-// When its value changes, the library refreshes all configuration properties.
-// The value is a hash of all entry values so it changes whenever any config changes.
+// Sentinel key — Spring Cloud Azure App Config monitors this key every 30 seconds.
+// When its value changes (because allEntries changed), the library refreshes all
+// properties without a container restart.
 var sentinelValue = uniqueString(string(allEntries))
 
 resource sentinel 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = {
   parent: configStore
-  name: 'app:sentinel$azure'
+  name: 'app:sentinel$${environmentLabel}'
   properties: {
     value: sentinelValue
+  }
+}
+
+// ============================================================================
+// Key Vault reference entries — secrets resolved at Spring Boot startup
+// ============================================================================
+// These entries use content-type 'application/vnd.microsoft.appconfig.keyvaultref+json'
+// which tells the Spring Cloud Azure App Config library to call Key Vault via
+// the managed identity to retrieve the actual secret value. The resolved value
+// is exposed as a Spring property — no env var, no Container App secretRef needed.
+//
+// Requirements: backend managed identity must have Key Vault Secrets User RBAC
+// role OR a Key Vault access policy with 'get' permission (set by ensure-identities.sh).
+// ============================================================================
+
+// jwt.secret — required for JWT signing/verification (JwtTokenUtil @Value("${jwt.secret}"))
+resource kvRefJwtSecret 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = if (!empty(keyVaultEndpoint)) {
+  parent: configStore
+  name: 'app:jwt.secret$${environmentLabel}'
+  properties: {
+    value: '{"uri":"${keyVaultEndpoint}secrets/jwt-secret"}'
+    contentType: 'application/vnd.microsoft.appconfig.keyvaultref+json;charset=utf-8'
+  }
+}
+
+// spring.security.oauth2.client.registration.azure-ad.client-secret
+// — required for Azure AD authorization_code flow
+resource kvRefAadClientSecret 'Microsoft.AppConfiguration/configurationStores/keyValues@2023-03-01' = if (!empty(keyVaultEndpoint) && enableAadSso) {
+  parent: configStore
+  name: 'app:spring.security.oauth2.client.registration.azure-ad.client-secret$${environmentLabel}'
+  properties: {
+    value: '{"uri":"${keyVaultEndpoint}secrets/aad-client-secret"}'
+    contentType: 'application/vnd.microsoft.appconfig.keyvaultref+json;charset=utf-8'
   }
 }
 

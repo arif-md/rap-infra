@@ -136,38 +136,8 @@ param sqlDatabaseTier string = 'Basic'
 @allowed(['free', 'developer', 'standard', 'premium'])
 param appConfigSku string = 'developer'
 
-@description('OIDC Provider Authorization Endpoint URL')
-param oidcAuthorizationEndpoint string = ''
-
-@description('OIDC Provider Token Endpoint URL')
-param oidcTokenEndpoint string = ''
-
-@description('OIDC Provider User Info Endpoint URL')
-param oidcUserInfoEndpoint string = ''
-
-@description('OIDC Provider JWK Set URI')
-param oidcJwkSetUri string = ''
-
-@description('OIDC Provider End Session Endpoint (for logout)')
-param oidcEndSessionEndpoint string = ''
-
-@description('OIDC Client ID (Public client - no secret needed for PKCE)')
-param oidcClientId string = ''
-
-@description('OIDC additional request parameters (optional - provider-specific)')
-param oidcAcrValues string = ''
-param oidcPrompt string = ''
-param oidcResponseType string = ''
-
-@description('Azure AD / Entra ID Configuration (Internal User Login - endpoints derived from tenant ID)')
-param aadClientId string = ''
-@secure()
-param aadClientSecret string = ''
-param aadTenantId string = ''
-
-@description('JWT Secret Key for signing tokens (will be stored in Key Vault)')
-@secure()
-param jwtSecret string = ''
+@description('Enable Azure AD / Entra ID SSO. When true, Bicep writes an App Config KV reference entry for the AAD client secret. Requires the aad-client-secret KV secret to exist (seeded by ensure-keyvault.sh).')
+param enableAadSso bool = false
 
 @description('JWT Issuer (default: raptor-app)')
 param jwtIssuer string = 'raptor-app'
@@ -305,26 +275,18 @@ module appConfiguration 'shared/app-configuration.bicep' = {
     location: location
     tags: tags
     sku: resolvedAppConfigSku
+    // Label = environment name — must match SPRING_PROFILES_ACTIVE and bootstrap-{profile}.properties label-filter
+    environmentLabel: environmentName
     // Grant backend managed identity read access
     readerPrincipalId: backendIdentity.properties.principalId
     // Private endpoint — only when VNet integration is enabled
     enablePrivateEndpoint: enableVnetIntegration
     privateEndpointSubnetId: enableVnetIntegration ? vnet.outputs.privateEndpointsSubnetId : ''
     privateDnsZoneId: enableVnetIntegration ? appConfigPrivateDnsZone.outputs.privateDnsZoneId : ''
-    // OIDC provider configuration
-    oidcAuthorizationEndpoint: oidcAuthorizationEndpoint
-    oidcTokenEndpoint: oidcTokenEndpoint
-    oidcUserInfoEndpoint: oidcUserInfoEndpoint
-    oidcJwkSetUri: oidcJwkSetUri
-    oidcEndSessionEndpoint: oidcEndSessionEndpoint
-    oidcClientId: oidcClientId
-    oidcAcrValues: oidcAcrValues
-    oidcPrompt: oidcPrompt
-    oidcResponseType: oidcResponseType
-    // Azure AD / Entra ID
-    aadClientId: aadClientId
-    aadTenantId: aadTenantId
-    // JWT (non-secret settings)
+    // Key Vault endpoint — used to write KV reference entries (jwt.secret, aad-client-secret)
+    keyVaultEndpoint: existingKeyVault.properties.vaultUri
+    enableAadSso: enableAadSso
+    // JWT (non-secret operational settings)
     jwtIssuer: jwtIssuer
     jwtAccessTokenExpirationMinutes: jwtAccessTokenExpirationMinutes
     jwtRefreshTokenExpirationDays: jwtRefreshTokenExpirationDays
@@ -539,14 +501,14 @@ module backend 'app/backend-springboot.bicep' = {
     sqlServerFqdn: enableSqlDatabase ? sqlDatabase!.outputs.sqlServerFqdn : ''
     sqlDatabaseName: enableSqlDatabase ? sqlDatabase!.outputs.sqlDatabaseName : ''
     sqlAdminLogin: sqlAdminLogin
-    // Key Vault configuration for secrets only (jwt-secret, aad-client-secret)
+    // Key Vault — informational only; secrets are loaded via App Config KV references at startup
     keyVaultName: resolvedKeyVaultName
     keyVaultEndpoint: existingKeyVault.properties.vaultUri
-    // Azure App Configuration — non-secret config loaded by Spring Cloud Azure at startup
+    // Spring profile — matches environmentName (dev/test/train/prod)
+    // Controls which application-{profile}.properties and bootstrap-{profile}.properties are loaded
+    springProfile: environmentName
+    // Azure App Configuration — non-secret config + KV references loaded by Spring Cloud Azure at startup
     appConfigEndpoint: appConfiguration.outputs.endpoint
-    // JWT and AAD secrets (stay in Key Vault — not in App Config)
-    jwtSecret: jwtSecret
-    aadClientSecret: aadClientSecret
     // CORS: Used at Container App ingress level (also stored in App Config for Spring Boot)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : computedFrontendUrl
     // Optional env vars (can be extended later)

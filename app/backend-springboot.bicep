@@ -63,22 +63,17 @@ param sqlDatabaseName string = ''
 @description('SQL admin login username')
 param sqlAdminLogin string = ''
 
-@description('Key Vault name for secrets (OIDC client secret, JWT secret)')
+@description('Key Vault name (informational — secrets are fetched via App Config KV references, not Container App secretRefs)')
 param keyVaultName string = ''
 
-@description('Key Vault endpoint URI (e.g., https://myvault.vault.azure.net/)')
+@description('Key Vault endpoint URI (informational — used only if additional secretRefs are added in future)')
 param keyVaultEndpoint string = ''
 
-@description('Azure App Configuration endpoint (centralised non-secret config)')
+@description('Azure App Configuration endpoint (all non-secret config + KV references loaded by Spring Cloud Azure at startup)')
 param appConfigEndpoint string = ''
 
-@description('JWT signing secret (stays in Key Vault — not in App Config)')
-@secure()
-param jwtSecret string = ''
-
-@description('Azure AD client secret (stays in Key Vault — not in App Config)')
-@secure()
-param aadClientSecret string = ''
+@description('Active Spring Boot profile — matches the Azure environment name (dev/test/train/prod)')
+param springProfile string = 'dev'
 
 @description('CORS Allowed Origins (for Container App ingress-level CORS)')
 param corsAllowedOrigins string = ''
@@ -105,7 +100,7 @@ resource uai 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' exist
 var baseEnvArray = [
   {
     name: 'SPRING_PROFILES_ACTIVE'
-    value: 'azure'
+    value: springProfile
   }
   {
     name: 'SERVER_PORT'
@@ -165,36 +160,10 @@ var appConfigEnv = !empty(appConfigEndpoint) ? [
   }
 ] : []
 
-// AAD client secret (stays in Key Vault via secretRef — NOT in App Config)
-var aadSecretEnv = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
-  {
-    name: 'AZURE_AD_CLIENT_SECRET'
-    secretRef: 'aad-client-secret'
-  }
-] : []
-
-// JWT secret (stays in Key Vault via secretRef — only when jwtSecret param is provided)
-var jwtSecretEnv = (!empty(keyVaultName) && !empty(jwtSecret)) ? [
-  {
-    name: 'JWT_SECRET'
-    secretRef: 'jwt-secret'
-  }
-] : []
-
-// Combine base env + App Config + App Insights + SQL + secrets + caller-provided env vars
-var combinedEnv = concat(baseEnvArray, appConfigEnv, appInsightsEnv, sqlEnv, jwtSecretEnv, aadSecretEnv, envVars)
-
-// Key Vault secrets to reference — only include each secret if the value was provided
-// (prevents Container Apps deployment failure when secrets don't exist in KV)
-var jwtKvSecret = (!empty(keyVaultName) && !empty(jwtSecret)) ? [
-  { name: 'jwt-secret' }
-] : []
-
-var aadSecret = (!empty(keyVaultName) && !empty(aadClientSecret)) ? [
-  { name: 'aad-client-secret' }
-] : []
-
-var kvSecrets = concat(jwtKvSecret, aadSecret)
+// Combine base env + App Config + App Insights + SQL + caller-provided env vars
+// Secrets (jwt.secret, azure-ad client-secret) are resolved at startup via
+// App Config Key Vault references — no Container App secretRefs needed.
+var combinedEnv = concat(baseEnvArray, appConfigEnv, appInsightsEnv, sqlEnv, envVars)
 
 module backend '../modules/containerApp.bicep' = {
   name: 'backendContainer'
@@ -223,10 +192,8 @@ module backend '../modules/containerApp.bicep' = {
     envVars: combinedEnv
     // CORS handled by Spring Boot CorsFilter (not ingress level) to avoid double-CORS conflicts
     // corsAllowedOrigins is instead passed as CORS_ALLOWED_ORIGINS env var above
-    // Key Vault configuration for secret references
-    keyVaultName: keyVaultName
-    keyVaultEndpoint: keyVaultEndpoint
-    keyVaultSecrets: kvSecrets
+    // No KV secretRefs — secrets (jwt.secret, azure-ad client-secret) are resolved
+    // at Spring Boot startup via App Config Key Vault references using managed identity.
     tags: union(tags, {
       'azd-service-name': 'backend'
     })

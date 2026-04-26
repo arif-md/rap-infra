@@ -80,44 +80,8 @@
       "appConfigSku": {
         "value": "${APP_CONFIG_SKU=developer}"
       },
-      "oidcAuthorizationEndpoint": {
-        "value": "${OIDC_AUTHORIZATION_ENDPOINT}"
-      },
-      "oidcTokenEndpoint": {
-        "value": "${OIDC_TOKEN_ENDPOINT}"
-      },
-      "oidcUserInfoEndpoint": {
-        "value": "${OIDC_USER_INFO_ENDPOINT}"
-      },
-      "oidcJwkSetUri": {
-        "value": "${OIDC_JWK_SET_URI}"
-      },
-      "oidcEndSessionEndpoint": {
-        "value": "${OIDC_END_SESSION_ENDPOINT}"
-      },
-      "oidcClientId": {
-        "value": "${OIDC_CLIENT_ID}"
-      },
-      "oidcAcrValues": {
-        "value": "${OIDC_ADDL_REQ_PARAM_ACR_VALUES=}"
-      },
-      "oidcPrompt": {
-        "value": "${OIDC_ADDL_REQ_PARAM_PROMPT=}"
-      },
-      "oidcResponseType": {
-        "value": "${OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE=}"
-      },
-      "aadClientId": {
-        "value": "${AZURE_AD_CLIENT_ID=}"
-      },
-      "aadClientSecret": {
-        "value": "${AZURE_AD_CLIENT_SECRET=}"
-      },
-      "aadTenantId": {
-        "value": "${AZURE_AD_TENANT_ID=}"
-      },
-      "jwtSecret": {
-        "value": "${JWT_SECRET}"
+      "enableAadSso": {
+        "value": "${ENABLE_AAD_SSO=true}"
       },
       "jwtIssuer": {
         "value": "${JWT_ISSUER=raptor-app}"

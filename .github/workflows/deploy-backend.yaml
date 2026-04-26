@@ -165,53 +165,16 @@ jobs:
             echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
           fi
           
-          # Set OIDC Provider Configuration (required for backend authentication)
-          if [ -n "${{ vars.OIDC_AUTHORIZATION_ENDPOINT || '' }}" ]; then
-            azd env set OIDC_AUTHORIZATION_ENDPOINT "${{ vars.OIDC_AUTHORIZATION_ENDPOINT }}"
-          fi
-          if [ -n "${{ vars.OIDC_TOKEN_ENDPOINT || '' }}" ]; then
-            azd env set OIDC_TOKEN_ENDPOINT "${{ vars.OIDC_TOKEN_ENDPOINT }}"
-          fi
-          if [ -n "${{ vars.OIDC_USER_INFO_ENDPOINT || '' }}" ]; then
-            azd env set OIDC_USER_INFO_ENDPOINT "${{ vars.OIDC_USER_INFO_ENDPOINT }}"
-          fi
-          if [ -n "${{ vars.OIDC_JWK_SET_URI || '' }}" ]; then
-            azd env set OIDC_JWK_SET_URI "${{ vars.OIDC_JWK_SET_URI }}"
-          fi
-          if [ -n "${{ vars.OIDC_END_SESSION_ENDPOINT || '' }}" ]; then
-            azd env set OIDC_END_SESSION_ENDPOINT "${{ vars.OIDC_END_SESSION_ENDPOINT }}"
-          fi
-          if [ -n "${{ vars.OIDC_CLIENT_ID || '' }}" ]; then
-            azd env set OIDC_CLIENT_ID "${{ vars.OIDC_CLIENT_ID }}"
-          fi
-          
-          # Set OIDC secrets
+          # -----------------------------------------------------------------------
+          # Secrets for Key Vault seeding (ensure-keyvault.sh — pre-provision hook).
+          # NOT passed to Bicep parameters. Used only to seed KV secrets on first deploy.
+          # Spring Boot reads these at startup via App Config KV references using managed identity.
+          # -----------------------------------------------------------------------
           if [ -n "${{ secrets.OIDC_CLIENT_SECRET || '' }}" ]; then
             azd env set OIDC_CLIENT_SECRET "${{ secrets.OIDC_CLIENT_SECRET }}"
           fi
           if [ -n "${{ secrets.JWT_SECRET || '' }}" ]; then
             azd env set JWT_SECRET "${{ secrets.JWT_SECRET }}"
-          fi
-          
-          # Set OIDC additional request parameters (Login.gov specific)
-          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_ACR_VALUES "${{ vars.OIDC_ADDL_REQ_PARAM_ACR_VALUES }}"
-          fi
-          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_PROMPT "${{ vars.OIDC_ADDL_REQ_PARAM_PROMPT }}"
-          fi
-          if [ -n "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE || '' }}" ]; then
-            azd env set OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE "${{ vars.OIDC_ADDL_REQ_PARAM_RESPONSE_TYPE }}"
-          fi
-          
-          # Set Azure AD (Entra ID) Configuration (internal SSO - endpoints derived from tenant ID)
-          if [ -n "${{ vars.AZURE_AD_CLIENT_ID || '' }}" ]; then
-            azd env set AZURE_AD_CLIENT_ID "${{ vars.AZURE_AD_CLIENT_ID }}"
-            echo "✓ AZURE_AD_CLIENT_ID configured"
-          fi
-          # Reuse existing AZURE_TENANT_ID secret (same tenant for Azure CLI login and AAD SSO)
-          if [ -n "${{ secrets.AZURE_TENANT_ID || '' }}" ]; then
-            azd env set AZURE_AD_TENANT_ID "${{ secrets.AZURE_TENANT_ID }}"
           fi
           if [ -n "${{ secrets.AZURE_AD_CLIENT_SECRET || '' }}" ]; then
             azd env set AZURE_AD_CLIENT_SECRET "${{ secrets.AZURE_AD_CLIENT_SECRET }}"
