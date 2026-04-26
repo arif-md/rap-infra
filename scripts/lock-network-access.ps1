@@ -43,19 +43,30 @@ if ($appConfigName) {
 }
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
-# Key Vault public access is intentionally NOT disabled here, even in VNet mode.
+# Key Vault has a private endpoint (pe-kv-*) and a linked private DNS zone
+# (privatelink.vaultcore.azure.net). Containers inside the VNet resolve the KV
+# hostname to the private endpoint IP, so public access can be safely disabled.
 #
-# Reason: there is no Key Vault private endpoint in the current architecture.
-# The Key Vault is managed outside azd (by ensure-keyvault.sh) and no private
-# endpoint is provisioned for it. Spring Cloud Azure App Config resolves KV
-# references (jwt.secret, aad-client-secret) at Spring Boot startup by calling
-# the KV URI directly from the container. Without a private endpoint, the
-# container must reach KV over the public endpoint — disabling it causes
-# startup failures.
-#
-# To lock down KV in VNet mode, first provision a KV private endpoint in the
-# same subnet and add a privatelink.vaultcore.azure.net DNS zone. Then this
-# script can safely set --public-network-access Disabled.
-Write-Host "  Key Vault: public access left enabled (no private endpoint provisioned — required for App Config KV reference resolution)." -ForegroundColor Gray
+# Guard: verify the private endpoint actually exists before locking — this
+# prevents startup failures if someone runs the script against an environment
+# where the KV private endpoint was not provisioned (e.g. VNet disabled later).
+if ($kvName) {
+    $kvPeName = "pe-$kvName"
+    $kvPe = az network private-endpoint show -g $rg -n $kvPeName -o json 2>$null | ConvertFrom-Json
+    if ($kvPe -and $kvPe.provisioningState -eq 'Succeeded') {
+        Write-Host "  Disabling Key Vault public access: $kvName" -ForegroundColor Yellow
+        az keyvault update `
+            --name $kvName `
+            --resource-group $rg `
+            --public-network-access Disabled `
+            --output none
+        Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
+    } else {
+        Write-Host "  Key Vault: private endpoint '$kvPeName' not found or not Succeeded — public access left enabled." -ForegroundColor Yellow
+        Write-Host "             Run 'azd provision' to create the private endpoint, then re-run this script." -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  WARNING: kvName not in azd env — skipping Key Vault lockdown." -ForegroundColor Yellow
+}
 
 Write-Host "==> Network lockdown complete." -ForegroundColor Green
