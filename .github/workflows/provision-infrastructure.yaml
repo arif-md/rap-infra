@@ -110,14 +110,16 @@ jobs:
           fi
 
       - name: Prepare azd environment
+        env:
+          ALL_VARS_JSON: ${{ toJson(vars) }}
+          ALL_SECRETS_JSON: ${{ toJson(secrets) }}
         run: |
-          azd env new $AZURE_ENV_NAME --no-prompt || true
-          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
-          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
-          if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
-            azd env set AZURE_ACR_RESOURCE_GROUP "$AZURE_ACR_RESOURCE_GROUP"
-          fi
-          # Derive location from the resource group and set it for preprovision scripts
+          # ── Bootstrap ──────────────────────────────────────────────────────────
+          # Must happen first: create the azd env and wire the subscription ID.
+          azd env new "$AZURE_ENV_NAME" --no-prompt || true
+          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+          # Derive AZURE_LOCATION from the resource group (computed — not a var).
           RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
           if [ -n "$RG_LOC" ]; then
             echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
@@ -125,86 +127,37 @@ jobs:
           else
             echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
           fi
-          azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          
-          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
-          if [ -n "$KEY_VAULT_NAME" ]; then
-            azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME"
-            echo "Using provided KEY_VAULT_NAME: $KEY_VAULT_NAME"
-          else
-            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
-          fi
-          
-          # -----------------------------------------------------------------------
-          # Secrets for Key Vault seeding (ensure-keyvault.sh — pre-provision hook)
-          # These are NOT passed to Bicep parameters. They are used only by the
-          # ensure-keyvault.sh script to seed KV secrets on first deploy.
-          # Spring Boot reads these secrets at startup via App Config KV references
-          # using managed identity — no Container App secretRefs needed.
-          # -----------------------------------------------------------------------
-          if [ -n "${{ secrets.OIDC_CLIENT_SECRET || '' }}" ]; then
-            azd env set OIDC_CLIENT_SECRET "${{ secrets.OIDC_CLIENT_SECRET }}"
-            echo "✓ OIDC_CLIENT_SECRET configured (for KV seeding)"
-          fi
-          
-          if [ -n "${{ secrets.JWT_SECRET || '' }}" ]; then
-            azd env set JWT_SECRET "${{ secrets.JWT_SECRET }}"
-            echo "✓ JWT_SECRET configured (for KV seeding)"
-          fi
-          
-          if [ -n "${{ secrets.AZURE_AD_CLIENT_SECRET || '' }}" ]; then
-            azd env set AZURE_AD_CLIENT_SECRET "${{ secrets.AZURE_AD_CLIENT_SECRET }}"
-            echo "✓ AZURE_AD_CLIENT_SECRET configured (for KV seeding)"
-          fi
-          
-          # Set SQL Admin Password - Required for SQL Server resource in main.bicep
-          # This is a @secure() Bicep parameter that requires a value in non-interactive mode (--no-prompt).
-          # Used only for SQL Server admin account; backend application uses passwordless managed identity.
-          if [ -n "${{ secrets.SQL_ADMIN_PASSWORD || '' }}" ]; then
-            azd env set SQL_ADMIN_PASSWORD "${{ secrets.SQL_ADMIN_PASSWORD }}"
-          elif [ -n "${{ vars.SQL_ADMIN_PASSWORD || '' }}" ]; then
-            azd env set SQL_ADMIN_PASSWORD "${{ vars.SQL_ADMIN_PASSWORD }}"
-          else
-            echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
-          fi
-          
-          echo "DEBUG: SQL_AD_GROUP_NAME : ${{ vars.SQL_AD_GROUP_NAME || '' }}"
-          echo "DEBUG: SQL_AD_GROUP_OBJECT_ID : ${{ vars.SQL_AD_GROUP_OBJECT_ID || '' }}"
-          
-          # Set SQL AD security group for human admin access at database level.
-          # The dedicated SQL admin managed identity (created by Bicep) is the server-level AD admin.
-          # The AD group gets db_owner on the database via deployment script — no Directory Readers needed.
-          if [ -n "${{ vars.SQL_AD_GROUP_NAME || '' }}" ]; then
-            azd env set SQL_AD_GROUP_NAME "${{ vars.SQL_AD_GROUP_NAME }}"
-            echo "✓ SQL_AD_GROUP_NAME configured"
-          fi
-          if [ -n "${{ vars.SQL_AD_GROUP_OBJECT_ID || '' }}" ]; then
-            azd env set SQL_AD_GROUP_OBJECT_ID "${{ vars.SQL_AD_GROUP_OBJECT_ID }}"
-            echo "✓ SQL_AD_GROUP_OBJECT_ID configured"
-          fi
-          
-          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
-          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
-            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
-            echo "✓ CUSTOM_DOMAIN_NAME configured: ${{ vars.CUSTOM_DOMAIN_NAME }}"
-          fi
-          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
-            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
-            echo "✓ ENABLE_AZURE_DNS configured: ${{ vars.ENABLE_AZURE_DNS }}"
-          fi
 
-          # Set VNet integration flag (controls private endpoints for SQL, App Config, Key Vault)
-          if [ -n "${{ vars.ENABLE_VNET_INTEGRATION || '' }}" ]; then
-            azd env set ENABLE_VNET_INTEGRATION "${{ vars.ENABLE_VNET_INTEGRATION }}"
-            echo "✓ ENABLE_VNET_INTEGRATION configured: ${{ vars.ENABLE_VNET_INTEGRATION }}"
-          fi
+          # ── Sync ALL GitHub Variables → azd env ────────────────────────────────
+          # Adding a new GitHub repo/environment variable is all that's needed —
+          # no workflow changes required.
+          echo ""
+          echo "── Syncing GitHub Variables → azd env ──────────────────────────────"
+          echo "$ALL_VARS_JSON" | jq -c 'to_entries[]' | while read -r entry; do
+            key=$(echo "$entry" | jq -r '.key')
+            value=$(echo "$entry" | jq -r '.value')
+            if [ -n "$key" ] && [ -n "$value" ]; then
+              azd env set "$key" "$value"
+              echo "  ✓ var: $key = $value"
+            fi
+          done
 
-          # Set monitoring flag (controls Log Analytics + Application Insights creation)
-          if [ -n "${{ vars.ENABLE_MONITORING || '' }}" ]; then
-            azd env set ENABLE_MONITORING "${{ vars.ENABLE_MONITORING }}"
-            echo "✓ ENABLE_MONITORING configured: ${{ vars.ENABLE_MONITORING }}"
-          fi
+          # ── Sync ALL GitHub Secrets → azd env ──────────────────────────────────
+          # GITHUB_TOKEN is skipped (built-in runner token, not a deployment secret).
+          # Values are masked in logs by GitHub Actions automatically.
+          echo ""
+          echo "── Syncing GitHub Secrets → azd env ────────────────────────────────"
+          echo "$ALL_SECRETS_JSON" | jq -c 'to_entries[] | select(.key != "GITHUB_TOKEN")' | while read -r entry; do
+            key=$(echo "$entry" | jq -r '.key')
+            value=$(echo "$entry" | jq -r '.value')
+            if [ -n "$key" ] && [ -n "$value" ]; then
+              azd env set "$key" "$value"
+              echo "  ✓ secret: $key = ***"
+            fi
+          done
+
+          echo ""
+          echo "azd env sync complete."
 
       - name: Ensure ACR exists (preprovision)
         shell: bash
