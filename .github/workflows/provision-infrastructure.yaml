@@ -117,6 +117,7 @@ jobs:
           # ── Bootstrap ──────────────────────────────────────────────────────────
           # Must happen first: create the azd env and wire the subscription ID.
           azd env new "$AZURE_ENV_NAME" --no-prompt || true
+          azd env select "$AZURE_ENV_NAME"
           azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
           # Derive AZURE_LOCATION from the resource group (computed — not a var).
@@ -133,28 +134,28 @@ jobs:
           # no workflow changes required.
           echo ""
           echo "── Syncing GitHub Variables → azd env ──────────────────────────────"
-          echo "$ALL_VARS_JSON" | jq -c 'to_entries[]' | while read -r entry; do
+          while IFS= read -r entry; do
             key=$(echo "$entry" | jq -r '.key')
             value=$(echo "$entry" | jq -r '.value')
             if [ -n "$key" ] && [ -n "$value" ]; then
-              azd env set "$key" "$value"
+              azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set var $key"; }
               echo "  ✓ var: $key = $value"
             fi
-          done
+          done < <(echo "$ALL_VARS_JSON" | jq -c 'to_entries[]')
 
           # ── Sync ALL GitHub Secrets → azd env ──────────────────────────────────
           # GITHUB_TOKEN is skipped (built-in runner token, not a deployment secret).
           # Values are masked in logs by GitHub Actions automatically.
           echo ""
           echo "── Syncing GitHub Secrets → azd env ────────────────────────────────"
-          echo "$ALL_SECRETS_JSON" | jq -c 'to_entries[] | select(.key != "GITHUB_TOKEN")' | while read -r entry; do
+          while IFS= read -r entry; do
             key=$(echo "$entry" | jq -r '.key')
             value=$(echo "$entry" | jq -r '.value')
             if [ -n "$key" ] && [ -n "$value" ]; then
-              azd env set "$key" "$value"
+              azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set secret $key"; }
               echo "  ✓ secret: $key = ***"
             fi
-          done
+          done < <(echo "$ALL_SECRETS_JSON" | jq -c 'to_entries[] | select(.key != "GITHUB_TOKEN")')
 
           echo ""
           echo "azd env sync complete."

@@ -14,21 +14,39 @@
 
 set -e
 
-CUSTOM_DOMAIN=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || true)
-ENABLE_AZURE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
-RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || true)
-SUB=$(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || true)
+# ---------------------------------------------------------------------------
+# Helper: safely read a value from azd env.
+# azd env get-value writes "ERROR: key not found" to STDOUT (not stderr) when
+# a key is missing, so 2>/dev/null alone does not suppress it — the error text
+# flows into the variable. We check the exit code instead.
+# ---------------------------------------------------------------------------
+get_azd_value() {
+    local val
+    val=$(azd env get-value "$1" 2>/dev/null) || { echo ""; return 0; }
+    echo "$val"
+}
+
+# Ensure the correct azd env is selected (AZURE_ENV_NAME is set as a job-level
+# env var in the workflow, so it's available as a shell variable here).
+if [ -n "${AZURE_ENV_NAME:-}" ]; then
+    azd env select "$AZURE_ENV_NAME" 2>/dev/null || true
+fi
+
+CUSTOM_DOMAIN=$(get_azd_value CUSTOM_DOMAIN_NAME)
+ENABLE_AZURE_DNS=$(get_azd_value ENABLE_AZURE_DNS)
+RG=$(get_azd_value AZURE_RESOURCE_GROUP)
+SUB=$(get_azd_value AZURE_SUBSCRIPTION_ID)
 
 # DNS_ZONE_NAME: the parent Azure DNS zone (e.g. "nexgeninc-dev.com").
 # Set this when CUSTOM_DOMAIN_NAME is a subdomain (e.g. "dev.nexgeninc-dev.com").
 # Defaults to CUSTOM_DOMAIN_NAME (root domain scenario).
-DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
+DNS_ZONE=$(get_azd_value DNS_ZONE_NAME)
 [ -z "$DNS_ZONE" ] && DNS_ZONE="$CUSTOM_DOMAIN"
 
 # DNS_RESOURCE_GROUP: resource group that owns the Azure DNS zone.
 # Set to a shared RG (e.g. "rg-raptor-common") to share one zone across environments.
 # Defaults to AZURE_RESOURCE_GROUP.
-DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
+DNS_RG=$(get_azd_value DNS_RESOURCE_GROUP)
 [ -z "$DNS_RG" ] && DNS_RG="$RG"
 
 # Build optional --subscription flag so all az commands target the right sub.
