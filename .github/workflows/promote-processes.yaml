@@ -459,42 +459,20 @@ jobs:
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
       - name: Prepare azd env
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name: ${{ steps.prep.outputs.env }}
+          azure-resource-group: ${{ steps.prep.outputs.rg }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json: ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Set promoted image reference
         shell: bash
         run: |
           set -euo pipefail
-          azd config set alpha.deployment.stacks on
-          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
-          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
-          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
-          # Derive location from the resource group and set it for preprovision scripts
-          RG_LOC=$(az group show -n "${{ steps.prep.outputs.rg }}" --query location -o tsv 2>/dev/null || true)
-          if [ -n "$RG_LOC" ]; then
-            echo "Resolved location from RG '${{ steps.prep.outputs.rg }}': $RG_LOC"
-            azd env set AZURE_LOCATION "$RG_LOC"
-          else
-            echo "Warning: Could not resolve location for RG '${{ steps.prep.outputs.rg }}'"
-          fi
-          # Pass cross-RG override for ACR when configured
-          if [ -n "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
-            azd env set AZURE_ACR_RESOURCE_GROUP "${{ vars.AZURE_ACR_RESOURCE_GROUP }}"
-          else
+          if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          fi
-          # Set Key Vault name if provided (optional - preprovision script will calculate if not set)
-          if [ -n "${{ vars.KEY_VAULT_NAME || '' }}" ]; then
-            azd env set KEY_VAULT_NAME "${{ vars.KEY_VAULT_NAME }}"
-            echo "Using provided KEY_VAULT_NAME: ${{ vars.KEY_VAULT_NAME }}"
-          else
-            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
-          fi
-          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
-          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
-            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
-          fi
-          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
-            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
@@ -869,25 +847,27 @@ jobs:
           DIGEST="${SRC_IMAGE#*@}"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Prepare azd env and deploy
+      - name: Prepare azd env
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name: ${{ steps.prep.outputs.env }}
+          azure-resource-group: ${{ steps.prep.outputs.rg }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json: ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Set promoted image reference
         shell: bash
         run: |
-          azd config set alpha.deployment.stacks on
-          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
-          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
-          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
-          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
-          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
-          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
-            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
-          fi
-          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
-            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          set -euo pipefail
+          if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 
   # ------------------------------
   # Prod Environment
@@ -1090,25 +1070,27 @@ jobs:
           DIGEST="${SRC_IMAGE#*@}"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Prepare azd env and deploy
+      - name: Prepare azd env
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name: ${{ steps.prep.outputs.env }}
+          azure-resource-group: ${{ steps.prep.outputs.rg }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json: ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Set promoted image reference
         shell: bash
         run: |
-          azd config set alpha.deployment.stacks on
-          azd env new ${{ steps.prep.outputs.env }} --no-prompt || true
-          azd env set AZURE_ENV_NAME "${{ steps.prep.outputs.env }}"
-          azd env set AZURE_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          azd env set AZURE_ACR_NAME "${{ steps.prep.outputs.acr }}"
-          azd env set AZURE_LOCATION "${{ steps.prep.outputs.loc }}"
-          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
-          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
-            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
-          fi
-          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
-            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
+          set -euo pipefail
+          if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
+            azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
+          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+
+      - name: Deploy to ${{ steps.prep.outputs.env }}
+        run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
 
       - name: Deployment confirmation
         run: |

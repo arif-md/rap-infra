@@ -95,9 +95,6 @@ jobs:
           echo "AZURE_ACR_NAME=$AZURE_ACR_NAME"
           echo "AZURE_ACR_RESOURCE_GROUP=$AZURE_ACR_RESOURCE_GROUP"
 
-      - name: Enable azd alpha features (deployment stacks)
-        run: azd config set alpha.deployment.stacks on
-
       - name: Ensure AZURE_ENV_NAME default
         run: |
           if [ -z "$AZURE_ENV_NAME" ]; then
@@ -110,55 +107,13 @@ jobs:
           fi
 
       - name: Prepare azd environment
-        env:
-          ALL_VARS_JSON: ${{ toJson(vars) }}
-          ALL_SECRETS_JSON: ${{ toJson(secrets) }}
-        run: |
-          # ── Bootstrap ──────────────────────────────────────────────────────────
-          # Must happen first: create the azd env and wire the subscription ID.
-          azd env new "$AZURE_ENV_NAME" --no-prompt || true
-          azd env select "$AZURE_ENV_NAME"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-
-          # Derive AZURE_LOCATION from the resource group (computed — not a var).
-          RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
-          if [ -n "$RG_LOC" ]; then
-            echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
-            azd env set AZURE_LOCATION "$RG_LOC"
-          else
-            echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
-          fi
-
-          # ── Sync ALL GitHub Variables → azd env ────────────────────────────────
-          # Adding a new GitHub repo/environment variable is all that's needed —
-          # no workflow changes required.
-          echo ""
-          echo "── Syncing GitHub Variables → azd env ──────────────────────────────"
-          while IFS= read -r entry; do
-            key=$(echo "$entry" | jq -r '.key')
-            value=$(echo "$entry" | jq -r '.value')
-            if [ -n "$key" ] && [ -n "$value" ]; then
-              azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set var $key"; }
-              echo "  ✓ var: $key = $value"
-            fi
-          done < <(echo "$ALL_VARS_JSON" | jq -c 'to_entries[]')
-
-          # ── Sync ALL GitHub Secrets → azd env ──────────────────────────────────
-          # GITHUB_TOKEN is skipped (built-in runner token, not a deployment secret).
-          # Values are masked in logs by GitHub Actions automatically.
-          echo ""
-          echo "── Syncing GitHub Secrets → azd env ────────────────────────────────"
-          while IFS= read -r entry; do
-            key=$(echo "$entry" | jq -r '.key')
-            value=$(echo "$entry" | jq -r '.value')
-            if [ -n "$key" ] && [ -n "$value" ]; then
-              azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set secret $key"; }
-              echo "  ✓ secret: $key = ***"
-            fi
-          done < <(echo "$ALL_SECRETS_JSON" | jq -c 'to_entries[] | select(.key != "GITHUB_TOKEN")')
-
-          echo ""
-          echo "azd env sync complete."
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name: ${{ env.AZURE_ENV_NAME }}
+          azure-resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json: ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
 
       - name: Ensure ACR exists (preprovision)
         shell: bash

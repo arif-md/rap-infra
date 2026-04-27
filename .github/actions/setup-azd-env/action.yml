@@ -1,0 +1,90 @@
+name: 'Setup azd environment'
+description: >
+  Bootstrap azd env and bulk-sync all GitHub repository/environment variables and
+  secrets into it. Adding a new GitHub variable or secret is all that is needed to
+  make it available to every workflow — no per-workflow maintenance required.
+
+inputs:
+  azure-env-name:
+    description: 'Resolved azd environment name (e.g. dev, test, prod). Used for azd env new/select.'
+    required: true
+  azure-resource-group:
+    description: 'Azure resource group for this environment. Used to derive AZURE_LOCATION.'
+    required: true
+  azure-subscription-id:
+    description: 'Azure subscription ID. Set before any az CLI calls.'
+    required: true
+  all-vars-json:
+    description: 'toJson(vars) from the calling workflow — serialises all GitHub variables.'
+    required: true
+  all-secrets-json:
+    description: 'toJson(secrets) from the calling workflow — serialises all GitHub secrets.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap and sync all GitHub vars/secrets to azd env
+      shell: bash
+      env:
+        ALL_VARS_JSON: ${{ inputs.all-vars-json }}
+        ALL_SECRETS_JSON: ${{ inputs.all-secrets-json }}
+        AZD_ENV_NAME: ${{ inputs.azure-env-name }}
+        AZD_RG: ${{ inputs.azure-resource-group }}
+        AZD_SUB: ${{ inputs.azure-subscription-id }}
+      run: |
+        set -euo pipefail
+
+        # ── Bootstrap ─────────────────────────────────────────────────────────────
+        # Enable deployment stacks alpha feature (idempotent).
+        azd config set alpha.deployment.stacks on
+
+        # Create (or skip if exists) and select the azd environment.
+        azd env new "$AZD_ENV_NAME" --no-prompt || true
+        azd env select "$AZD_ENV_NAME"
+
+        # Pin the subscription so all subsequent az/azd calls target the right tenant.
+        azd env set AZURE_SUBSCRIPTION_ID "$AZD_SUB"
+        az account set --subscription "$AZD_SUB" 2>/dev/null || true
+
+        # ── Derive AZURE_LOCATION from resource group ──────────────────────────────
+        # AZURE_LOCATION is computed — not stored as a GitHub variable —
+        # because it must match the region of the pre-existing resource group.
+        RG_LOC=$(az group show -n "$AZD_RG" --query location -o tsv 2>/dev/null || true)
+        if [ -n "$RG_LOC" ]; then
+          echo "Resolved location from RG '$AZD_RG': $RG_LOC"
+          azd env set AZURE_LOCATION "$RG_LOC"
+        else
+          echo "Warning: Could not resolve location for RG '$AZD_RG' (RG may not exist yet)"
+        fi
+
+        # ── Sync ALL GitHub Variables → azd env ───────────────────────────────────
+        # Every GitHub repo/environment variable flows through automatically.
+        # Printed values are visible in the run log for troubleshooting.
+        echo ""
+        echo "── Syncing GitHub Variables → azd env ──────────────────────────────"
+        while IFS= read -r entry; do
+          key=$(echo "$entry" | jq -r '.key')
+          value=$(echo "$entry" | jq -r '.value')
+          if [ -n "$key" ] && [ -n "$value" ]; then
+            azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set var $key"; }
+            echo "  ✓ var: $key = $value"
+          fi
+        done < <(echo "$ALL_VARS_JSON" | jq -c 'to_entries[]')
+
+        # ── Sync ALL GitHub Secrets → azd env ─────────────────────────────────────
+        # GITHUB_TOKEN is skipped (built-in runner token, not a deployment secret).
+        # Secret values are automatically masked in GitHub Actions log output.
+        echo ""
+        echo "── Syncing GitHub Secrets → azd env ────────────────────────────────"
+        while IFS= read -r entry; do
+          key=$(echo "$entry" | jq -r '.key')
+          value=$(echo "$entry" | jq -r '.value')
+          if [ -n "$key" ] && [ -n "$value" ]; then
+            azd env set "$key" "$value" || { echo "  ✗ WARN: failed to set secret $key"; }
+            echo "  ✓ secret: $key = ***"
+          fi
+        done < <(echo "$ALL_SECRETS_JSON" | jq -c 'to_entries[] | select(.key != "GITHUB_TOKEN")')
+
+        echo ""
+        echo "✓ azd env sync complete — env: $AZD_ENV_NAME"

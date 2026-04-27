@@ -104,9 +104,6 @@ jobs:
           echo "AZURE_ACR_NAME=$AZURE_ACR_NAME"
           echo "AZURE_ACR_RESOURCE_GROUP=$AZURE_ACR_RESOURCE_GROUP"
 
-      - name: Enable azd alpha features (deployment stacks)
-        run: azd config set alpha.deployment.stacks on
-
       - name: Ensure AZURE_ENV_NAME default
         run: |
           if [ -z "$AZURE_ENV_NAME" ]; then
@@ -126,52 +123,13 @@ jobs:
           fi
 
       - name: Prepare azd environment
-        run: |
-          azd env new $AZURE_ENV_NAME --no-prompt || true
-          azd env set AZURE_ENV_NAME "$AZURE_ENV_NAME"
-          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
-          if [ -n "$AZURE_ACR_RESOURCE_GROUP" ]; then
-            azd env set AZURE_ACR_RESOURCE_GROUP "$AZURE_ACR_RESOURCE_GROUP"
-          fi
-          # Derive location from the resource group and set it for preprovision scripts
-          RG_LOC=$(az group show -n "$AZURE_RESOURCE_GROUP" --query location -o tsv 2>/dev/null || true)
-          if [ -n "$RG_LOC" ]; then
-            echo "Resolved location from RG '$AZURE_RESOURCE_GROUP': $RG_LOC"
-            azd env set AZURE_LOCATION "$RG_LOC"
-          else
-            echo "Warning: Could not resolve location for RG '$AZURE_RESOURCE_GROUP'"
-          fi
-          azd env set AZURE_ACR_NAME "$AZURE_ACR_NAME"
-          azd env set AZURE_SUBSCRIPTION_ID "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          
-          # Set Key Vault name if provided (ensures consistency across preprovision script and Bicep)
-          if [ -n "$KEY_VAULT_NAME" ]; then
-            azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME"
-            echo "Using provided KEY_VAULT_NAME: $KEY_VAULT_NAME"
-          else
-            echo "KEY_VAULT_NAME not set - preprovision script will calculate it"
-          fi
-          
-          # Set SQL Admin Password - Required because 'azd up' provisions ALL infrastructure from main.bicep
-          # Even though this is the "processes deployment" workflow, azd up runs the complete Bicep deployment
-          # which includes SQL Server (a @secure() parameter requiring a value in non-interactive mode).
-          # Note: Processes application uses passwordless managed identity auth, not this admin password.
-          if [ -n "${{ secrets.SQL_ADMIN_PASSWORD || '' }}" ]; then
-            azd env set SQL_ADMIN_PASSWORD "${{ secrets.SQL_ADMIN_PASSWORD }}"
-          elif [ -n "${{ vars.SQL_ADMIN_PASSWORD || '' }}" ]; then
-            azd env set SQL_ADMIN_PASSWORD "${{ vars.SQL_ADMIN_PASSWORD }}"
-          else
-            echo "WARNING: SQL_ADMIN_PASSWORD not set. Deployment may fail if SQL resources need to be updated."
-          fi
-          
-          # Set Custom Domain configuration (optional - for DNS zone and TLS binding)
-          if [ -n "${{ vars.CUSTOM_DOMAIN_NAME || '' }}" ]; then
-            azd env set CUSTOM_DOMAIN_NAME "${{ vars.CUSTOM_DOMAIN_NAME }}"
-            echo "Using CUSTOM_DOMAIN_NAME: ${{ vars.CUSTOM_DOMAIN_NAME }}"
-          fi
-          if [ -n "${{ vars.ENABLE_AZURE_DNS || '' }}" ]; then
-            azd env set ENABLE_AZURE_DNS "${{ vars.ENABLE_AZURE_DNS }}"
-          fi
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name: ${{ env.AZURE_ENV_NAME }}
+          azure-resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json: ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
 
       - name: Accept image from repository_dispatch (optional)
         if: github.event_name == 'repository_dispatch' && github.event.action == 'processes-image-pushed'
