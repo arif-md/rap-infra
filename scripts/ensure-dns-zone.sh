@@ -17,6 +17,7 @@ set -e
 CUSTOM_DOMAIN=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || true)
 ENABLE_AZURE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
 RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || true)
+SUB=$(azd env get-value AZURE_SUBSCRIPTION_ID 2>/dev/null || true)
 
 # DNS_ZONE_NAME: the parent Azure DNS zone (e.g. "nexgeninc-dev.com").
 # Set this when CUSTOM_DOMAIN_NAME is a subdomain (e.g. "dev.nexgeninc-dev.com").
@@ -30,6 +31,13 @@ DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
 DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
 [ -z "$DNS_RG" ] && DNS_RG="$RG"
 
+# Build optional --subscription flag so all az commands target the right sub.
+SUB_ARG=""
+if [ -n "$SUB" ]; then
+  SUB_ARG="--subscription $SUB"
+  az account set --subscription "$SUB" 2>/dev/null || true
+fi
+
 if [ -z "$CUSTOM_DOMAIN" ] || [ "$ENABLE_AZURE_DNS" != "true" ]; then
     echo "  DNS Zone not needed (CUSTOM_DOMAIN_NAME='$CUSTOM_DOMAIN', ENABLE_AZURE_DNS='$ENABLE_AZURE_DNS')."
     exit 0
@@ -42,30 +50,30 @@ fi
 
 # Verify the resource group exists — this script will NOT create it.
 # The deploying principal typically lacks RG create/delete permissions.
-if ! az group show -n "$DNS_RG" -o none 2>/dev/null; then
+if ! az group show -n "$DNS_RG" $SUB_ARG -o none 2>/dev/null; then
     echo "  ERROR: Resource group '$DNS_RG' does not exist."
     echo "  Create it first (requires Owner/Contributor on the subscription), then re-run."
     exit 1
 fi
 
 # Check if DNS zone already exists
-EXISTING=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" --query "name" -o tsv 2>/dev/null || true)
+EXISTING=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" $SUB_ARG --query "name" -o tsv 2>/dev/null || true)
 if [ -n "$EXISTING" ]; then
-    NS=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" --query "nameServers[0]" -o tsv 2>/dev/null || true)
+    NS=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" $SUB_ARG --query "nameServers[0]" -o tsv 2>/dev/null || true)
     echo "  DNS Zone '$DNS_ZONE' already exists in '$DNS_RG' (NS: $NS ...)."
     exit 0
 fi
 
 # Create the DNS zone
 echo "  Creating DNS Zone '$DNS_ZONE' in '$DNS_RG'..."
-az network dns zone create -g "$DNS_RG" -n "$DNS_ZONE" --only-show-errors >/dev/null 2>&1
+az network dns zone create -g "$DNS_RG" -n "$DNS_ZONE" $SUB_ARG --only-show-errors >/dev/null 2>&1
 
 if [ $? -ne 0 ]; then
     echo "  Failed to create DNS Zone '$DNS_ZONE'."
     exit 1
 fi
 
-NAMESERVERS=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" --query "nameServers" -o json 2>/dev/null || true)
+NAMESERVERS=$(az network dns zone show -g "$DNS_RG" -n "$DNS_ZONE" $SUB_ARG --query "nameServers" -o json 2>/dev/null || true)
 echo "  DNS Zone created. Nameservers:"
 echo "  $NAMESERVERS"
 echo "  ACTION REQUIRED: Delegate '$DNS_ZONE' to these nameservers at your registrar."
