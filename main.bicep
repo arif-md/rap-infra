@@ -120,6 +120,9 @@ param enableMonitoring bool = true
 @description('Skip SQL setup ACI script (role assignments + schema bootstrap). Use after first successful deploy for faster iterations.')
 param skipSqlSetup bool = false
 
+@description('Optional: force SQL setup to re-run even when managed identity client IDs have not changed. Required after azd down/up when the SQL database is recreated but MIs are reused. Set FORCE_SQL_SETUP_TAG to any unique value (e.g. current date), run azd up, then clear it.')
+param forceSqlSetupTag string = ''
+
 @description('Custom domain name for rule-based routing (e.g., nexgeninc-dev.com). When empty, custom domain is not configured.')
 param customDomainName string = ''
 
@@ -672,6 +675,7 @@ module sqlSetup 'modules/sql-setup.bicep' = if (enableSqlDatabase && !skipSqlSet
     } : {}
     backendIdentityName: backendIdentityName
     processesIdentityName: processesIdentityName
+    forceSqlSetupTag: forceSqlSetupTag
   }
 }
 

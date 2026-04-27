@@ -82,13 +82,24 @@ Write-Host "✓ CAE VNet guard completed" -ForegroundColor Green
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-Write-Host "`n[8/8] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
+Write-Host "`n[8/9] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-identities.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Identity pre-provisioning failed!" -ForegroundColor Red
     exit 1
 }
 Write-Host "✓ Identity pre-provisioning completed" -ForegroundColor Green
+
+# Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
+# Prevents the sql-setup ACI from being a no-op when the DB was recreated but
+# managed identity clientIds did not change (content-based detection limitation).
+Write-Host "`n[9/9] Checking SQL setup state..." -ForegroundColor Yellow
+& "$PSScriptRoot\ensure-sql-setup.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ SQL setup check failed!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ SQL setup check completed" -ForegroundColor Green
 
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0

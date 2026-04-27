@@ -94,6 +94,9 @@
       },
       "customDomainName": {
         "value": "${CUSTOM_DOMAIN_NAME=}"
+      },
+      "forceSqlSetupTag": {
+        "value": "${FORCE_SQL_SETUP_TAG=}"
       }
     }
 }

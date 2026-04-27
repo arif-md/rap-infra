@@ -80,12 +80,22 @@ success "CAE VNet guard completed"
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-step "[8/8] Pre-provisioning backend identity for Key Vault access..."
+step "[8/9] Pre-provisioning backend identity for Key Vault access..."
 if ! "${SCRIPT_DIR}/ensure-identities.sh"; then
     error "Identity pre-provisioning failed!"
     exit 1
 fi
 success "Identity pre-provisioning completed"
+
+# Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
+# Prevents the sql-setup ACI from being a no-op when the DB was recreated but
+# managed identity clientIds did not change (content-based detection limitation).
+step "[9/9] Checking SQL setup state..."
+if ! "${SCRIPT_DIR}/ensure-sql-setup.sh"; then
+    error "SQL setup check failed!"
+    exit 1
+fi
+success "SQL setup check completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0

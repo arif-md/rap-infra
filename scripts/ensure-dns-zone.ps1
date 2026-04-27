@@ -14,49 +14,60 @@
 
 $ErrorActionPreference = "Stop"
 
-$customDomain = azd env get-value CUSTOM_DOMAIN_NAME 2>$null
-$enableAzureDns = azd env get-value ENABLE_AZURE_DNS 2>$null
-$rg = azd env get-value AZURE_RESOURCE_GROUP 2>$null
+$customDomain    = azd env get-value CUSTOM_DOMAIN_NAME 2>$null
+$enableAzureDns  = azd env get-value ENABLE_AZURE_DNS 2>$null
+$rg              = azd env get-value AZURE_RESOURCE_GROUP 2>$null
+
+# DNS_ZONE_NAME: the parent Azure DNS zone (e.g. "nexgeninc-dev.com").
+# Set this when CUSTOM_DOMAIN_NAME is a subdomain (e.g. "dev.nexgeninc-dev.com").
+# Defaults to CUSTOM_DOMAIN_NAME (root domain scenario).
+$dnsZone = azd env get-value DNS_ZONE_NAME 2>$null
+if (-not $dnsZone) { $dnsZone = $customDomain }
+
+# DNS_RESOURCE_GROUP: resource group that owns the Azure DNS zone.
+# Set to a shared RG (e.g. "rg-raptor-common") to share one zone across environments.
+# Defaults to AZURE_RESOURCE_GROUP.
+$dnsRg = azd env get-value DNS_RESOURCE_GROUP 2>$null
+if (-not $dnsRg) { $dnsRg = $rg }
 
 if (-not $customDomain -or $enableAzureDns -ne "true") {
     Write-Host "  DNS Zone not needed (CUSTOM_DOMAIN_NAME='$customDomain', ENABLE_AZURE_DNS='$enableAzureDns')." -ForegroundColor Gray
     exit 0
 }
 
-if (-not $rg) {
+if (-not $dnsRg) {
     Write-Host "  AZURE_RESOURCE_GROUP not set. Skipping DNS Zone." -ForegroundColor Yellow
     exit 0
 }
 
-# Check if resource group exists (it may not on first deploy)
-$rgExists = az group show -n $rg -o none 2>$null
+# Verify the resource group exists — this script will NOT create it.
+# The deploying principal typically lacks RG create/delete permissions.
+az group show -n $dnsRg -o none 2>$null
 if ($LASTEXITCODE -ne 0) {
-    # Create the resource group so the DNS zone can be placed in it
-    $location = azd env get-value AZURE_LOCATION 2>$null
-    if (-not $location) { $location = "eastus2" }
-    Write-Host "  Creating resource group '$rg' in '$location'..." -ForegroundColor Yellow
-    az group create -n $rg -l $location --only-show-errors 2>&1 | Out-Null
+    Write-Host "  ERROR: Resource group '$dnsRg' does not exist." -ForegroundColor Red
+    Write-Host "  Create it first (requires Owner/Contributor on the subscription), then re-run." -ForegroundColor Red
+    exit 1
 }
 
 # Check if DNS zone already exists
-$existing = az network dns zone show -g $rg -n $customDomain --query "name" -o tsv 2>$null
+$existing = az network dns zone show -g $dnsRg -n $dnsZone --query "name" -o tsv 2>$null
 if ($LASTEXITCODE -eq 0 -and $existing) {
-    $ns = az network dns zone show -g $rg -n $customDomain --query "nameServers[0]" -o tsv 2>$null
-    Write-Host "  DNS Zone '$customDomain' already exists (NS: $ns ...)." -ForegroundColor Gray
+    $ns = az network dns zone show -g $dnsRg -n $dnsZone --query "nameServers[0]" -o tsv 2>$null
+    Write-Host "  DNS Zone '$dnsZone' already exists in '$dnsRg' (NS: $ns ...)." -ForegroundColor Gray
     exit 0
 }
 
 # Create the DNS zone
-Write-Host "  Creating DNS Zone '$customDomain' in '$rg'..." -ForegroundColor Yellow
-az network dns zone create -g $rg -n $customDomain --only-show-errors 2>&1 | Out-Null
+Write-Host "  Creating DNS Zone '$dnsZone' in '$dnsRg'..." -ForegroundColor Yellow
+az network dns zone create -g $dnsRg -n $dnsZone --only-show-errors 2>&1 | Out-Null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  Failed to create DNS Zone '$customDomain'." -ForegroundColor Red
+    Write-Host "  Failed to create DNS Zone '$dnsZone'." -ForegroundColor Red
     exit 1
 }
 
-$nameServers = az network dns zone show -g $rg -n $customDomain --query "nameServers" -o json 2>$null
+$nameServers = az network dns zone show -g $dnsRg -n $dnsZone --query "nameServers" -o json 2>$null
 Write-Host "  DNS Zone created. Nameservers:" -ForegroundColor Green
 Write-Host "  $nameServers" -ForegroundColor White
-Write-Host "  ACTION REQUIRED: Delegate '$customDomain' to these nameservers at your registrar." -ForegroundColor Yellow
+Write-Host "  ACTION REQUIRED: Delegate '$dnsZone' to these nameservers at your registrar." -ForegroundColor Yellow
 exit 0

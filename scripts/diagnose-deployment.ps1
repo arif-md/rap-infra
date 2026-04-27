@@ -33,9 +33,19 @@ if ($be) {
 }
 
 Write-Host "`n=== DNS A Record vs CAE Static IP ===" -ForegroundColor Cyan
-$dnsIp = az network dns record-set a show -g $rg -z nexgeninc-dev.com -n "@" `
+# Resolve zone name and record label dynamically from azd env vars
+$customDomainName = azd env get-value CUSTOM_DOMAIN_NAME 2>$null
+$dnsZone          = azd env get-value DNS_ZONE_NAME 2>$null
+if (-not $dnsZone) { $dnsZone = $customDomainName }
+$dnsRg            = azd env get-value DNS_RESOURCE_GROUP 2>$null
+if (-not $dnsRg) { $dnsRg = $rg }
+$recordLabel = if (-not $customDomainName -or $customDomainName -eq $dnsZone) { "@" } `
+               else { $customDomainName -replace "\.$(([regex]::Escape($dnsZone)))`$", "" }
+
+$dnsIp = az network dns record-set a show -g $dnsRg -z $dnsZone -n $recordLabel `
     --query "ARecords[0].ipv4Address" -o tsv 2>$null
 $caeIp = az containerapp env show -g $rg -n $cae --query "properties.staticIp" -o tsv
+Write-Host "DNS zone      : $dnsZone (RG: $dnsRg, record: '$recordLabel')"
 Write-Host "DNS A record  : $dnsIp"
 Write-Host "CAE static IP : $caeIp"
 if ($dnsIp -eq $caeIp) {

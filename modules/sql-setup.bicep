@@ -40,6 +40,9 @@ param backendIdentityName string = ''
 @description('Processes managed identity name (for setting default schema)')
 param processesIdentityName string = ''
 
+@description('Optional override to force sql-setup to re-run regardless of content changes. Set FORCE_SQL_SETUP_TAG in azd env after azd down/up when the database was recreated but managed identity client IDs did not change. Clear it after the next successful deploy.')
+param forceSqlSetupTag string = ''
+
 // Serialize inputs for script consumption and change detection
 var identityGrantsJson = string(identityGrants)
 var adAdminGroupJson = string(adAdminGroup)
@@ -49,7 +52,27 @@ var adGroupSqlTemplate = loadTextContent('../scripts/sql/create-ad-group-user.sq
 
 // Content-based forceUpdateTag: only re-runs when inputs actually change.
 // Eliminates the ~4-5 min ACI spin-up on unchanged re-deploys.
-var changeDetectionTag = uniqueString(identityGrantsJson, adAdminGroupJson, sqlScriptContent, dbUserSqlTemplate, adGroupSqlTemplate, backendIdentityName, processesIdentityName)
+//
+// KNOWN LIMITATION — "retained MI + recreated DB" scenario:
+//   When managed identity retention is enabled, azd down destroys the SQL
+//   database but keeps the MIs (and their clientIds). On the next azd up,
+//   this hash is unchanged (same clientIds, same SQL scripts) so ARM returns
+//   the cached deployment result and the ACI never runs. The new, empty DB
+//   then has no SQL users, causing "Login failed for user '<token-identified
+//   principal>'" at runtime.
+//
+// AUTOMATIC MITIGATION:
+//   The ensure-sql-setup.ps1/sh preprovision hook detects this scenario
+//   (MI present, SQL database absent) and sets FORCE_SQL_SETUP_TAG to a
+//   current timestamp, which changes this hash and forces a real ACI run.
+//
+// MANUAL ESCAPE HATCH (if the hook is bypassed or you need a one-time force):
+//   azd env set FORCE_SQL_SETUP_TAG (Get-Date -Format "yyyyMMddHHmmss")
+//   azd up
+//   azd env set FORCE_SQL_SETUP_TAG ""   ← restore content-based detection
+var changeDetectionTag = empty(forceSqlSetupTag)
+  ? uniqueString(identityGrantsJson, adAdminGroupJson, sqlScriptContent, dbUserSqlTemplate, adGroupSqlTemplate, backendIdentityName, processesIdentityName)
+  : uniqueString(forceSqlSetupTag, identityGrantsJson)  // changes whenever FORCE_SQL_SETUP_TAG changes
 
 resource sqlSetup 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   name: 'sql-setup'
