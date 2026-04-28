@@ -46,6 +46,9 @@ runs:
         # Pin the subscription so all subsequent az/azd calls target the right tenant.
         azd env set AZURE_SUBSCRIPTION_ID "$AZD_SUB"
         az account set --subscription "$AZD_SUB" 2>/dev/null || true
+        # Propagate to $GITHUB_ENV so subsequent steps can read it as a plain env var
+        # (some scripts fall back to $AZURE_SUBSCRIPTION_ID if azd env get-value is unavailable).
+        echo "AZURE_SUBSCRIPTION_ID=$AZD_SUB" >> "$GITHUB_ENV"
 
         # ── Derive AZURE_LOCATION from resource group ──────────────────────────────
         # AZURE_LOCATION is computed — not stored as a GitHub variable —

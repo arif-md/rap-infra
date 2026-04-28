@@ -66,11 +66,14 @@ if [ -z "$DNS_RG" ]; then
     exit 0
 fi
 
-# Verify the resource group exists — this script will NOT create it.
-# The deploying principal typically lacks RG create/delete permissions.
+# Verify the DNS resource group exists. Fail immediately if it does not —
+# this prevents proceeding to zone operations that would also fail, and makes
+# the root cause explicit. rg-raptor-common (or whatever DNS_RESOURCE_GROUP
+# is set to) must be created manually before running this workflow.
 if ! az group show -n "$DNS_RG" $SUB_ARG -o none 2>/dev/null; then
-    echo "  ERROR: Resource group '$DNS_RG' does not exist."
-    echo "  Create it first (requires Owner/Contributor on the subscription), then re-run."
+    echo "  ERROR: Resource group '$DNS_RG' does not exist or is not accessible"
+    echo "  in subscription '${SUB:-<not set>}'."
+    echo "  Create the resource group manually before re-running this workflow."
     exit 1
 fi
 
