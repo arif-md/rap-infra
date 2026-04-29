@@ -158,11 +158,12 @@ jobs:
           echo "  - Processes Container App (dev-rap-proc)"
           echo "  - Azure SQL Server and Database"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          # azd provision runs: preprovision hooks → Bicep → postprovision hooks.
+          # postprovision (bind-custom-domain-tls.sh) creates/updates DNS records
+          # and binds the TLS certificate. azd deploy is intentionally NOT run —
+          # container images are built and published by the frontend/backend CI
+          # pipelines, not from source in this infra workflow.
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
-
-      # FQDN propagation (FRONTEND_URL, BACKEND_CORS_ALLOWED_ORIGINS) is now
-      # handled by the postprovision hook in azure.yaml, which runs automatically
-      # after every `azd provision` — no separate step needed.
 
       # SQL permissions are now granted automatically by the Bicep deployment script
       # (modules/sql-role-assignments.bicep) — no manual extraction needed.

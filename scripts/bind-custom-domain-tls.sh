@@ -148,6 +148,36 @@ if [ "$CURRENT_BINDING" = "SniEnabled" ] && [ -n "$CURRENT_CERT_ID" ]; then
         --query "[?id=='$CURRENT_CERT_ID' && properties.provisioningState=='Succeeded'].id" -o tsv 2>/dev/null || true)
 
     if [ -n "$CERT_EXISTS" ]; then
+        # TLS is valid — but ALWAYS verify the DNS A record still matches the
+        # current CAE static IP before exiting. After azd down/up the CAE gets
+        # a new IP while the DNS zone (outside the deployment stack) retains the
+        # old record. Without this check the site becomes unreachable even though
+        # TLS appears healthy.
+        _EARLY_ENABLE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
+        if [ "$_EARLY_ENABLE_DNS" = "true" ]; then
+            _EARLY_DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
+            [ -z "$_EARLY_DNS_ZONE" ] && _EARLY_DNS_ZONE="$CUSTOM_DOMAIN"
+            _EARLY_DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
+            [ -z "$_EARLY_DNS_RG" ] && _EARLY_DNS_RG="$RG"
+            _EARLY_LABEL=$([ "$CUSTOM_DOMAIN" = "$_EARLY_DNS_ZONE" ] && echo "@" || echo "${CUSTOM_DOMAIN%.$_EARLY_DNS_ZONE}")
+            _EARLY_CAE_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
+                --query "properties.staticIp" -o tsv 2>/dev/null || true)
+            _EARLY_DNS_IP=$(az network dns record-set a show \
+                -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
+                --query "ARecords[0].ipv4Address" -o tsv 2>/dev/null || true)
+            if [ -n "$_EARLY_CAE_IP" ] && [ "$(echo "$_EARLY_DNS_IP" | tr -d '\r\n')" != "$_EARLY_CAE_IP" ]; then
+                echo "  DNS A record is stale (${_EARLY_DNS_IP:-<none>} → $_EARLY_CAE_IP). Updating before exit..."
+                az network dns record-set a delete \
+                    -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
+                    --yes --only-show-errors 2>/dev/null || true
+                az network dns record-set a add-record \
+                    -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
+                    -a "$_EARLY_CAE_IP" --ttl 300 --only-show-errors 2>/dev/null
+                echo "  A record updated: $CUSTOM_DOMAIN → $_EARLY_CAE_IP"
+            else
+                echo "  DNS A record is current: $CUSTOM_DOMAIN → ${_EARLY_CAE_IP:-<unknown>}"
+            fi
+        fi
         echo "==> TLS already bound with valid certificate. Nothing to do. (${SECONDS}s)"
         exit 0
     fi

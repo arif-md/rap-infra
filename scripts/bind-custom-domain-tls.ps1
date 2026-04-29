@@ -122,6 +122,29 @@ if ($routeConfig -and $routeConfig.Count -gt 0) {
             --query "[?id=='$currentCertId' && properties.provisioningState=='Succeeded'].id" -o tsv 2>$null
 
         if ($certExists) {
+            # TLS is valid — but ALWAYS verify the DNS A record still matches the
+            # current CAE static IP before exiting. After azd down/up the CAE gets
+            # a new IP while the DNS zone (outside the deployment stack) retains the
+            # old record. Without this check the site becomes unreachable even though
+            # TLS appears healthy.
+            $earlyEnableDns = azd env get-value ENABLE_AZURE_DNS 2>$null
+            if ($earlyEnableDns -eq "true") {
+                $earlyDnsZone = azd env get-value DNS_ZONE_NAME 2>$null
+                if (-not $earlyDnsZone) { $earlyDnsZone = $customDomain }
+                $earlyDnsRg = azd env get-value DNS_RESOURCE_GROUP 2>$null
+                if (-not $earlyDnsRg) { $earlyDnsRg = $rg }
+                $earlyLabel = if ($customDomain -eq $earlyDnsZone) { "@" } else { $customDomain -replace "\.$(([regex]::Escape($earlyDnsZone)))`$", "" }
+                $earlyCaeIp = az containerapp env show -g $rg -n $caeName --query "properties.staticIp" -o tsv 2>$null
+                $earlyDnsIp = az network dns record-set a show -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel --query "ARecords[0].ipv4Address" -o tsv 2>$null
+                if ($earlyCaeIp -and ($earlyDnsIp -ne $earlyCaeIp)) {
+                    Write-Host "  DNS A record is stale ($earlyDnsIp → $earlyCaeIp). Updating before exit..." -ForegroundColor Yellow
+                    az network dns record-set a delete -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel --yes --only-show-errors 2>$null
+                    az network dns record-set a add-record -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel -a $earlyCaeIp --ttl 300 --only-show-errors 2>$null
+                    Write-Host "  A record updated: $customDomain → $earlyCaeIp" -ForegroundColor Green
+                } else {
+                    Write-Host "  DNS A record is current: $customDomain → $earlyCaeIp" -ForegroundColor Green
+                }
+            }
             Write-Host "==> TLS already bound with valid certificate. Nothing to do. ($([int]$stopwatch.Elapsed.TotalSeconds)s)" -ForegroundColor Green
             exit 0
         }
