@@ -34,12 +34,15 @@ echo "==> Locking public network access (VNet mode)..."
 APP_CONFIG_NAME=$(azd env get-value appConfigName 2>/dev/null || true)
 if [ -n "$APP_CONFIG_NAME" ]; then
     echo "  Disabling App Config public access: $APP_CONFIG_NAME"
-    az appconfig update \
+    if az appconfig update \
         --name "$APP_CONFIG_NAME" \
         --resource-group "$RG" \
         --enable-public-network false \
-        --output none
-    echo "  ✅ App Config public access disabled."
+        --output none 2>/dev/null; then
+        echo "  ✅ App Config public access disabled."
+    else
+        echo "  WARNING: Could not disable App Config public access (permission or SKU issue) — continuing."
+    fi
 else
     echo "  WARNING: appConfigName not in azd env — skipping App Config lockdown."
 fi
@@ -59,12 +62,15 @@ if [ -n "$KV_NAME" ]; then
         --query "provisioningState" -o tsv 2>/dev/null || true)
     if [ "$KV_PE_STATE" = "Succeeded" ]; then
         echo "  Disabling Key Vault public access: $KV_NAME"
-        az keyvault update \
+        if az keyvault update \
             --name "$KV_NAME" \
             --resource-group "$RG" \
             --public-network-access Disabled \
-            --output none
-        echo "  ✅ Key Vault public access disabled."
+            --output none 2>/dev/null; then
+            echo "  ✅ Key Vault public access disabled."
+        else
+            echo "  WARNING: Could not disable Key Vault public access (permission issue) — continuing."
+        fi
     else
         echo "  Key Vault: private endpoint '$KV_PE_NAME' not found or not Succeeded — public access left enabled."
         echo "             Run 'azd provision' to create the private endpoint, then re-run this script."

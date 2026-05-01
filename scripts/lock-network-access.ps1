@@ -29,15 +29,22 @@ Write-Host "==> Locking public network access (VNet mode)..." -ForegroundColor C
 # App Config has no "trusted Azure services" bypass: ARM deployment engine
 # writes key-values over the public endpoint, so we keep public access open
 # during Bicep deployment and lock it down here in postprovision.
+# azd env get-value writes errors to stdout (not stderr), so 2>$null is not enough.
+# Use $LASTEXITCODE to detect a missing key and avoid capturing the error text.
 $appConfigName = azd env get-value appConfigName 2>$null
+if ($LASTEXITCODE -ne 0) { $appConfigName = $null }
 if ($appConfigName) {
     Write-Host "  Disabling App Config public access: $appConfigName" -ForegroundColor Yellow
     az appconfig update `
         --name $appConfigName `
         --resource-group $rg `
         --enable-public-network false `
-        --output none
-    Write-Host "  ✅ App Config public access disabled." -ForegroundColor Green
+        --output none 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  ✅ App Config public access disabled." -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Could not disable App Config public access (permission or SKU issue) — continuing." -ForegroundColor Yellow
+    }
 } else {
     Write-Host "  WARNING: appConfigName not in azd env — skipping App Config lockdown." -ForegroundColor Yellow
 }
@@ -59,8 +66,12 @@ if ($kvName) {
             --name $kvName `
             --resource-group $rg `
             --public-network-access Disabled `
-            --output none
-        Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
+            --output none 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  ✅ Key Vault public access disabled." -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Could not disable Key Vault public access (permission issue) — continuing." -ForegroundColor Yellow
+        }
     } else {
         Write-Host "  Key Vault: private endpoint '$kvPeName' not found or not Succeeded — public access left enabled." -ForegroundColor Yellow
         Write-Host "             Run 'azd provision' to create the private endpoint, then re-run this script." -ForegroundColor Gray

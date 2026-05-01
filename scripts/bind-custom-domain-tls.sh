@@ -312,11 +312,12 @@ while [ "$DNS_READY" = "false" ] && [ "$DNS_ATTEMPTS" -lt "$MAX_DNS_ATTEMPTS" ];
 done
 
 if [ "$DNS_READY" = "false" ]; then
-    echo "WARNING: DNS TXT record not resolvable after 2 minutes."
+    echo "ERROR: DNS TXT record not resolvable after 2 minutes."
     echo "  Expected: asuid.$CUSTOM_DOMAIN TXT $VERIFICATION_ID"
-    echo "  Custom domain setup will be skipped. Re-run after DNS propagates:"
+    echo "  This usually means DNS propagation is still in progress."
+    echo "  Re-run the postprovision script once DNS propagates:"
     echo "  ./scripts/bind-custom-domain-tls.sh"
-    exit 0
+    exit 1
 fi
 echo "  DNS TXT record verified. (${SECONDS}s)"
 

@@ -276,11 +276,12 @@ while (-not $dnsReady -and $dnsAttempts -lt $maxDnsAttempts) {
 }
 
 if (-not $dnsReady) {
-    Write-Host "WARNING: DNS TXT record not resolvable after 2 minutes." -ForegroundColor Yellow
+    Write-Host "ERROR: DNS TXT record not resolvable after 2 minutes." -ForegroundColor Red
     Write-Host "  Expected: asuid.$customDomain TXT $verificationId" -ForegroundColor White
-    Write-Host "  Custom domain setup will be skipped. Re-run after DNS propagates:" -ForegroundColor White
+    Write-Host "  This usually means DNS propagation is still in progress." -ForegroundColor White
+    Write-Host "  Re-run the postprovision script once DNS propagates:" -ForegroundColor White
     Write-Host "  ./scripts/bind-custom-domain-tls.ps1" -ForegroundColor White
-    exit 0
+    exit 1
 }
 Write-Host "  DNS TXT record verified. ($([int]$stopwatch.Elapsed.TotalSeconds)s)" -ForegroundColor Green
 
