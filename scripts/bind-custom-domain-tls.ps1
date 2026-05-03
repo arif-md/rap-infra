@@ -105,6 +105,61 @@ function Build-RouteYaml {
     return ($yamlLines -join "`n")
 }
 
+# ── Compute DNS zone variables early (used by STEP 0 and STEP 2) ─────────────
+$enableAzureDns = azd env get-value ENABLE_AZURE_DNS 2>$null
+$dnsZone = azd env get-value DNS_ZONE_NAME 2>$null
+if (-not $dnsZone) { $dnsZone = $customDomain }
+$dnsRg = azd env get-value DNS_RESOURCE_GROUP 2>$null
+if (-not $dnsRg) { $dnsRg = $rg }
+$recordLabel   = if ($customDomain -eq $dnsZone) { "@" } else { $customDomain -replace "\.$([regex]::Escape($dnsZone))`$", "" }
+$asuidRecord   = if ($recordLabel -eq "@") { "asuid" }    else { "asuid.$recordLabel" }
+$dnsauthRecord = if ($recordLabel -eq "@") { "_dnsauth" } else { "_dnsauth.$recordLabel" }
+
+# Guard: root "@" A record makes the apex domain live.
+# Only activates in multi-env mode (DNS_ZONE_NAME explicitly set).
+if ($recordLabel -eq "@" -and $dnsZone) {
+    $dnsZoneWasExplicit = azd env get-value DNS_ZONE_NAME 2>$null
+    if ($dnsZoneWasExplicit) {
+        $allowRoot = azd env get-value ALLOW_ROOT_DOMAIN_BINDING 2>$null
+        if ($allowRoot -ne "true") {
+            Write-Host "  SKIPPED: Root domain '$customDomain' is the apex of zone '$dnsZone'." -ForegroundColor Yellow
+            Write-Host "  Set ALLOW_ROOT_DOMAIN_BINDING=true only when this env is ready to serve prod traffic." -ForegroundColor Yellow
+            exit 0
+        }
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 0: Unconditionally ensure DNS A record matches current CAE static IP
+# ══════════════════════════════════════════════════════════════════════════════
+# Runs before STEP 1 (which may exit early). The DNS zone lives OUTSIDE the
+# deployment stack and retains old records after azd down/up. The CAE gets a
+# new static IP on each provision. Without this, the A record is only updated
+# inside STEP 2 — skipped when TLS is already bound — leaving DNS stale.
+if ($enableAzureDns -eq "true") {
+    $step0CaeIp = az containerapp env show -g $rg -n $caeName `
+        --query "properties.staticIp" -o tsv 2>$null
+    if ($step0CaeIp) {
+        $step0DnsIp = az network dns record-set a show `
+            -g $dnsRg -z $dnsZone -n $recordLabel `
+            --query "ARecords[0].ipv4Address" -o tsv 2>$null
+        $step0DnsIp = if ($step0DnsIp) { $step0DnsIp.Trim() } else { "" }
+        if ($step0DnsIp -ne $step0CaeIp) {
+            $step0DnsDisplay = if ($step0DnsIp) { $step0DnsIp } else { "<none>" }
+            Write-Host "  [STEP 0] DNS A stale ($step0DnsDisplay → $step0CaeIp). Updating..." -ForegroundColor Yellow
+            az network dns record-set a delete `
+                -g $dnsRg -z $dnsZone -n $recordLabel `
+                --yes --only-show-errors 2>$null
+            az network dns record-set a add-record `
+                -g $dnsRg -z $dnsZone -n $recordLabel `
+                -a $step0CaeIp --ttl 300 --only-show-errors 2>$null
+            Write-Host "  [STEP 0] A record updated: $customDomain → $step0CaeIp" -ForegroundColor Green
+        } else {
+            Write-Host "  [STEP 0] DNS A record current: $customDomain → $step0CaeIp" -ForegroundColor Green
+        }
+    }
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 1: Check if TLS is already properly bound
 # ══════════════════════════════════════════════════════════════════════════════
@@ -122,29 +177,7 @@ if ($routeConfig -and $routeConfig.Count -gt 0) {
             --query "[?id=='$currentCertId' && properties.provisioningState=='Succeeded'].id" -o tsv 2>$null
 
         if ($certExists) {
-            # TLS is valid — but ALWAYS verify the DNS A record still matches the
-            # current CAE static IP before exiting. After azd down/up the CAE gets
-            # a new IP while the DNS zone (outside the deployment stack) retains the
-            # old record. Without this check the site becomes unreachable even though
-            # TLS appears healthy.
-            $earlyEnableDns = azd env get-value ENABLE_AZURE_DNS 2>$null
-            if ($earlyEnableDns -eq "true") {
-                $earlyDnsZone = azd env get-value DNS_ZONE_NAME 2>$null
-                if (-not $earlyDnsZone) { $earlyDnsZone = $customDomain }
-                $earlyDnsRg = azd env get-value DNS_RESOURCE_GROUP 2>$null
-                if (-not $earlyDnsRg) { $earlyDnsRg = $rg }
-                $earlyLabel = if ($customDomain -eq $earlyDnsZone) { "@" } else { $customDomain -replace "\.$(([regex]::Escape($earlyDnsZone)))`$", "" }
-                $earlyCaeIp = az containerapp env show -g $rg -n $caeName --query "properties.staticIp" -o tsv 2>$null
-                $earlyDnsIp = az network dns record-set a show -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel --query "ARecords[0].ipv4Address" -o tsv 2>$null
-                if ($earlyCaeIp -and ($earlyDnsIp -ne $earlyCaeIp)) {
-                    Write-Host "  DNS A record is stale ($earlyDnsIp → $earlyCaeIp). Updating before exit..." -ForegroundColor Yellow
-                    az network dns record-set a delete -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel --yes --only-show-errors 2>$null
-                    az network dns record-set a add-record -g $earlyDnsRg -z $earlyDnsZone -n $earlyLabel -a $earlyCaeIp --ttl 300 --only-show-errors 2>$null
-                    Write-Host "  A record updated: $customDomain → $earlyCaeIp" -ForegroundColor Green
-                } else {
-                    Write-Host "  DNS A record is current: $customDomain → $earlyCaeIp" -ForegroundColor Green
-                }
-            }
+            # DNS A record was already synced unconditionally in STEP 0 above.
             Write-Host "==> TLS already bound with valid certificate. Nothing to do. ($([int]$stopwatch.Elapsed.TotalSeconds)s)" -ForegroundColor Green
             exit 0
         }
@@ -153,51 +186,14 @@ if ($routeConfig -and $routeConfig.Count -gt 0) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2: Create/update DNS records in Azure DNS zone (if managed)
+# STEP 2: Create/update DNS TXT record in Azure DNS zone (if managed)
 # ══════════════════════════════════════════════════════════════════════════════
+# Note: $enableAzureDns, $dnsZone, $dnsRg, $recordLabel, $asuidRecord, and
+# $dnsauthRecord were computed before STEP 0 above. The A record was already
+# synced in STEP 0. This step handles the TXT verification record and re-syncs
+# the A record if somehow STEP 0 missed it.
 $verificationId = az containerapp env show -g $rg -n $caeName `
     --query "properties.customDomainConfiguration.customDomainVerificationId" -o tsv 2>$null
-
-$enableAzureDns = azd env get-value ENABLE_AZURE_DNS 2>$null
-
-# DNS_ZONE_NAME: parent zone name (e.g. "nexgeninc-dev.com").
-# When CUSTOM_DOMAIN_NAME is a subdomain, set this to the parent so records
-# are written into the correct zone (e.g. record "dev" in zone "nexgeninc-dev.com").
-$dnsZone = azd env get-value DNS_ZONE_NAME 2>$null
-if (-not $dnsZone) { $dnsZone = $customDomain }
-
-# DNS_RESOURCE_GROUP: RG that owns the Azure DNS zone (may differ from the env RG
-# when the zone lives in a shared RG such as "rg-raptor-common").
-$dnsRg = azd env get-value DNS_RESOURCE_GROUP 2>$null
-if (-not $dnsRg) { $dnsRg = $rg }
-
-# Compute the DNS record label within the zone:
-#   root domain  → "@"   (nexgeninc-dev.com  in zone nexgeninc-dev.com)
-#   subdomain    → "dev" (dev.nexgeninc-dev.com in zone nexgeninc-dev.com)
-$recordLabel   = if ($customDomain -eq $dnsZone) { "@" } else { $customDomain -replace "\.$(([regex]::Escape($dnsZone)))`$", "" }
-$asuidRecord   = if ($recordLabel -eq "@") { "asuid" }    else { "asuid.$recordLabel" }
-$dnsauthRecord = if ($recordLabel -eq "@") { "_dnsauth" } else { "_dnsauth.$recordLabel" }
-
-# Guard: writing the root "@" A record makes the apex domain live.
-# This guard only activates in multi-environment subdomain mode — i.e. when
-# DNS_ZONE_NAME is explicitly set (e.g. "nexgeninc-dev.com") AND
-# CUSTOM_DOMAIN_NAME equals the zone root (prod scenario).  Without the guard,
-# a mis-configured dev/test environment could accidentally steal the prod domain.
-#
-# When DNS_ZONE_NAME is NOT set, CUSTOM_DOMAIN_NAME IS the zone (single-env mode),
-# and binding the root is intentional — no guard needed.
-if ($recordLabel -eq "@" -and $dnsZone) {
-    $dnsZoneWasExplicit = azd env get-value DNS_ZONE_NAME 2>$null
-    if ($dnsZoneWasExplicit) {
-        $allowRoot = azd env get-value ALLOW_ROOT_DOMAIN_BINDING 2>$null
-        if ($allowRoot -ne "true") {
-            Write-Host "  SKIPPED: Root domain '$customDomain' is the apex of zone '$dnsZone'." -ForegroundColor Yellow
-            Write-Host "  Set ALLOW_ROOT_DOMAIN_BINDING=true only when this env is ready to serve prod traffic." -ForegroundColor Yellow
-            Write-Host "  Traffic to '$customDomain' will continue to fail until that flag is set and azd up is re-run." -ForegroundColor Yellow
-            exit 0
-        }
-    }
-}
 
 if ($enableAzureDns -eq "true") {
     $staticIp = az containerapp env show -g $rg -n $caeName `

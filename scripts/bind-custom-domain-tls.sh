@@ -132,6 +132,64 @@ build_route_yaml() {
     echo -e "$yaml"
 }
 
+# ── Compute DNS zone variables early (used by STEP 0 and STEP 2) ─────────────
+ENABLE_AZURE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
+DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
+[ -z "$DNS_ZONE" ] && DNS_ZONE="$CUSTOM_DOMAIN"
+DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
+[ -z "$DNS_RG" ] && DNS_RG="$RG"
+if [ "$CUSTOM_DOMAIN" = "$DNS_ZONE" ]; then
+    RECORD_LABEL="@"
+else
+    RECORD_LABEL="${CUSTOM_DOMAIN%.$DNS_ZONE}"
+fi
+ASUID_RECORD=$([ "$RECORD_LABEL" = "@" ] && echo "asuid"    || echo "asuid.$RECORD_LABEL")
+DNSAUTH_RECORD=$([ "$RECORD_LABEL" = "@" ] && echo "_dnsauth" || echo "_dnsauth.$RECORD_LABEL")
+
+# Guard: root "@" A record makes the apex domain live.
+# Only activates in multi-env mode (DNS_ZONE_NAME explicitly set).
+if [ "$RECORD_LABEL" = "@" ]; then
+    DNS_ZONE_EXPLICIT=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
+    if [ -n "$DNS_ZONE_EXPLICIT" ]; then
+        ALLOW_ROOT=$(azd env get-value ALLOW_ROOT_DOMAIN_BINDING 2>/dev/null || true)
+        if [ "$ALLOW_ROOT" != "true" ]; then
+            echo "  SKIPPED: Root domain '$CUSTOM_DOMAIN' is the apex of zone '$DNS_ZONE'."
+            echo "  Set ALLOW_ROOT_DOMAIN_BINDING=true only when this env is ready to serve prod traffic."
+            exit 0
+        fi
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 0: Unconditionally ensure DNS A record matches current CAE static IP
+# ══════════════════════════════════════════════════════════════════════════════
+# Runs before STEP 1 (which may exit early). The DNS zone lives OUTSIDE the
+# deployment stack and retains old records after azd down/up. The CAE gets a
+# new static IP on each provision. Without this, the A record is only updated
+# inside STEP 2 — skipped when TLS is already bound — leaving DNS stale.
+if [ "$ENABLE_AZURE_DNS" = "true" ]; then
+    STEP0_CAE_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
+        --query "properties.staticIp" -o tsv 2>/dev/null || true)
+    if [ -n "$STEP0_CAE_IP" ]; then
+        STEP0_DNS_IP=$(az network dns record-set a show \
+            -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
+            --query "ARecords[0].ipv4Address" -o tsv 2>/dev/null || true)
+        STEP0_DNS_IP=$(echo "$STEP0_DNS_IP" | tr -d '\r\n')
+        if [ "$STEP0_DNS_IP" != "$STEP0_CAE_IP" ]; then
+            echo "  [STEP 0] DNS A stale (${STEP0_DNS_IP:-<none>} → $STEP0_CAE_IP). Updating..."
+            az network dns record-set a delete \
+                -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
+                --yes --only-show-errors 2>/dev/null || true
+            az network dns record-set a add-record \
+                -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
+                -a "$STEP0_CAE_IP" --ttl 300 --only-show-errors || true
+            echo "  [STEP 0] A record updated: $CUSTOM_DOMAIN → $STEP0_CAE_IP"
+        else
+            echo "  [STEP 0] DNS A record current: $CUSTOM_DOMAIN → $STEP0_CAE_IP"
+        fi
+    fi
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 1: Check if TLS is already properly bound
 # ══════════════════════════════════════════════════════════════════════════════
@@ -148,36 +206,7 @@ if [ "$CURRENT_BINDING" = "SniEnabled" ] && [ -n "$CURRENT_CERT_ID" ]; then
         --query "[?id=='$CURRENT_CERT_ID' && properties.provisioningState=='Succeeded'].id" -o tsv 2>/dev/null || true)
 
     if [ -n "$CERT_EXISTS" ]; then
-        # TLS is valid — but ALWAYS verify the DNS A record still matches the
-        # current CAE static IP before exiting. After azd down/up the CAE gets
-        # a new IP while the DNS zone (outside the deployment stack) retains the
-        # old record. Without this check the site becomes unreachable even though
-        # TLS appears healthy.
-        _EARLY_ENABLE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
-        if [ "$_EARLY_ENABLE_DNS" = "true" ]; then
-            _EARLY_DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
-            [ -z "$_EARLY_DNS_ZONE" ] && _EARLY_DNS_ZONE="$CUSTOM_DOMAIN"
-            _EARLY_DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
-            [ -z "$_EARLY_DNS_RG" ] && _EARLY_DNS_RG="$RG"
-            _EARLY_LABEL=$([ "$CUSTOM_DOMAIN" = "$_EARLY_DNS_ZONE" ] && echo "@" || echo "${CUSTOM_DOMAIN%.$_EARLY_DNS_ZONE}")
-            _EARLY_CAE_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
-                --query "properties.staticIp" -o tsv 2>/dev/null || true)
-            _EARLY_DNS_IP=$(az network dns record-set a show \
-                -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
-                --query "ARecords[0].ipv4Address" -o tsv 2>/dev/null || true)
-            if [ -n "$_EARLY_CAE_IP" ] && [ "$(echo "$_EARLY_DNS_IP" | tr -d '\r\n')" != "$_EARLY_CAE_IP" ]; then
-                echo "  DNS A record is stale (${_EARLY_DNS_IP:-<none>} → $_EARLY_CAE_IP). Updating before exit..."
-                az network dns record-set a delete \
-                    -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
-                    --yes --only-show-errors 2>/dev/null || true
-                az network dns record-set a add-record \
-                    -g "$_EARLY_DNS_RG" -z "$_EARLY_DNS_ZONE" -n "$_EARLY_LABEL" \
-                    -a "$_EARLY_CAE_IP" --ttl 300 --only-show-errors 2>/dev/null
-                echo "  A record updated: $CUSTOM_DOMAIN → $_EARLY_CAE_IP"
-            else
-                echo "  DNS A record is current: $CUSTOM_DOMAIN → ${_EARLY_CAE_IP:-<unknown>}"
-            fi
-        fi
+        # DNS A record was already synced unconditionally in STEP 0 above.
         echo "==> TLS already bound with valid certificate. Nothing to do. (${SECONDS}s)"
         exit 0
     fi
@@ -185,50 +214,14 @@ if [ "$CURRENT_BINDING" = "SniEnabled" ] && [ -n "$CURRENT_CERT_ID" ]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2: Create/update DNS records in Azure DNS zone (if managed)
+# STEP 2: Create/update DNS TXT record in Azure DNS zone (if managed)
 # ══════════════════════════════════════════════════════════════════════════════
+# Note: ENABLE_AZURE_DNS, DNS_ZONE, DNS_RG, RECORD_LABEL, ASUID_RECORD, and
+# DNSAUTH_RECORD were computed before STEP 0 above. The A record was already
+# synced in STEP 0. This step handles the TXT verification record and re-syncs
+# the A record if somehow STEP 0 missed it.
 VERIFICATION_ID=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
     --query "properties.customDomainConfiguration.customDomainVerificationId" -o tsv 2>/dev/null || true)
-
-ENABLE_AZURE_DNS=$(azd env get-value ENABLE_AZURE_DNS 2>/dev/null || true)
-
-# DNS_ZONE_NAME: parent zone name (e.g. "nexgeninc-dev.com").
-# When CUSTOM_DOMAIN_NAME is a subdomain, set this to the parent so records
-# are written into the correct zone (e.g. record "dev" in zone "nexgeninc-dev.com").
-DNS_ZONE=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
-[ -z "$DNS_ZONE" ] && DNS_ZONE="$CUSTOM_DOMAIN"
-
-# DNS_RESOURCE_GROUP: RG that owns the Azure DNS zone (may differ from the env RG
-# when the zone lives in a shared RG such as "rg-raptor-common").
-DNS_RG=$(azd env get-value DNS_RESOURCE_GROUP 2>/dev/null || true)
-[ -z "$DNS_RG" ] && DNS_RG="$RG"
-
-# Compute the DNS record label within the zone:
-#   root domain  → "@"   (nexgeninc-dev.com  in zone nexgeninc-dev.com)
-#   subdomain    → "dev" (dev.nexgeninc-dev.com in zone nexgeninc-dev.com)
-if [ "$CUSTOM_DOMAIN" = "$DNS_ZONE" ]; then
-    RECORD_LABEL="@"
-else
-    RECORD_LABEL="${CUSTOM_DOMAIN%.$DNS_ZONE}"
-fi
-ASUID_RECORD=$([ "$RECORD_LABEL" = "@" ] && echo "asuid"    || echo "asuid.$RECORD_LABEL")
-DNSAUTH_RECORD=$([ "$RECORD_LABEL" = "@" ] && echo "_dnsauth" || echo "_dnsauth.$RECORD_LABEL")
-
-# Guard: writing the root "@" A record makes the apex domain live.
-# Only activates in multi-env subdomain mode (DNS_ZONE_NAME explicitly set).
-# When DNS_ZONE_NAME is not set, this is a single-env setup and root binding is intentional.
-if [ "$RECORD_LABEL" = "@" ]; then
-    DNS_ZONE_EXPLICIT=$(azd env get-value DNS_ZONE_NAME 2>/dev/null || true)
-    if [ -n "$DNS_ZONE_EXPLICIT" ]; then
-        ALLOW_ROOT=$(azd env get-value ALLOW_ROOT_DOMAIN_BINDING 2>/dev/null || true)
-        if [ "$ALLOW_ROOT" != "true" ]; then
-            echo "  SKIPPED: Root domain '$CUSTOM_DOMAIN' is the apex of zone '$DNS_ZONE'."
-            echo "  Set ALLOW_ROOT_DOMAIN_BINDING=true only when this env is ready to serve prod traffic."
-            echo "  Traffic to '$CUSTOM_DOMAIN' will continue to fail until that flag is set and azd up is re-run."
-            exit 0
-        fi
-    fi
-fi
 
 if [ "$ENABLE_AZURE_DNS" = "true" ]; then
     STATIC_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
@@ -257,7 +250,7 @@ if [ "$ENABLE_AZURE_DNS" = "true" ]; then
         fi
         # TTL=300 so that after azd down/up the new CAE IP propagates within 5 minutes
         # rather than the default 1-hour TTL that causes the "site unreachable after re-provision" symptom.
-        az network dns record-set a add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" -a "$STATIC_IP" --ttl 300 --only-show-errors 2>/dev/null
+        az network dns record-set a add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" -a "$STATIC_IP" --ttl 300 --only-show-errors || true
         echo "    A record: $CUSTOM_DOMAIN → $STATIC_IP (TTL=300)"
     else
         echo "    A record already correct: $CUSTOM_DOMAIN → $STATIC_IP"
@@ -276,7 +269,7 @@ if [ "$ENABLE_AZURE_DNS" = "true" ]; then
         if [ "$TXT_RECORD_COUNT" -gt 0 ] && [ -n "$EXISTING_TXT_RECORDS" ]; then
             az network dns record-set txt delete -g "$DNS_RG" -z "$DNS_ZONE" -n "$ASUID_RECORD" --yes --only-show-errors 2>/dev/null || true
         fi
-        az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$ASUID_RECORD" -v "$VERIFICATION_ID" --only-show-errors 2>/dev/null
+        az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$ASUID_RECORD" -v "$VERIFICATION_ID" --only-show-errors || true
         echo "    TXT record: asuid.$CUSTOM_DOMAIN → ${VERIFICATION_ID:0:16}..."
     else
         echo "    TXT record already correct."
@@ -375,7 +368,7 @@ if [ -z "$EXISTING_CERT" ]; then
         if [ -n "$VALIDATION_TOKEN" ]; then
             echo "  Creating _dnsauth TXT record for cert validation..."
             az network dns record-set txt delete -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" --yes --only-show-errors 2>/dev/null || true
-            az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" -v "$VALIDATION_TOKEN" --only-show-errors 2>/dev/null
+            az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" -v "$VALIDATION_TOKEN" --only-show-errors || true
             echo "    TXT record: $DNSAUTH_RECORD.$DNS_ZONE → $VALIDATION_TOKEN"
         else
             echo "  WARNING: Could not extract validationToken from cert output."
