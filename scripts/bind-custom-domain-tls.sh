@@ -348,43 +348,53 @@ EXISTING_CERT=$(az containerapp env certificate list \
     --query "[?properties.subjectName=='$CUSTOM_DOMAIN' && properties.provisioningState=='Succeeded'].id | [0]" -o tsv 2>/dev/null | tr -d '\r\n' || true)
 
 if [ -z "$EXISTING_CERT" ]; then
-    # Clean up stuck/failed/pending certificates
-    BAD_CERTS=$(az containerapp env certificate list \
+    # Check if a cert is already being provisioned (Pending) — don't delete and recreate,
+    # just wait. Re-creating resets the provisioning clock and can take another 15 minutes.
+    PENDING_CERT=$(az containerapp env certificate list \
         -g "$RG" -n "$CAE_NAME" \
-        --query "[?properties.subjectName=='$CUSTOM_DOMAIN' && properties.provisioningState!='Succeeded'].id" -o tsv 2>/dev/null || true)
+        --query "[?properties.subjectName=='$CUSTOM_DOMAIN' && properties.provisioningState=='Pending'].id | [0]" -o tsv 2>/dev/null | tr -d '\r\n' || true)
 
-    if [ -n "$BAD_CERTS" ]; then
-        echo "$BAD_CERTS" | while IFS= read -r cert_id; do
-            cert_id=$(echo "$cert_id" | tr -d '\r')
-            if [ -n "$cert_id" ]; then
-                echo "  Removing stale certificate: $(basename "$cert_id")"
-                az containerapp env certificate delete -g "$RG" -n "$CAE_NAME" --certificate "$cert_id" --yes 2>/dev/null || true
-            fi
-        done
-    fi
+    if [ -z "$PENDING_CERT" ]; then
+        # No Pending cert — clean up any Failed certs and create a new one
+        FAILED_CERTS=$(az containerapp env certificate list \
+            -g "$RG" -n "$CAE_NAME" \
+            --query "[?properties.subjectName=='$CUSTOM_DOMAIN' && properties.provisioningState=='Failed'].id" -o tsv 2>/dev/null || true)
 
-    echo "  Creating managed certificate ($CERT_VALIDATION_METHOD validation)..."
-    CERT_OUTPUT=$(az containerapp env certificate create \
-        -g "$RG" -n "$CAE_NAME" \
-        --hostname "$CUSTOM_DOMAIN" \
-        --validation-method "$CERT_VALIDATION_METHOD" \
-        --only-show-errors 2>/dev/null)
-
-    # For TXT validation: create the _dnsauth DNS record with the validation token
-    if [ "$CERT_VALIDATION_METHOD" = "TXT" ] && [ "$ENABLE_AZURE_DNS" = "true" ]; then
-        VALIDATION_TOKEN=$(echo "$CERT_OUTPUT" | jq -r '.properties.validationToken // empty')
-        if [ -n "$VALIDATION_TOKEN" ]; then
-            echo "  Creating _dnsauth TXT record for cert validation..."
-            az network dns record-set txt delete -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" --yes --only-show-errors 2>/dev/null || true
-            az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" -v "$VALIDATION_TOKEN" --only-show-errors || true
-            echo "    TXT record: $DNSAUTH_RECORD.$DNS_ZONE → $VALIDATION_TOKEN"
-        else
-            echo "  WARNING: Could not extract validationToken from cert output."
+        if [ -n "$FAILED_CERTS" ]; then
+            echo "$FAILED_CERTS" | while IFS= read -r cert_id; do
+                cert_id=$(echo "$cert_id" | tr -d '\r')
+                if [ -n "$cert_id" ]; then
+                    echo "  Removing failed certificate: $(basename "$cert_id")"
+                    az containerapp env certificate delete -g "$RG" -n "$CAE_NAME" --certificate "$cert_id" --yes 2>/dev/null || true
+                fi
+            done
         fi
+
+        echo "  Creating managed certificate ($CERT_VALIDATION_METHOD validation)..."
+        CERT_OUTPUT=$(az containerapp env certificate create \
+            -g "$RG" -n "$CAE_NAME" \
+            --hostname "$CUSTOM_DOMAIN" \
+            --validation-method "$CERT_VALIDATION_METHOD" \
+            --only-show-errors 2>/dev/null)
+
+        # For TXT validation: create the _dnsauth DNS record with the validation token
+        if [ "$CERT_VALIDATION_METHOD" = "TXT" ] && [ "$ENABLE_AZURE_DNS" = "true" ]; then
+            VALIDATION_TOKEN=$(echo "$CERT_OUTPUT" | jq -r '.properties.validationToken // empty')
+            if [ -n "$VALIDATION_TOKEN" ]; then
+                echo "  Creating _dnsauth TXT record for cert validation..."
+                az network dns record-set txt delete -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" --yes --only-show-errors 2>/dev/null || true
+                az network dns record-set txt add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$DNSAUTH_RECORD" -v "$VALIDATION_TOKEN" --only-show-errors || true
+                echo "    TXT record: $DNSAUTH_RECORD.$DNS_ZONE → $VALIDATION_TOKEN"
+            else
+                echo "  WARNING: Could not extract validationToken from cert output."
+            fi
+        fi
+    else
+        echo "  Certificate already provisioning ($(basename "$PENDING_CERT")). Waiting for it to complete..."
     fi
 
-    # Poll for provisioning (5s interval, max 5 minutes)
-    MAX_CERT_ATTEMPTS=60
+    # Poll for provisioning (5s interval, max 15 minutes)
+    MAX_CERT_ATTEMPTS=180
     CERT_ATTEMPT=0
     CERT_STATE="Pending"
 
@@ -407,9 +417,11 @@ if [ -z "$EXISTING_CERT" ]; then
     done
 
     if [ "$CERT_STATE" != "Succeeded" ]; then
-        echo "WARNING: Certificate did not provision within 5 minutes."
+        echo "ERROR: Certificate did not provision within 15 minutes."
+        echo "  Current state: $CERT_STATE"
+        echo "  Check: az containerapp env certificate list -g $RG -n $CAE_NAME -o table"
         echo "  Re-run: ./scripts/bind-custom-domain-tls.sh"
-        exit 0
+        exit 1
     fi
 
     EXISTING_CERT=$(az containerapp env certificate list \

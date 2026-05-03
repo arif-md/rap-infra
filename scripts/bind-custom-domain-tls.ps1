@@ -317,40 +317,50 @@ $existingCert = az containerapp env certificate list `
     --query "[?properties.subjectName=='$customDomain' && properties.provisioningState=='Succeeded'].id" -o tsv 2>$null
 
 if (-not $existingCert) {
-    # Clean up stuck/failed/pending certificates
-    $badCerts = az containerapp env certificate list `
+    # Check if a cert is already being provisioned (Pending) — don't delete and recreate,
+    # just wait. Re-creating resets the provisioning clock and can take another 15 minutes.
+    $pendingCert = (az containerapp env certificate list `
         -g $rg -n $caeName `
-        --query "[?properties.subjectName=='$customDomain' && properties.provisioningState!='Succeeded'].id" -o tsv 2>$null
+        --query "[?properties.subjectName=='$customDomain' && properties.provisioningState=='Pending'].id" -o tsv 2>$null).Trim()
 
-    if ($badCerts) {
-        foreach ($certId in ($badCerts -split "`n" | Where-Object { $_.Trim() })) {
-            Write-Host "  Removing stale certificate: $($certId.Trim() | Split-Path -Leaf)" -ForegroundColor Yellow
-            az containerapp env certificate delete -g $rg -n $caeName --certificate $certId.Trim() --yes 2>$null
+    if (-not $pendingCert) {
+        # No Pending cert — clean up any Failed certs and create a new one
+        $failedCerts = az containerapp env certificate list `
+            -g $rg -n $caeName `
+            --query "[?properties.subjectName=='$customDomain' && properties.provisioningState=='Failed'].id" -o tsv 2>$null
+
+        if ($failedCerts) {
+            foreach ($certId in ($failedCerts -split "`n" | Where-Object { $_.Trim() })) {
+                Write-Host "  Removing failed certificate: $($certId.Trim() | Split-Path -Leaf)" -ForegroundColor Yellow
+                az containerapp env certificate delete -g $rg -n $caeName --certificate $certId.Trim() --yes 2>$null
+            }
         }
+
+        Write-Host "  Creating managed certificate ($certValidationMethod validation)..." -ForegroundColor Yellow
+        $certOutput = az containerapp env certificate create `
+            -g $rg -n $caeName `
+            --hostname $customDomain `
+            --validation-method $certValidationMethod `
+            --only-show-errors 2>$null
+
+        # For TXT validation: create the _dnsauth DNS record with the validation token
+        if ($certValidationMethod -eq "TXT" -and $enableAzureDns -eq "true") {
+            $validationToken = ($certOutput | ConvertFrom-Json).properties.validationToken
+            if ($validationToken) {
+                Write-Host "  Creating _dnsauth TXT record for cert validation..." -ForegroundColor Yellow
+                az network dns record-set txt delete -g $dnsRg -z $dnsZone -n $dnsauthRecord --yes --only-show-errors 2>$null
+                az network dns record-set txt add-record -g $dnsRg -z $dnsZone -n $dnsauthRecord -v $validationToken --only-show-errors 2>$null
+                Write-Host "    TXT record: $dnsauthRecord.$dnsZone → $validationToken" -ForegroundColor Gray
+            } else {
+                Write-Host "  WARNING: Could not extract validationToken from cert output." -ForegroundColor Yellow
+            }
+        }
+    } else {
+        Write-Host "  Certificate already provisioning ($($pendingCert | Split-Path -Leaf)). Waiting for it to complete..." -ForegroundColor Yellow
     }
 
-    Write-Host "  Creating managed certificate ($certValidationMethod validation)..." -ForegroundColor Yellow
-    $certOutput = az containerapp env certificate create `
-        -g $rg -n $caeName `
-        --hostname $customDomain `
-        --validation-method $certValidationMethod `
-        --only-show-errors 2>$null
-
-    # For TXT validation: create the _dnsauth DNS record with the validation token
-    if ($certValidationMethod -eq "TXT" -and $enableAzureDns -eq "true") {
-        $validationToken = ($certOutput | ConvertFrom-Json).properties.validationToken
-        if ($validationToken) {
-            Write-Host "  Creating _dnsauth TXT record for cert validation..." -ForegroundColor Yellow
-            az network dns record-set txt delete -g $dnsRg -z $dnsZone -n $dnsauthRecord --yes --only-show-errors 2>$null
-            az network dns record-set txt add-record -g $dnsRg -z $dnsZone -n $dnsauthRecord -v $validationToken --only-show-errors 2>$null
-            Write-Host "    TXT record: $dnsauthRecord.$dnsZone → $validationToken" -ForegroundColor Gray
-        } else {
-            Write-Host "  WARNING: Could not extract validationToken from cert output." -ForegroundColor Yellow
-        }
-    }
-
-    # Poll for provisioning (5s interval, max 5 minutes)
-    $maxAttempts = 60
+    # Poll for provisioning (5s interval, max 15 minutes)
+    $maxAttempts = 180
     $attempt = 0
     $certState = "Pending"
 
@@ -373,9 +383,11 @@ if (-not $existingCert) {
     }
 
     if ($certState -ne "Succeeded") {
-        Write-Host "WARNING: Certificate did not provision within 5 minutes." -ForegroundColor Yellow
+        Write-Host "ERROR: Certificate did not provision within 15 minutes." -ForegroundColor Red
+        Write-Host "  Current state: $certState" -ForegroundColor White
+        Write-Host "  Check: az containerapp env certificate list -g $rg -n $caeName -o table" -ForegroundColor White
         Write-Host "  Re-run: ./scripts/bind-custom-domain-tls.ps1" -ForegroundColor White
-        exit 0
+        exit 1
     }
 
     $existingCert = (az containerapp env certificate list `

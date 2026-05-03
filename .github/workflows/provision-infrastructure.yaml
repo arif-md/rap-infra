@@ -159,11 +159,30 @@ jobs:
           echo "  - Azure SQL Server and Database"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           # azd provision runs: preprovision hooks → Bicep → postprovision hooks.
-          # postprovision (bind-custom-domain-tls.sh) creates/updates DNS records
-          # and binds the TLS certificate. azd deploy is intentionally NOT run —
-          # container images are built and published by the frontend/backend CI
-          # pipelines, not from source in this infra workflow.
+          # postprovision (bind-custom-domain-tls.sh) attempts DNS sync + TLS binding.
+          # azd deploy is intentionally NOT run — container images are built and
+          # published by the frontend/backend CI pipelines, not from source here.
           azd provision --no-prompt --environment "$AZURE_ENV_NAME"
+
+      - name: Bind custom domain + TLS (explicit retry)
+        # Runs after azd provision even if the postprovision hook failed (e.g. cert
+        # provisioning timed out after 15 min). STEP 1 detects an existing SniEnabled
+        # binding and exits 0 immediately — so this is a no-op when everything went
+        # right. If the postprovision hook timed out, this step picks up the in-progress
+        # cert (Pending certs are no longer deleted — they're waited on) and completes
+        # the binding. The job only fails if TLS binding ultimately cannot be completed.
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUSTOM_DOMAIN=$(azd env get-value CUSTOM_DOMAIN_NAME 2>/dev/null || true)
+          if [ -z "$CUSTOM_DOMAIN" ]; then
+            echo "CUSTOM_DOMAIN_NAME not set — skipping TLS binding step."
+            exit 0
+          fi
+          echo "Running bind-custom-domain-tls.sh for $CUSTOM_DOMAIN ..."
+          chmod +x scripts/bind-custom-domain-tls.sh
+          ./scripts/bind-custom-domain-tls.sh
 
       # SQL permissions are now granted automatically by the Bicep deployment script
       # (modules/sql-role-assignments.bicep) — no manual extraction needed.
