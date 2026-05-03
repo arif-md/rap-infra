@@ -78,6 +78,10 @@ build_route_yaml() {
 
     local route_json
     route_json=$(az containerapp env http-route-config show -g "$RG" -n "$CAE_NAME" -r raptorrouting -o json 2>/dev/null)
+    if [ -z "$route_json" ]; then
+        echo "ERROR: build_route_yaml: Route config fetch failed or returned empty. Cannot build YAML." >&2
+        exit 1
+    fi
 
     local yaml=""
     yaml+="customDomains:\n"
@@ -325,9 +329,13 @@ if [ -z "$DOMAIN_ON_ROUTE" ]; then
     echo "  Adding custom domain to route config (Disabled)..."
     YAML_PATH=$(mktemp /tmp/route-config-domain-XXXXXX.yaml)
     build_route_yaml "$CUSTOM_DOMAIN" "Disabled" > "$YAML_PATH"
-    az containerapp env http-route-config update \
+    if ! az containerapp env http-route-config update \
         -g "$RG" -n "$CAE_NAME" -r raptorrouting \
-        --yaml "$YAML_PATH" --only-show-errors 2>/dev/null
+        --yaml "$YAML_PATH" --only-show-errors; then
+        rm -f "$YAML_PATH"
+        echo "ERROR: Failed to add custom domain to route config (STEP 4)."
+        exit 1
+    fi
     rm -f "$YAML_PATH"
     echo "  Custom domain added. (${SECONDS}s)"
 fi

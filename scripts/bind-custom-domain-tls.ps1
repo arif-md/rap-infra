@@ -72,6 +72,10 @@ function Build-RouteYaml {
         [string]$CertificateId = $null
     )
     $routeJson = az containerapp env http-route-config show -g $rg -n $caeName -r raptorrouting -o json 2>$null | ConvertFrom-Json
+    if (-not $routeJson -or -not $routeJson.properties -or -not $routeJson.properties.rules) {
+        Write-Host "ERROR: Build-RouteYaml: Route config fetch failed or returned empty. Cannot build YAML." -ForegroundColor Red
+        exit 1
+    }
     $yamlLines = @()
     $yamlLines += "customDomains:"
     $yamlLines += "  - name: $Domain"
@@ -295,7 +299,12 @@ if (-not $domainOnRoute) {
     $yaml | Set-Content -Path $yamlPath -Encoding utf8
     az containerapp env http-route-config update `
         -g $rg -n $caeName -r raptorrouting `
-        --yaml $yamlPath --only-show-errors 2>$null
+        --yaml $yamlPath --only-show-errors
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item $yamlPath -ErrorAction SilentlyContinue
+        Write-Host "ERROR: Failed to add custom domain to route config (STEP 4)." -ForegroundColor Red
+        exit 1
+    }
     Remove-Item $yamlPath -ErrorAction SilentlyContinue
     Write-Host "  Custom domain added. ($([int]$stopwatch.Elapsed.TotalSeconds)s)" -ForegroundColor Green
 }
