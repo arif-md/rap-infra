@@ -319,9 +319,9 @@ $existingCert = az containerapp env certificate list `
 if (-not $existingCert) {
     # Check if a cert is already being provisioned (Pending) — don't delete and recreate,
     # just wait. Re-creating resets the provisioning clock and can take another 15 minutes.
-    $pendingCert = (az containerapp env certificate list `
+    $pendingCert = az containerapp env certificate list `
         -g $rg -n $caeName `
-        --query "[?properties.subjectName=='$customDomain' && properties.provisioningState=='Pending'].id" -o tsv 2>$null).Trim()
+        --query "[?properties.subjectName=='$customDomain' && properties.provisioningState=='Pending'].id" -o tsv 2>$null
 
     if (-not $pendingCert) {
         # No Pending cert — clean up any Failed certs and create a new one
