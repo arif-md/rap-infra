@@ -417,9 +417,14 @@ echo "  Certificate ready: $(basename "$EXISTING_CERT") (${SECONDS}s)"
 echo "  Updating route config to SniEnabled..."
 YAML_PATH=$(mktemp /tmp/route-config-tls-XXXXXX.yaml)
 build_route_yaml "$CUSTOM_DOMAIN" "SniEnabled" "$EXISTING_CERT" > "$YAML_PATH"
-az containerapp env http-route-config update \
+if ! az containerapp env http-route-config update \
     -g "$RG" -n "$CAE_NAME" -r raptorrouting \
-    --yaml "$YAML_PATH" --only-show-errors 2>/dev/null
+    --yaml "$YAML_PATH" --only-show-errors; then
+    rm -f "$YAML_PATH"
+    echo "ERROR: Failed to update route config with SniEnabled binding."
+    echo "  Cert ID: $EXISTING_CERT"
+    exit 1
+fi
 rm -f "$YAML_PATH"
 
 # ── Verify binding ──
@@ -430,6 +435,7 @@ FINAL_BINDING=$(az containerapp env http-route-config show \
 if [ "$FINAL_BINDING" = "SniEnabled" ]; then
     echo "==> TLS bound! https://$CUSTOM_DOMAIN is ready. (total: ${SECONDS}s)"
 else
-    echo "WARNING: Binding state: $FINAL_BINDING (expected SniEnabled)"
+    echo "ERROR: Binding verify failed — state: '${FINAL_BINDING}' (expected SniEnabled)"
     echo "  Check: az containerapp env http-route-config show -g $RG -n $CAE_NAME -r raptorrouting"
+    exit 1
 fi

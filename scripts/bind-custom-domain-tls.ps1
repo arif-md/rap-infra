@@ -385,7 +385,13 @@ $yamlPath = Join-Path ([System.IO.Path]::GetTempPath()) "route-config-tls.yaml"
 $yaml | Set-Content -Path $yamlPath -Encoding utf8
 az containerapp env http-route-config update `
     -g $rg -n $caeName -r raptorrouting `
-    --yaml $yamlPath --only-show-errors 2>$null
+    --yaml $yamlPath --only-show-errors
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item $yamlPath -ErrorAction SilentlyContinue
+    Write-Host "ERROR: Failed to update route config with SniEnabled binding." -ForegroundColor Red
+    Write-Host "  Cert ID: $($existingCert.Trim())" -ForegroundColor White
+    exit 1
+}
 Remove-Item $yamlPath -ErrorAction SilentlyContinue
 
 # ── Verify binding ──
@@ -396,6 +402,7 @@ $finalBinding = az containerapp env http-route-config show `
 if ($finalBinding -eq "SniEnabled") {
     Write-Host "==> TLS bound! https://$customDomain is ready. (total: $([int]$stopwatch.Elapsed.TotalSeconds)s)" -ForegroundColor Green
 } else {
-    Write-Host "WARNING: Binding state: $finalBinding (expected SniEnabled)" -ForegroundColor Yellow
+    Write-Host "ERROR: Binding verify failed — state: '$finalBinding' (expected SniEnabled)" -ForegroundColor Red
     Write-Host "  Check: az containerapp env http-route-config show -g $rg -n $caeName -r raptorrouting" -ForegroundColor White
+    exit 1
 }
