@@ -141,26 +141,28 @@ if ($recordLabel -eq "@" -and $dnsZone) {
 # new static IP on each provision. Without this, the A record is only updated
 # inside STEP 2 — skipped when TLS is already bound — leaving DNS stale.
 if ($enableAzureDns -eq "true") {
-    $step0CaeIp = az containerapp env show -g $rg -n $caeName `
+    $staticIp = az containerapp env show -g $rg -n $caeName `
         --query "properties.staticIp" -o tsv 2>$null
-    if ($step0CaeIp) {
-        $step0DnsIp = az network dns record-set a show `
+    if (-not $staticIp) {
+        Write-Host "ERROR: Could not retrieve CAE static IP. Cannot sync DNS A record." -ForegroundColor Red
+        exit 1
+    }
+    $step0DnsIp = az network dns record-set a show `
+        -g $dnsRg -z $dnsZone -n $recordLabel `
+        --query "ARecords[0].ipv4Address" -o tsv 2>$null
+    $step0DnsIp = if ($step0DnsIp) { $step0DnsIp.Trim() } else { "" }
+    if ($step0DnsIp -ne $staticIp) {
+        $step0DnsDisplay = if ($step0DnsIp) { $step0DnsIp } else { "<none>" }
+        Write-Host "  [STEP 0] DNS A stale ($step0DnsDisplay → $staticIp). Updating..." -ForegroundColor Yellow
+        az network dns record-set a delete `
             -g $dnsRg -z $dnsZone -n $recordLabel `
-            --query "ARecords[0].ipv4Address" -o tsv 2>$null
-        $step0DnsIp = if ($step0DnsIp) { $step0DnsIp.Trim() } else { "" }
-        if ($step0DnsIp -ne $step0CaeIp) {
-            $step0DnsDisplay = if ($step0DnsIp) { $step0DnsIp } else { "<none>" }
-            Write-Host "  [STEP 0] DNS A stale ($step0DnsDisplay → $step0CaeIp). Updating..." -ForegroundColor Yellow
-            az network dns record-set a delete `
-                -g $dnsRg -z $dnsZone -n $recordLabel `
-                --yes --only-show-errors 2>$null
-            az network dns record-set a add-record `
-                -g $dnsRg -z $dnsZone -n $recordLabel `
-                -a $step0CaeIp --ttl 300 --only-show-errors 2>$null
-            Write-Host "  [STEP 0] A record updated: $customDomain → $step0CaeIp" -ForegroundColor Green
-        } else {
-            Write-Host "  [STEP 0] DNS A record current: $customDomain → $step0CaeIp" -ForegroundColor Green
-        }
+            --yes --only-show-errors 2>$null
+        az network dns record-set a add-record `
+            -g $dnsRg -z $dnsZone -n $recordLabel `
+            -a $staticIp --ttl 300 --only-show-errors
+        Write-Host "  [STEP 0] A record updated: $customDomain → $staticIp" -ForegroundColor Green
+    } else {
+        Write-Host "  [STEP 0] DNS A record current: $customDomain → $staticIp" -ForegroundColor Green
     }
 }
 
@@ -192,45 +194,21 @@ if ($routeConfig -and $routeConfig.Count -gt 0) {
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 2: Create/update DNS TXT record in Azure DNS zone (if managed)
 # ══════════════════════════════════════════════════════════════════════════════
-# Note: $enableAzureDns, $dnsZone, $dnsRg, $recordLabel, $asuidRecord, and
-# $dnsauthRecord were computed before STEP 0 above. The A record was already
-# synced in STEP 0. This step handles the TXT verification record and re-syncs
-# the A record if somehow STEP 0 missed it.
+# The A record was unconditionally synced in STEP 0 ($staticIp already set).
+# This step only manages the TXT verification record (asuid.<domain>).
 $verificationId = az containerapp env show -g $rg -n $caeName `
     --query "properties.customDomainConfiguration.customDomainVerificationId" -o tsv 2>$null
 
 if ($enableAzureDns -eq "true") {
-    $staticIp = az containerapp env show -g $rg -n $caeName `
-        --query "properties.staticIp" -o tsv 2>$null
-
-    if (-not $staticIp -or -not $verificationId) {
-        Write-Host "ERROR: Could not retrieve CAE static IP or verification ID." -ForegroundColor Red
+    if (-not $verificationId) {
+        Write-Host "ERROR: Could not retrieve CAE domain verification ID." -ForegroundColor Red
         exit 1
     }
 
     Write-Host "  Creating/updating DNS records in Azure DNS zone..." -ForegroundColor Yellow
 
-    # A record: customDomain → CAE static IP
-    # Delete entire record set and recreate to avoid stale IPs accumulating
-    # (add-record appends; after azd down/up the CAE IP changes)
-    $existingARecords = az network dns record-set a show -g $dnsRg -z $dnsZone -n $recordLabel --query "ARecords[].ipv4Address" -o tsv 2>$null
-    $aRecordList = if ($existingARecords) { ($existingARecords -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
-    $aRecordCorrect = ($aRecordList.Count -eq 1) -and ($aRecordList[0] -eq $staticIp)
-
-    if (-not $aRecordCorrect) {
-        if ($aRecordList.Count -gt 0) {
-            az network dns record-set a delete -g $dnsRg -z $dnsZone -n $recordLabel --yes --only-show-errors 2>$null
-        }
-        # TTL=300 so that after azd down/up the new CAE IP propagates within 5 minutes
-        # rather than the default 1-hour TTL that causes the "site unreachable after re-provision" symptom.
-        az network dns record-set a add-record -g $dnsRg -z $dnsZone -n $recordLabel -a $staticIp --ttl 300 --only-show-errors 2>$null
-        Write-Host "    A record: $customDomain → $staticIp (TTL=300)" -ForegroundColor Gray
-    } else {
-        Write-Host "    A record already correct: $customDomain → $staticIp" -ForegroundColor Gray
-    }
-
     # TXT record: asuid.<customDomain> → verification ID
-    # Same approach: delete entire record set and recreate to avoid stale values
+    # Delete and recreate to avoid stale values accumulating
     $existingTxtRecords = az network dns record-set txt show -g $dnsRg -z $dnsZone -n $asuidRecord --query "TXTRecords[].value[0]" -o tsv 2>$null
     $txtRecordList = if ($existingTxtRecords) { ($existingTxtRecords -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) } else { @() }
     $txtRecordCorrect = ($txtRecordList.Count -eq 1) -and ($txtRecordList[0] -eq $verificationId)

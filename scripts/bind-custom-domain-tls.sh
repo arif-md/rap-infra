@@ -6,7 +6,7 @@
 # Bicep deploys httpRouteConfig with routing rules ONLY (no customDomains).
 # ALL DNS and custom domain lifecycle is handled here:
 #   1. Checks if TLS is already properly bound (skip if yes)
-#   2. Creates/updates DNS A + TXT records in Azure DNS zone (if managed)
+#   2. Creates/updates DNS TXT record in Azure DNS zone (A synced in step 0)
 #   3. Waits for DNS TXT propagation
 #   4. Adds the custom domain to the route config (bindingType=Disabled)
 #   5. Creates or reuses a managed TLS certificate (HTTP validation)
@@ -18,6 +18,12 @@
 #   - DNS records in Bicep are managed by the deployment stack and get deleted
 #     on azd down, causing propagation issues on the next azd up.
 #   - Doing it here lets us create records, wait for propagation, and retry.
+#
+# Note on DNS A record handling:
+#   Step 0 unconditionally syncs the A record BEFORE the TLS-already-bound
+#   check (step 1). This ensures the A record is always correct even when TLS
+#   is already bound and the script exits early. Step 2 only manages the TXT
+#   verification record.
 ###############################################################################
 
 set -e
@@ -172,25 +178,27 @@ fi
 # new static IP on each provision. Without this, the A record is only updated
 # inside STEP 2 — skipped when TLS is already bound — leaving DNS stale.
 if [ "$ENABLE_AZURE_DNS" = "true" ]; then
-    STEP0_CAE_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
+    STATIC_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
         --query "properties.staticIp" -o tsv 2>/dev/null || true)
-    if [ -n "$STEP0_CAE_IP" ]; then
-        STEP0_DNS_IP=$(az network dns record-set a show \
+    if [ -z "$STATIC_IP" ]; then
+        echo "ERROR: Could not retrieve CAE static IP. Cannot sync DNS A record."
+        exit 1
+    fi
+    STEP0_DNS_IP=$(az network dns record-set a show \
+        -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
+        --query "ARecords[0].ipv4Address" -o tsv 2>/dev/null || true)
+    STEP0_DNS_IP=$(echo "$STEP0_DNS_IP" | tr -d '\r\n')
+    if [ "$STEP0_DNS_IP" != "$STATIC_IP" ]; then
+        echo "  [STEP 0] DNS A stale (${STEP0_DNS_IP:-<none>} → $STATIC_IP). Updating..."
+        az network dns record-set a delete \
             -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
-            --query "ARecords[0].ipv4Address" -o tsv 2>/dev/null || true)
-        STEP0_DNS_IP=$(echo "$STEP0_DNS_IP" | tr -d '\r\n')
-        if [ "$STEP0_DNS_IP" != "$STEP0_CAE_IP" ]; then
-            echo "  [STEP 0] DNS A stale (${STEP0_DNS_IP:-<none>} → $STEP0_CAE_IP). Updating..."
-            az network dns record-set a delete \
-                -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
-                --yes --only-show-errors 2>/dev/null || true
-            az network dns record-set a add-record \
-                -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
-                -a "$STEP0_CAE_IP" --ttl 300 --only-show-errors || true
-            echo "  [STEP 0] A record updated: $CUSTOM_DOMAIN → $STEP0_CAE_IP"
-        else
-            echo "  [STEP 0] DNS A record current: $CUSTOM_DOMAIN → $STEP0_CAE_IP"
-        fi
+            --yes --only-show-errors 2>/dev/null || true
+        az network dns record-set a add-record \
+            -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" \
+            -a "$STATIC_IP" --ttl 300 --only-show-errors
+        echo "  [STEP 0] A record updated: $CUSTOM_DOMAIN → $STATIC_IP"
+    else
+        echo "  [STEP 0] DNS A record current: $CUSTOM_DOMAIN → $STATIC_IP"
     fi
 fi
 
@@ -220,48 +228,21 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 2: Create/update DNS TXT record in Azure DNS zone (if managed)
 # ══════════════════════════════════════════════════════════════════════════════
-# Note: ENABLE_AZURE_DNS, DNS_ZONE, DNS_RG, RECORD_LABEL, ASUID_RECORD, and
-# DNSAUTH_RECORD were computed before STEP 0 above. The A record was already
-# synced in STEP 0. This step handles the TXT verification record and re-syncs
-# the A record if somehow STEP 0 missed it.
+# The A record was unconditionally synced in STEP 0 (STATIC_IP already set).
+# This step only manages the TXT verification record (asuid.<domain>).
 VERIFICATION_ID=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
     --query "properties.customDomainConfiguration.customDomainVerificationId" -o tsv 2>/dev/null || true)
 
 if [ "$ENABLE_AZURE_DNS" = "true" ]; then
-    STATIC_IP=$(az containerapp env show -g "$RG" -n "$CAE_NAME" \
-        --query "properties.staticIp" -o tsv 2>/dev/null || true)
-
-    if [ -z "$STATIC_IP" ] || [ -z "$VERIFICATION_ID" ]; then
-        echo "ERROR: Could not retrieve CAE static IP or verification ID."
+    if [ -z "$VERIFICATION_ID" ]; then
+        echo "ERROR: Could not retrieve CAE domain verification ID."
         exit 1
     fi
 
     echo "  Creating/updating DNS records in Azure DNS zone..."
 
-    # A record: customDomain → CAE static IP
-    # Delete entire record set and recreate to avoid stale IPs accumulating
-    # (add-record appends; after azd down/up the CAE IP changes)
-    EXISTING_A_RECORDS=$(az network dns record-set a show -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" --query "ARecords[].ipv4Address" -o tsv 2>/dev/null || true)
-    A_RECORD_COUNT=$(echo "$EXISTING_A_RECORDS" | grep -c . 2>/dev/null || echo 0)
-    A_RECORD_CORRECT=false
-    if [ "$A_RECORD_COUNT" -eq 1 ] && [ "$(echo "$EXISTING_A_RECORDS" | tr -d '\r\n')" = "$STATIC_IP" ]; then
-        A_RECORD_CORRECT=true
-    fi
-
-    if [ "$A_RECORD_CORRECT" = "false" ]; then
-        if [ "$A_RECORD_COUNT" -gt 0 ] && [ -n "$EXISTING_A_RECORDS" ]; then
-            az network dns record-set a delete -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" --yes --only-show-errors 2>/dev/null || true
-        fi
-        # TTL=300 so that after azd down/up the new CAE IP propagates within 5 minutes
-        # rather than the default 1-hour TTL that causes the "site unreachable after re-provision" symptom.
-        az network dns record-set a add-record -g "$DNS_RG" -z "$DNS_ZONE" -n "$RECORD_LABEL" -a "$STATIC_IP" --ttl 300 --only-show-errors || true
-        echo "    A record: $CUSTOM_DOMAIN → $STATIC_IP (TTL=300)"
-    else
-        echo "    A record already correct: $CUSTOM_DOMAIN → $STATIC_IP"
-    fi
-
     # TXT record: asuid.<customDomain> → verification ID
-    # Same approach: delete entire record set and recreate to avoid stale values
+    # Delete and recreate to avoid stale values accumulating
     EXISTING_TXT_RECORDS=$(az network dns record-set txt show -g "$DNS_RG" -z "$DNS_ZONE" -n "$ASUID_RECORD" --query "TXTRecords[].value[0]" -o tsv 2>/dev/null || true)
     TXT_RECORD_COUNT=$(echo "$EXISTING_TXT_RECORDS" | grep -c . 2>/dev/null || echo 0)
     TXT_RECORD_CORRECT=false
