@@ -181,7 +181,9 @@ module processes '../modules/containerApp.bicep' = {
     location: location
     environmentId: cai.id
     image: image    
-    targetPort: 8090
+    // hello-world fallback listens on port 80; use it as targetPort when that image is active
+    // so health probes pass and the routing config remains functional.
+    targetPort: image == 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest' ? 80 : 8090
     ingressExternal: true
     enableSessionAffinity: false
     userAssignedIdentity: uai.id

@@ -37,6 +37,11 @@ if (-not $ResourceGroup) {
   }
 }
 
+# ACR may live in a different resource group than the app (externally managed ACR pattern).
+# If AZURE_ACR_RESOURCE_GROUP is set, create/find the ACR there; otherwise default to the app RG.
+$AcrResourceGroup = Get-AzdValue 'AZURE_ACR_RESOURCE_GROUP'
+if (-not $AcrResourceGroup) { $AcrResourceGroup = $ResourceGroup }
+
 if (-not $Location) {
   $Location = (az group show -n $ResourceGroup --query location -o tsv 2>$null)
 }
@@ -54,9 +59,17 @@ if (-not $Location) {
   $Location = (az group show -n $ResourceGroup --query location -o tsv 2>$null)
 }
 
-# Try to find the ACR anywhere in the current subscription (not restricted to RG)
-$acrInfoJson = az acr show -n $AcrName -o json 2>$null
-if ($LASTEXITCODE -eq 0 -and $acrInfoJson) {
+# Try RG-scoped discovery first (faster, works even with limited subscription-level Reader), then fall back to subscription-wide.
+$acrInfoJson = $null
+if ($AcrResourceGroup -ne $ResourceGroup) {
+  $acrInfoJson = az acr show -n $AcrName -g $AcrResourceGroup -o json 2>$null
+  if ($LASTEXITCODE -ne 0) { $acrInfoJson = $null }
+}
+if (-not $acrInfoJson) {
+  $acrInfoJson = az acr show -n $AcrName -o json 2>$null
+  if ($LASTEXITCODE -ne 0) { $acrInfoJson = $null }
+}
+if ($acrInfoJson) {
   $acrInfo = $acrInfoJson | ConvertFrom-Json
   $acrRg = $acrInfo.resourceGroup
   if (-not $acrRg -and $acrInfo.id) {
@@ -68,16 +81,15 @@ if ($LASTEXITCODE -eq 0 -and $acrInfoJson) {
   $check = az acr check-name -n $AcrName -o json | ConvertFrom-Json
   if ($null -eq $check) { throw "Failed to validate ACR name '$AcrName'" }
   if ($check.nameAvailable -eq $true) {
-    Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$ResourceGroup'..."
-    az acr create -n $AcrName -g $ResourceGroup -l $Location --sku Standard --admin-enabled false --only-show-errors 1>$null
+    $acrLoc = (az group show -n $AcrResourceGroup --query location -o tsv 2>$null)
+    if (-not $acrLoc) { $acrLoc = $Location }
+    Write-Host "[ensure-acr] Creating ACR '$AcrName' in RG '$AcrResourceGroup' (location: $acrLoc)..."
+    az acr create -n $AcrName -g $AcrResourceGroup -l $acrLoc --sku Standard --admin-enabled false --only-show-errors 1>$null
   } else {
     if ($check.reason -eq 'AlreadyExists') {
-      $sub = az account show --query id -o tsv 2>$null
-      $subName = az account show --query name -o tsv 2>$null
       Write-Warning "[ensure-acr] ACR name '$AcrName' exists but could not be discovered via 'az acr show' with current permissions or subscription context."
       Write-Warning "[ensure-acr] Proceeding without discovery. If role assignment is required, set AZURE_ACR_RESOURCE_GROUP to the ACR's resource group or ensure Reader on Microsoft.ContainerRegistry in the subscription."
-      if ($preferredAcrRg) { azd env set AZURE_ACR_RESOURCE_GROUP $preferredAcrRg | Out-Null }
-      goto ResolveImage
+      # Continue to image resolution below
     } else {
       throw "[ensure-acr] ACR name '$AcrName' is not valid/available: $($check.message)"
     }
