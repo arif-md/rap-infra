@@ -107,12 +107,10 @@ if (-not $currentImage -or -not $currentImage.StartsWith($acrDomain, [System.Str
     $image = "$acrDomain/$repo@$digest"
     Write-Host "[ensure-acr] Resolved ACR image: $image"
     azd env set SERVICE_FRONTEND_IMAGE_NAME $image | Out-Null
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false | Out-Null
   } else {
     $fallback = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
     Write-Host "[ensure-acr] No image found in ACR repo '$repo'. Using fallback public image: $fallback"
     azd env set SERVICE_FRONTEND_IMAGE_NAME $fallback | Out-Null
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true | Out-Null
   }
 } else {
   Write-Host "[ensure-acr] SERVICE_FRONTEND_IMAGE_NAME already set to ACR image; leaving as-is."

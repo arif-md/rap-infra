@@ -80,12 +80,10 @@ if [ -z "$CURRENT_IMAGE" ]; then
     IMAGE="$REGISTRY/$REPO@$DIGEST"
     echo "Resolved ACR image: $IMAGE"
     azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMAGE" >/dev/null
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false >/dev/null
   else
     FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
     echo "No image found in ACR repo '$REPO'. Using fallback public image: $FALLBACK"
     azd env set SERVICE_FRONTEND_IMAGE_NAME "$FALLBACK" >/dev/null
-    azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true >/dev/null
   fi
 else
   if [ "$CURRENT_DOMAIN" != "$ACR_DOMAIN" ]; then
@@ -98,7 +96,6 @@ else
       IMAGE="$REGISTRY/$REPO@$DIGEST"
       echo "Switching to ACR image: $IMAGE"
       azd env set SERVICE_FRONTEND_IMAGE_NAME "$IMAGE" >/dev/null
-      azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false >/dev/null
     else
       echo "No ACR image found; keeping existing image: $CURRENT_IMAGE"
     fi
@@ -135,7 +132,6 @@ else
             FALLBACK="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
             echo "[heal] No digests remain in repo; falling back to public image: $FALLBACK"
             azd env set SERVICE_FRONTEND_IMAGE_NAME "$FALLBACK" >/dev/null
-            azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT true >/dev/null
           fi
         else
           echo "Digest is present; no healing required."

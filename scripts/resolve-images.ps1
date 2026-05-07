@@ -106,8 +106,8 @@ if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "processes") 
     Resolve-ServiceImage -ServiceKey "processes"
 }
 
-# Determine per-service SKIP_ACR_PULL_ROLE_ASSIGNMENT flags
-# Each service has independent control over whether to create ACR role assignment
+# Determine per-service ACR pull role assignment flags
+# Each service has independent control over whether to create the ACR role assignment
 Write-Host ""
 Write-Host "🔧 Setting per-service ACR pull role assignment flags..." -ForegroundColor Cyan
 
