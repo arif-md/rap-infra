@@ -475,7 +475,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_test
@@ -864,7 +864,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"
@@ -1087,7 +1087,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_PROCESSES_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/processes-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Deploy to ${{ steps.prep.outputs.env }}
         run: azd up --no-prompt --environment "${{ steps.prep.outputs.env }}"

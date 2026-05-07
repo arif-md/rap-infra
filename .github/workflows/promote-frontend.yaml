@@ -460,7 +460,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_test
@@ -887,7 +887,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_train
@@ -1314,7 +1314,7 @@ jobs:
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
           azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_prod

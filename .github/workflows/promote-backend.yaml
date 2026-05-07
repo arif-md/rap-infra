@@ -192,7 +192,7 @@ jobs:
           if [ -z "$SUB" ]; then
             SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
@@ -436,7 +436,7 @@ jobs:
           set -euo pipefail
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           ACR='${{ steps.prep.outputs.acr }}'
-          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TARGET_REPO="raptor/backend-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
           echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
           az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
@@ -459,16 +459,16 @@ jobs:
           if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
-          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SERVICE_BACKEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_test
         shell: bash
         run: |
           set -euo pipefail
-          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-fe" | tr '[:upper:]' '[:lower:]')
-          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-be" | tr '[:upper:]' '[:lower:]')
+          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           RG="${{ steps.prep.outputs.rg }}"
           ACR_NAME="${{ steps.prep.outputs.acr }}"
           ACR_DOMAIN="${ACR_NAME}.azurecr.io"
@@ -516,7 +516,7 @@ jobs:
           if [ -z "$FQDN" ]; then
             ENV="${{ steps.prep.outputs.env }}"
             RG="${{ steps.prep.outputs.rg }}"
-            APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+            APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
             az extension add -n containerapp -y >/dev/null 2>&1 || true
             CA_FQDN=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
@@ -549,7 +549,7 @@ jobs:
           RG="${{ steps.prep.outputs.rg }}"
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           NEW_DIGEST='${{ steps.import.outputs.digest }}'
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
@@ -658,7 +658,7 @@ jobs:
           if [ -z "$SUB" ]; then
             SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
@@ -863,7 +863,7 @@ jobs:
           set -euo pipefail
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           ACR='${{ steps.prep.outputs.acr }}'
-          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TARGET_REPO="raptor/backend-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
           echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
           az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
@@ -886,16 +886,16 @@ jobs:
           if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
-          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SERVICE_BACKEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_train
         shell: bash
         run: |
           set -euo pipefail
-          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-fe" | tr '[:upper:]' '[:lower:]')
-          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-be" | tr '[:upper:]' '[:lower:]')
+          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           RG="${{ steps.prep.outputs.rg }}"
           ACR_NAME="${{ steps.prep.outputs.acr }}"
           ACR_DOMAIN="${ACR_NAME}.azurecr.io"
@@ -943,7 +943,7 @@ jobs:
           if [ -z "$FQDN" ]; then
             ENV="${{ steps.prep.outputs.env }}"
             RG="${{ steps.prep.outputs.rg }}"
-            APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+            APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
             az extension add -n containerapp -y >/dev/null 2>&1 || true
             CA_FQDN=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
@@ -976,7 +976,7 @@ jobs:
           RG="${{ steps.prep.outputs.rg }}"
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           NEW_DIGEST='${{ steps.import.outputs.digest }}'
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
@@ -1093,7 +1093,7 @@ jobs:
           if [ -z "$SUB" ]; then
             SUB=$(az account show --query id -o tsv 2>/dev/null || true)
           fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           az extension add -n containerapp -y >/dev/null 2>&1 || true
           CURR_IMG=$(az containerapp show -n "$APP_NAME" -g "$RG" ${SUB:+--subscription "$SUB"} --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
           CURR_DIGEST="${CURR_IMG#*@}"
@@ -1290,7 +1290,7 @@ jobs:
           set -euo pipefail
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           ACR='${{ steps.prep.outputs.acr }}'
-          TARGET_REPO="raptor/frontend-${{ steps.prep.outputs.env }}"
+          TARGET_REPO="raptor/backend-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
           echo "Importing $SRC_IMAGE -> $ACR/$TARGET_REPO:$TAG"
           az acr import -n "$ACR" --source "$SRC_IMAGE" --image "$TARGET_REPO:$TAG"
@@ -1313,16 +1313,16 @@ jobs:
           if [ -z "${{ vars.AZURE_ACR_RESOURCE_GROUP }}" ]; then
             azd env set AZURE_ACR_RESOURCE_GROUP "${{ steps.prep.outputs.rg }}"
           fi
-          azd env set SERVICE_FRONTEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
-          azd env set SKIP_ACR_PULL_ROLE_ASSIGNMENT false
+          azd env set SERVICE_BACKEND_IMAGE_NAME "${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
 
       - name: Fast image-only update (skip provision when possible)
         id: fastpath_prod
         shell: bash
         run: |
           set -euo pipefail
-          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-fe" | tr '[:upper:]' '[:lower:]')
-          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/frontend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
+          APP_NAME=$(echo "${{ steps.prep.outputs.env }}-rap-be" | tr '[:upper:]' '[:lower:]')
+          IMG="${{ steps.prep.outputs.acr }}.azurecr.io/raptor/backend-${{ steps.prep.outputs.env }}@${{ steps.import.outputs.digest }}"
           RG="${{ steps.prep.outputs.rg }}"
           ACR_NAME="${{ steps.prep.outputs.acr }}"
           ACR_DOMAIN="${ACR_NAME}.azurecr.io"
@@ -1370,7 +1370,7 @@ jobs:
           if [ -z "$FQDN" ]; then
             ENV="${{ steps.prep.outputs.env }}"
             RG="${{ steps.prep.outputs.rg }}"
-            APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+            APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
             az extension add -n containerapp -y >/dev/null 2>&1 || true
             CA_FQDN=$(az containerapp show -n "$APP_NAME" -g "$RG" --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || true)
             if [ "$CA_FQDN" = "null" ]; then CA_FQDN=""; fi
@@ -1403,7 +1403,7 @@ jobs:
           RG="${{ steps.prep.outputs.rg }}"
           SUB='${{ secrets.AZURE_SUBSCRIPTION_ID }}'
           if [ -z "$SUB" ]; then SUB=$(az account show --query id -o tsv 2>/dev/null || true); fi
-          APP_NAME=$(echo "${ENV}-rap-fe" | tr '[:upper:]' '[:lower:]')
+          APP_NAME=$(echo "${ENV}-rap-be" | tr '[:upper:]' '[:lower:]')
           NEW_DIGEST='${{ steps.import.outputs.digest }}'
           SRC_IMAGE='${{ env.SRC_IMAGE }}'
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
