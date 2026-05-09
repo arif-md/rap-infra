@@ -55,7 +55,13 @@ fi
 # Guard: verify the private endpoint actually exists before locking — this
 # prevents startup failures if someone runs the script against an environment
 # where the KV private endpoint was not provisioned.
-KV_NAME=$(azd env get-value kvName 2>/dev/null || true)
+# Note: azd env get-value writes its "not found" error to stdout, not stderr.
+# Check exit code separately so a missing key doesn't populate KV_NAME with error text.
+if KV_NAME=$(azd env get-value keyVaultName 2>/dev/null); then
+    : # KV_NAME is valid
+else
+    KV_NAME=""
+fi
 if [ -n "$KV_NAME" ]; then
     KV_PE_NAME="pe-${KV_NAME}"
     KV_PE_STATE=$(az network private-endpoint show -g "$RG" -n "$KV_PE_NAME" \

@@ -57,6 +57,8 @@ if ($appConfigName) {
 # Guard: verify the private endpoint actually exists before locking — this
 # prevents startup failures if someone runs the script against an environment
 # where the KV private endpoint was not provisioned (e.g. VNet disabled later).
+$kvName = azd env get-value keyVaultName 2>$null
+if ($LASTEXITCODE -ne 0) { $kvName = $null }
 if ($kvName) {
     $kvPeName = "pe-$kvName"
     $kvPe = az network private-endpoint show -g $rg -n $kvPeName -o json 2>$null | ConvertFrom-Json
