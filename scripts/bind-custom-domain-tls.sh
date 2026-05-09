@@ -356,7 +356,8 @@ if [ -z "$EXISTING_CERT" ]; then
             -g "$RG" -n "$CAE_NAME" \
             --hostname "$CUSTOM_DOMAIN" \
             --validation-method "$CERT_VALIDATION_METHOD" \
-            --only-show-errors 2>/dev/null)
+            --only-show-errors 2>&1) || \
+            echo "  WARNING: Certificate create returned non-zero (may be transient or cert already exists). Polling for status..."
 
         # For TXT validation: create the _dnsauth DNS record with the validation token
         if [ "$CERT_VALIDATION_METHOD" = "TXT" ] && [ "$ENABLE_AZURE_DNS" = "true" ]; then
