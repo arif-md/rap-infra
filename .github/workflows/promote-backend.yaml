@@ -1,4 +1,4 @@
-name: Promote Backend Image
+﻿name: Promote Backend Image
 
 # Backend service configuration
 env:
@@ -315,7 +315,7 @@ jobs:
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
           
-          SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
+          SUBJECT="$SUBJECT_PREFIX Promote backend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
           
           {
@@ -410,7 +410,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -527,17 +531,17 @@ jobs:
           fi
           if [ -n "$FQDN" ]; then
             echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
-            echo "Frontend URL: https://$FQDN"
+            echo "Backend URL: https://$FQDN"
           else
-            echo "Frontend URL not available"
+            echo "Backend URL not available"
           fi
           {
             echo "### Deployment endpoints"
             echo ""
             if [ -n "$FQDN" ]; then
-              echo "- Frontend: https://$FQDN"
+              echo "- Backend: https://$FQDN"
             else
-              echo "- Frontend: (not available)"
+              echo "- Backend: (not available)"
             fi
           } >> $GITHUB_STEP_SUMMARY
 
@@ -735,7 +739,7 @@ jobs:
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
           
-          SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
+          SUBJECT="$SUBJECT_PREFIX Promote backend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
           
           {
@@ -838,7 +842,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -954,17 +962,17 @@ jobs:
           fi
           if [ -n "$FQDN" ]; then
             echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
-            echo "Frontend URL: https://$FQDN"
+            echo "Backend URL: https://$FQDN"
           else
-            echo "Frontend URL not available"
+            echo "Backend URL not available"
           fi
           {
             echo "### Deployment endpoints"
             echo ""
             if [ -n "$FQDN" ]; then
-              echo "- Frontend: https://$FQDN"
+              echo "- Backend: https://$FQDN"
             else
-              echo "- Frontend: (not available)"
+              echo "- Backend: (not available)"
             fi
           } >> $GITHUB_STEP_SUMMARY
 
@@ -1170,7 +1178,7 @@ jobs:
             INTRO="A deployment to the '<strong>${TARGET_ENV}</strong>' environment is pending approval."
           fi
           
-          SUBJECT="$SUBJECT_PREFIX Promote frontend to ${TARGET_ENV}"
+          SUBJECT="$SUBJECT_PREFIX Promote backend to ${TARGET_ENV}"
           EMAIL_HTML="email.html"
           
           {
@@ -1265,7 +1273,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -1381,17 +1393,17 @@ jobs:
           fi
           if [ -n "$FQDN" ]; then
             echo "backendFqdn=$FQDN" >> $GITHUB_OUTPUT
-            echo "Frontend URL: https://$FQDN"
+            echo "Backend URL: https://$FQDN"
           else
-            echo "Frontend URL not available"
+            echo "Backend URL not available"
           fi
           {
             echo "### Deployment endpoints"
             echo ""
             if [ -n "$FQDN" ]; then
-              echo "- Frontend: https://$FQDN"
+              echo "- Backend: https://$FQDN"
             else
-              echo "- Frontend: (not available)"
+              echo "- Backend: (not available)"
             fi
           } >> $GITHUB_STEP_SUMMARY
 

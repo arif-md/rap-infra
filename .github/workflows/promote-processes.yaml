@@ -1,4 +1,4 @@
-name: Promote Processes Image
+﻿name: Promote Processes Image
 
 on:
   workflow_dispatch:
@@ -50,11 +50,22 @@ jobs:
           if [ -z "$BASE_ENV" ]; then BASE_ENV="dev"; fi
           echo "baseEnv=$BASE_ENV" >> $GITHUB_OUTPUT
           # Resolve source repository (for commit history/release notes)
-          # Prefer value from repository_dispatch payload, then configured var, else fall back to current repo
-          SRC_REPO='${{ github.event.client_payload.sourceRepo || vars.PROCESSES_SOURCE_REPO || '' }}'
+          # Prefer value from repository_dispatch payload, then the GitHub Variable named
+          # {SERVICE_KEY_UPPER}_REPO (e.g., PROCESSES_REPO) — same pattern as frontend/backend.
+          # Falls back to PROCESSES_SOURCE_REPO for backward compatibility, then to current repo.
+          SRC_REPO='${{ github.event.client_payload.sourceRepo || '' }}'
+          if [ -z "$SRC_REPO" ]; then
+            SERVICE_KEY_UPPER=$(echo "${{ env.SERVICE_KEY }}" | tr '[:lower:]' '[:upper:]')
+            REPO_VAR="${SERVICE_KEY_UPPER}_REPO"
+            SRC_REPO=$(printf '%s' '${{ toJson(vars) }}' | jq -r ".[\"$REPO_VAR\"] // empty")
+          fi
+          if [ -z "$SRC_REPO" ]; then
+            # Backward compatibility: also check PROCESSES_SOURCE_REPO
+            SRC_REPO='${{ vars.PROCESSES_SOURCE_REPO || '' }}'
+          fi
           if [ -z "$SRC_REPO" ]; then
             SRC_REPO="$GITHUB_REPOSITORY"
-            echo "Warning: sourceRepo not provided; falling back to $SRC_REPO"
+            echo "Warning: PROCESSES_REPO not set; falling back to $SRC_REPO"
           fi
           echo "srcRepo=$SRC_REPO" >> $GITHUB_OUTPUT
           echo "Source image: $IMG"
@@ -176,7 +187,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -425,7 +440,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -668,7 +687,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT

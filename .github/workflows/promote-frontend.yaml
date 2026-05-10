@@ -1,4 +1,4 @@
-name: Promote Frontend Image
+﻿name: Promote Frontend Image
 
 # Frontend service configuration
 env:
@@ -410,7 +410,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -838,7 +842,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
@@ -1265,7 +1273,11 @@ jobs:
           fi
           LOC=$(az group show -n "$RG" --query location -o tsv 2>/dev/null || true)
           if [ -z "$LOC" ]; then
+            LOC='${{ vars.AZURE_LOCATION || '' }}'
+          fi
+          if [ -z "$LOC" ]; then
             echo "Could not resolve location for resource group '$RG' in '${TARGET_ENV}' environment." >&2
+            echo "Tip: Set AZURE_LOCATION as a GitHub Variable for the '${TARGET_ENV}' environment." >&2
             exit 1
           fi
           echo "acr=$ACR_NAME" >> $GITHUB_OUTPUT
