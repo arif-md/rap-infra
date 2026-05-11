@@ -78,11 +78,47 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "✓ CAE VNet guard completed" -ForegroundColor Green
 
+# Re-enable App Config public network access before Bicep runs.
+# When VNet is enabled, lock-network-access.ps1 disables public access after each
+# successful deployment. But ARM (Bicep) writes key-values via the public endpoint
+# (App Config has no 'trusted Azure services' bypass unlike Key Vault).
+# Bicep sets publicNetworkAccess: Enabled, but if the resource already exists
+# with it Disabled, the ARM key-value write fails with 'Forbidden' before Bicep
+# can update the property — so we must unlock it here first.
+Write-Host "`n[8/10] Unlocking App Config public access for Bicep deployment..." -ForegroundColor Yellow
+$vnetEnabled = azd env get-value ENABLE_VNET_INTEGRATION 2>$null
+if ($vnetEnabled -eq "true") {
+    $appConfigName = azd env get-value appConfigName 2>$null
+    if ($LASTEXITCODE -ne 0) { $appConfigName = $null }
+    $rg = azd env get-value AZURE_RESOURCE_GROUP 2>$null
+    if ($appConfigName -and $rg) {
+        $currentPna = az appconfig show --name $appConfigName --resource-group $rg `
+            --query properties.publicNetworkAccess -o tsv 2>$null
+        if ($currentPna -eq "Disabled") {
+            Write-Host "  App Config public access is Disabled — re-enabling for Bicep deployment..." -ForegroundColor Yellow
+            az appconfig update --name $appConfigName --resource-group $rg `
+                --enable-public-network true --output none 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  ✅ App Config public access re-enabled." -ForegroundColor Green
+            } else {
+                Write-Host "  WARNING: Could not re-enable App Config public access — Bicep key-value writes may fail." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  ✅ App Config public access is already Enabled (or store does not exist yet)." -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  App Config name or RG not yet in azd env (first deploy) — skipping unlock." -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  VNet not enabled — App Config public access unlock not needed." -ForegroundColor Gray
+}
+Write-Host "✓ App Config public access check completed" -ForegroundColor Green
+
 # Pre-provision backend managed identity and grant KV access before Bicep runs.
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-Write-Host "`n[8/9] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
+Write-Host "`n[9/10] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-identities.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Identity pre-provisioning failed!" -ForegroundColor Red
@@ -93,7 +129,7 @@ Write-Host "✓ Identity pre-provisioning completed" -ForegroundColor Green
 # Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
 # Prevents the sql-setup ACI from being a no-op when the DB was recreated but
 # managed identity clientIds did not change (content-based detection limitation).
-Write-Host "`n[9/9] Checking SQL setup state..." -ForegroundColor Yellow
+Write-Host "`n[10/10] Checking SQL setup state..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-sql-setup.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ SQL setup check failed!" -ForegroundColor Red

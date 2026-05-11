@@ -9,6 +9,12 @@
 #
 # When VNet is disabled, this script is a no-op — public access stays open
 # and the free-tier App Config SKU is used (no private endpoint overhead).
+#
+# IMPORTANT: The counterpart to this script is the [8/10] step in
+# run-preprovision-hooks.ps1, which RE-ENABLES App Config public access before
+# the next Bicep deployment so ARM can write key-values again. If you add new
+# resources that are locked here, add a corresponding unlock in the preprovision
+# hook as well.
 # =============================================================================
 
 $vnetEnabled = azd env get-value ENABLE_VNET_INTEGRATION 2>$null
