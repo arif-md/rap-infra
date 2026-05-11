@@ -101,7 +101,7 @@ if ([string]::IsNullOrEmpty($resourceGroup)) {
 # Calculate Key Vault name if not provided
 if ([string]::IsNullOrEmpty($keyVaultName)) {
     # Calculate using the same logic as main.bicep
-    # Format: kv-{environmentName}-{uniqueString}-v10
+    # Format: kv-{environmentName}-{hash}-v1
     Write-Info "Calculating Key Vault name..."
     
     # Get abbreviations
@@ -111,30 +111,57 @@ if ([string]::IsNullOrEmpty($keyVaultName)) {
     $kvPrefix = $abbrs.keyVaultVaults
     
     # Calculate uniqueString using a simple hash-based approach
-    # Note: This approximates Bicep's uniqueString() but may not match exactly
-    # If KEY_VAULT_NAME environment variable is set, it will override this calculation
     $subscriptionId = az account show --query id -o tsv
     $uniqueStringInput = "$subscriptionId$environmentName"
+    
+    # Azure Key Vault names are limited to 24 characters.
+    # Layout: {prefix}{env}-{hash}-v1  ->  len(prefix) + len(env) + 1 + hash_len + 3 <= 24
+    $kvSuffix = "-v1"
+    $maxHashLen = 24 - $kvPrefix.Length - $environmentName.Length - 1 - $kvSuffix.Length
+    if ($maxHashLen -lt 8) {
+        Write-Error "Environment name '$environmentName' is too long for Key Vault naming (max ~10 chars)"
+        exit 1
+    }
     
     # Use .NET's hash function to generate a unique string
     $md5 = [System.Security.Cryptography.MD5]::Create()
     $hash = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($uniqueStringInput))
-    $uniqueString = [System.BitConverter]::ToString($hash).Replace("-", "").Substring(0, 13).ToLower()
+    $uniqueString = [System.BitConverter]::ToString($hash).Replace("-", "").Substring(0, $maxHashLen).ToLower()
     
     $resourceToken = "$environmentName-$uniqueString".ToLower()
-    $keyVaultName = "$kvPrefix$resourceToken-v10"
+    $keyVaultName = "$kvPrefix$resourceToken$kvSuffix"
     
-    Write-Info "Calculated Key Vault name: $keyVaultName"
+    Write-Info "Calculated Key Vault name: $keyVaultName ($($keyVaultName.Length) chars)"
     Write-Info "Exporting KEY_VAULT_NAME to azd environment for Bicep consistency..."
     azd env set KEY_VAULT_NAME $keyVaultName | Out-Null
 } else {
     Write-Info "Using provided Key Vault name: $keyVaultName"
+    # Validate length -- Azure Key Vault names must be 3-24 characters
+    if ($keyVaultName.Length -gt 24) {
+        Write-Error "KEY_VAULT_NAME '$keyVaultName' is $($keyVaultName.Length) characters -- Azure limit is 24."
+        Write-Error "Update the KEY_VAULT_NAME GitHub Variable for the '$environmentName' environment to a value <= 24 chars."
+        exit 1
+    }
 }
 
 # Export the Key Vault name to azd environment variables
 # This ensures main.bicep uses the same name as the script
 Write-Info "Setting KEY_VAULT_NAME=$keyVaultName in azd environment"
 azd env set KEY_VAULT_NAME $keyVaultName | Out-Null
+
+# Ensure the resource group exists -- it may not yet exist for brand-new environments
+# (pre-provision hooks run before Bicep creates the RG during azd provision).
+$rgExists = az group show --name $resourceGroup 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Info "Resource group '$resourceGroup' not found -- creating in '$location'..."
+    az group create --name $resourceGroup --location $location --output none 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Resource group '$resourceGroup' created"
+    } else {
+        Write-Error "Failed to create resource group '$resourceGroup'"
+        exit 1
+    }
+}
 
 # Check if Key Vault exists
 Write-Info "Checking if Key Vault exists..."

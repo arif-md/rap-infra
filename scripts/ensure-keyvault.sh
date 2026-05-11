@@ -109,22 +109,49 @@ if [ -z "$KEY_VAULT_NAME" ]; then
     SUBSCRIPTION_ID=$(az account show --query id -o tsv)
     UNIQUE_STRING_INPUT="${SUBSCRIPTION_ID}${ENVIRONMENT_NAME}"
     
+    # Azure Key Vault names are limited to 24 characters.
+    # Layout: {prefix}{env}-{hash}-v1  →  len(prefix) + len(env) + 1 + hash_len + 3 ≤ 24
+    KV_SUFFIX="-v1"
+    MAX_HASH_LEN=$(( 24 - ${#KV_PREFIX} - ${#ENVIRONMENT_NAME} - 1 - ${#KV_SUFFIX} ))
+    if [ "$MAX_HASH_LEN" -lt 8 ]; then
+        error "Environment name '${ENVIRONMENT_NAME}' is too long for Key Vault naming (max ~10 chars)"
+        exit 1
+    fi
+    
     # Use md5sum to generate a unique string (approximates Bicep's uniqueString)
-    UNIQUE_STRING=$(echo -n "$UNIQUE_STRING_INPUT" | md5sum | cut -c1-13)
+    UNIQUE_STRING=$(echo -n "$UNIQUE_STRING_INPUT" | md5sum | cut -c1-${MAX_HASH_LEN})
     
     RESOURCE_TOKEN=$(echo "${ENVIRONMENT_NAME}-${UNIQUE_STRING}" | tr '[:upper:]' '[:lower:]')
-    KEY_VAULT_NAME="${KV_PREFIX}${RESOURCE_TOKEN}-v10"
+    KEY_VAULT_NAME="${KV_PREFIX}${RESOURCE_TOKEN}${KV_SUFFIX}"
     
-    info "Calculated Key Vault name: $KEY_VAULT_NAME"
+    info "Calculated Key Vault name: $KEY_VAULT_NAME (${#KEY_VAULT_NAME} chars)"
     info "Exporting KEY_VAULT_NAME to azd environment for Bicep consistency..."
     azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME" >/dev/null
 else
     info "Using provided Key Vault name: $KEY_VAULT_NAME"
+    # Validate length — Azure Key Vault names must be 3–24 characters
+    if [ ${#KEY_VAULT_NAME} -gt 24 ]; then
+        error "KEY_VAULT_NAME '${KEY_VAULT_NAME}' is ${#KEY_VAULT_NAME} characters — Azure limit is 24."
+        error "Update the KEY_VAULT_NAME GitHub Variable for the '${ENVIRONMENT_NAME}' environment to a value ≤ 24 chars."
+        exit 1
+    fi
 fi
 
 # Export the Key Vault name to azd environment variables
 info "Setting KEY_VAULT_NAME=$KEY_VAULT_NAME in azd environment"
 azd env set KEY_VAULT_NAME "$KEY_VAULT_NAME" >/dev/null
+
+# Ensure the resource group exists — it may not yet exist for brand-new environments
+# (pre-provision hooks run before Bicep creates the RG during azd provision).
+if ! az group show --name "$RESOURCE_GROUP" >/dev/null 2>&1; then
+    info "Resource group '$RESOURCE_GROUP' not found — creating in '$LOCATION'..."
+    if az group create --name "$RESOURCE_GROUP" --location "$LOCATION" >/dev/null 2>&1; then
+        success "Resource group '$RESOURCE_GROUP' created"
+    else
+        error "Failed to create resource group '$RESOURCE_GROUP'"
+        exit 1
+    fi
+fi
 
 # Check if Key Vault exists
 info "Checking if Key Vault exists..."
@@ -184,7 +211,7 @@ fi
 
 info "Environment: $ENVIRONMENT_NAME (retention: $RETENTION_DAYS days)"
 
-if az keyvault create \
+if CREATE_OUT=$(az keyvault create \
     --name "$KEY_VAULT_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --location "$LOCATION" \
@@ -192,7 +219,7 @@ if az keyvault create \
     --enable-purge-protection true \
     --enable-rbac-authorization false \
     --public-network-access Enabled \
-    >/dev/null 2>&1; then
+    2>&1); then
     
     success "Key Vault created successfully: $KEY_VAULT_NAME"
     
@@ -230,6 +257,6 @@ if az keyvault create \
     
     exit 0
 else
-    error "Failed to create Key Vault"
+    error "Failed to create Key Vault: $CREATE_OUT"
     exit 1
 fi
