@@ -91,7 +91,8 @@ resolve_service_image() {
   # which appear last in time order after az acr import and cannot run on Container Apps.
   echo "   Querying ACR for latest linux/amd64 image in $REGISTRY/$REPO..."
   DIGEST=$(az acr manifest list-metadata -r "$AZURE_ACR_NAME" -n "$REPO" \
-    --query "[?architecture=='amd64' && os=='linux'] | [-1].digest" -o tsv 2>/dev/null || true)
+    --orderby time_desc \
+    --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
   # Fallback: if manifest list-metadata is unavailable or returns nothing, use time-ordered query
   if [ -z "$DIGEST" ]; then
     echo "   Falling back to time-ordered manifest query..."

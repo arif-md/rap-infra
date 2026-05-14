@@ -67,10 +67,21 @@ function Resolve-ServiceImage {
         # Will attempt to resolve from ACR below
     }
     elseif ($CURRENT_IMAGE -match '@sha256:') {
-        # Image already has a digest - trust it (workflow-configured or previously resolved)
-        Write-Host "   ✓ Image already configured with digest: $CURRENT_IMAGE" -ForegroundColor Green
-        Write-Host "     Keeping existing image (no validation needed)" -ForegroundColor Gray
-        return
+        # Image has a digest — validate it actually exists in ACR and is a runnable linux/amd64
+        # manifest (not an attestation manifest with os=unknown, and not a stale/deleted digest).
+        $digestPart  = $CURRENT_IMAGE -replace '^.*@', ''
+        $acrNamePart = ($CURRENT_IMAGE -replace '\.azurecr\.io.*$', '')
+        $repoPart    = ($CURRENT_IMAGE -replace '^[^/]+/', '') -replace '@.*$', ''
+        $imgOS = az acr manifest show-metadata -r $acrNamePart -n "${repoPart}@${digestPart}" `
+            --query "os" -o tsv 2>$null
+        if (-not [string]::IsNullOrEmpty($imgOS) -and $imgOS -ne "unknown") {
+            Write-Host "   ✓ Image already configured with valid digest (os=$imgOS): $CURRENT_IMAGE" -ForegroundColor Green
+            Write-Host "     Keeping existing image" -ForegroundColor Gray
+            return
+        }
+        # Digest is missing or is an attestation manifest — re-resolve below
+        Write-Host "   ⚠️  Existing digest is stale or is an attestation manifest (os='$imgOS')" -ForegroundColor Yellow
+        Write-Host "      Will re-resolve from ACR..." -ForegroundColor Gray
     } else {
         # Has an image but not a digest (e.g., tag-based)
         Write-Host "   Current image is not a digest reference: $CURRENT_IMAGE" -ForegroundColor Gray
@@ -78,9 +89,18 @@ function Resolve-ServiceImage {
         return
     }
     
-    # Try to get latest image from ACR
-    Write-Host "   Querying ACR for latest image in $REGISTRY/$REPO..." -ForegroundColor Gray
-    $DIGEST = az acr repository show-manifests -n $AZURE_ACR_NAME --repository $REPO --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>$null
+    # Try to get latest linux/amd64 image from ACR.
+    # Filter by architecture+os to avoid selecting attestation manifests (os: unknown).
+    Write-Host "   Querying ACR for latest linux/amd64 image in $REGISTRY/$REPO..." -ForegroundColor Gray
+    $DIGEST = az acr manifest list-metadata -r $AZURE_ACR_NAME -n $REPO `
+        --orderby time_desc `
+        --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>$null
+    # Fallback to time-ordered query if manifest list-metadata returns nothing
+    if ([string]::IsNullOrEmpty($DIGEST)) {
+        Write-Host "   Falling back to time-ordered manifest query..." -ForegroundColor Gray
+        $DIGEST = az acr repository show-manifests -n $AZURE_ACR_NAME --repository $REPO `
+            --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>$null
+    }
     
     if (-not [string]::IsNullOrEmpty($DIGEST)) {
         $NEW_IMAGE = "$REGISTRY/$REPO@$DIGEST"

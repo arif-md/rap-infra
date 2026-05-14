@@ -360,23 +360,37 @@ jobs:
           TARGET_REPO="raptor/${{ inputs.service-key }}-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
 
-          # Resolve linux/amd64 digest from source ACR to avoid importing attestation manifests
+          # Use the specific digest from SRC_IMAGE first.
+          # It was set by the deploy workflow and points to the correct image.
+          # Only fall back to a repo-wide query when it is an OCI index or attestation.
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_ACR="${SRC_DOMAIN%.azurecr.io}"
           SRC_PATH="${SRC_IMAGE#*/}"
           SRC_REPO="${SRC_PATH%@*}"
-          echo "Resolving linux/amd64 digest from source ACR: ${SRC_ACR}/${SRC_REPO}"
-          AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
-            --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
-          if [ -n "$AMD64_DIGEST" ]; then
-            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
-            echo "Using resolved amd64 source digest: $AMD64_DIGEST"
+          SRC_DIGEST="${SRC_IMAGE##*@}"
+          echo "Checking source digest: ${SRC_ACR}/${SRC_REPO}@${SRC_DIGEST}"
+          SRC_OS=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "os" -o tsv 2>/dev/null || echo "")
+          SRC_ARCH=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "architecture" -o tsv 2>/dev/null || echo "")
+          if [[ "$SRC_OS" == "linux" && "$SRC_ARCH" == "amd64" ]]; then
+            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${SRC_DIGEST}"
+            echo "Source digest is linux/amd64 -- using directly: $SRC_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image as-is"
-            IMPORT_SRC="$SRC_IMAGE"
+            echo "Source digest type: os='${SRC_OS:-unknown}' arch='${SRC_ARCH:-unknown}' -- resolving amd64 manifest..."
+            AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
+              --orderby time_desc \
+              --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
+            if [ -n "$AMD64_DIGEST" ]; then
+              IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
+              echo "Resolved amd64 digest from repo: $AMD64_DIGEST"
+            else
+              echo "Could not resolve amd64 manifest; using source image as-is"
+              IMPORT_SRC="$SRC_IMAGE"
+            fi
           fi
 
-          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
+          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG}"
           az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           # Resolve digest from TARGET ACR — do not carry source digest forward
@@ -687,22 +701,37 @@ jobs:
           TARGET_REPO="raptor/${{ inputs.service-key }}-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
 
+          # Use the specific digest from SRC_IMAGE first.
+          # It was set by the deploy workflow and points to the correct image.
+          # Only fall back to a repo-wide query when it is an OCI index or attestation.
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_ACR="${SRC_DOMAIN%.azurecr.io}"
           SRC_PATH="${SRC_IMAGE#*/}"
           SRC_REPO="${SRC_PATH%@*}"
-          echo "Resolving linux/amd64 digest from source ACR: ${SRC_ACR}/${SRC_REPO}"
-          AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
-            --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
-          if [ -n "$AMD64_DIGEST" ]; then
-            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
-            echo "Using resolved amd64 source digest: $AMD64_DIGEST"
+          SRC_DIGEST="${SRC_IMAGE##*@}"
+          echo "Checking source digest: ${SRC_ACR}/${SRC_REPO}@${SRC_DIGEST}"
+          SRC_OS=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "os" -o tsv 2>/dev/null || echo "")
+          SRC_ARCH=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "architecture" -o tsv 2>/dev/null || echo "")
+          if [[ "$SRC_OS" == "linux" && "$SRC_ARCH" == "amd64" ]]; then
+            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${SRC_DIGEST}"
+            echo "Source digest is linux/amd64 -- using directly: $SRC_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image as-is"
-            IMPORT_SRC="$SRC_IMAGE"
+            echo "Source digest type: os='${SRC_OS:-unknown}' arch='${SRC_ARCH:-unknown}' -- resolving amd64 manifest..."
+            AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
+              --orderby time_desc \
+              --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
+            if [ -n "$AMD64_DIGEST" ]; then
+              IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
+              echo "Resolved amd64 digest from repo: $AMD64_DIGEST"
+            else
+              echo "Could not resolve amd64 manifest; using source image as-is"
+              IMPORT_SRC="$SRC_IMAGE"
+            fi
           fi
 
-          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
+          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG}"
           az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
@@ -1010,22 +1039,37 @@ jobs:
           TARGET_REPO="raptor/${{ inputs.service-key }}-${{ steps.prep.outputs.env }}"
           TAG="promoted-${GITHUB_RUN_ID}"
 
+          # Use the specific digest from SRC_IMAGE first.
+          # It was set by the deploy workflow and points to the correct image.
+          # Only fall back to a repo-wide query when it is an OCI index or attestation.
           SRC_DOMAIN="${SRC_IMAGE%%/*}"
           SRC_ACR="${SRC_DOMAIN%.azurecr.io}"
           SRC_PATH="${SRC_IMAGE#*/}"
           SRC_REPO="${SRC_PATH%@*}"
-          echo "Resolving linux/amd64 digest from source ACR: ${SRC_ACR}/${SRC_REPO}"
-          AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
-            --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
-          if [ -n "$AMD64_DIGEST" ]; then
-            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
-            echo "Using resolved amd64 source digest: $AMD64_DIGEST"
+          SRC_DIGEST="${SRC_IMAGE##*@}"
+          echo "Checking source digest: ${SRC_ACR}/${SRC_REPO}@${SRC_DIGEST}"
+          SRC_OS=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "os" -o tsv 2>/dev/null || echo "")
+          SRC_ARCH=$(az acr manifest show-metadata -r "$SRC_ACR" -n "${SRC_REPO}@${SRC_DIGEST}" \
+            --query "architecture" -o tsv 2>/dev/null || echo "")
+          if [[ "$SRC_OS" == "linux" && "$SRC_ARCH" == "amd64" ]]; then
+            IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${SRC_DIGEST}"
+            echo "Source digest is linux/amd64 -- using directly: $SRC_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image as-is"
-            IMPORT_SRC="$SRC_IMAGE"
+            echo "Source digest type: os='${SRC_OS:-unknown}' arch='${SRC_ARCH:-unknown}' -- resolving amd64 manifest..."
+            AMD64_DIGEST=$(az acr manifest list-metadata -r "$SRC_ACR" -n "$SRC_REPO" \
+              --orderby time_desc \
+              --query "[?architecture=='amd64' && os=='linux'] | [0].digest" -o tsv 2>/dev/null || true)
+            if [ -n "$AMD64_DIGEST" ]; then
+              IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
+              echo "Resolved amd64 digest from repo: $AMD64_DIGEST"
+            else
+              echo "Could not resolve amd64 manifest; using source image as-is"
+              IMPORT_SRC="$SRC_IMAGE"
+            fi
           fi
 
-          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
+          echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG}"
           az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
