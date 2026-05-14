@@ -28,7 +28,9 @@
 
 set -e
 
-# Lock down App Config + Key Vault public network access when VNet is enabled.
+# Lock down Key Vault public network access when VNet is enabled.
+# App Config is intentionally NOT locked — ARM writes key-values via the data plane endpoint
+# and there is no 'trusted Azure services' bypass for App Config (unlike Key Vault).
 # Runs before the custom-domain early-exit so it executes even when no custom domain is configured.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)"
 if [ -f "$SCRIPT_DIR/lock-network-access.sh" ]; then

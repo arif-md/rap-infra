@@ -23,7 +23,9 @@
 
 $ErrorActionPreference = "Stop"
 
-# Lock down App Config + Key Vault public network access when VNet is enabled.
+# Lock down Key Vault public network access when VNet is enabled.
+# App Config is intentionally NOT locked — ARM writes key-values via the data plane endpoint
+# and there is no 'trusted Azure services' bypass for App Config (unlike Key Vault).
 # Runs before the custom-domain early-exit so it executes even when no custom domain is configured.
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $lockScript = Join-Path $scriptDir "lock-network-access.ps1"

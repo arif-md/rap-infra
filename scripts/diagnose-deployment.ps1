@@ -179,8 +179,8 @@ Write-Host "`n-- 3. Public network access status (are services locked to VNet-on
 if ($appConfigName) {
     $acPublic = az appconfig show -n $appConfigName -g $rg `
         --query "properties.publicNetworkAccess" -o tsv 2>$null
-    $acColor = if ($acPublic -eq 'Disabled') { 'Green' } else { 'Yellow' }
-    Write-Host ("  App Config public access : {0,-10}  {1}" -f $acPublic, $(if ($acPublic -eq 'Disabled') { '(locked to VNet ✓)' } else { '(open — lock with lock-network-access.ps1 if VNet mode is active)' })) -ForegroundColor $acColor
+    $acColor = if ($acPublic -eq 'Enabled') { 'Green' } else { 'Red' }
+    Write-Host ("  App Config public access : {0,-10}  {1}" -f $acPublic, $(if ($acPublic -eq 'Disabled') { '(PROBLEM: must be Enabled — ARM writes key-values via data plane)' } else { '(correct — must stay Enabled for ARM deployments)' })) -ForegroundColor $acColor
 } else {
     Write-Host "  App Config: not found in $rg" -ForegroundColor Red
 }
