@@ -428,8 +428,9 @@ jobs:
           IMG='${{ steps.import.outputs.image }}'
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
           chmod +x scripts/update-containerapp-image.sh
-          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io"
+          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL
         shell: bash
@@ -766,8 +767,9 @@ jobs:
           IMG='${{ steps.import.outputs.image }}'
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
           chmod +x scripts/update-containerapp-image.sh
-          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io"
+          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL
         shell: bash
@@ -1104,8 +1106,9 @@ jobs:
           IMG='${{ steps.import.outputs.image }}'
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
+          ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
           chmod +x scripts/update-containerapp-image.sh
-          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io"
+          ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL
         shell: bash

@@ -3,13 +3,16 @@
 # Ensures Container App has ACR registry binding configured with proper RBAC permissions.
 # This script is idempotent - if ACR is already configured, it skips the setup to save time.
 #
-# Usage: ./ensure-acr-binding.sh <app-name> <resource-group> <acr-name> <acr-domain>
+# Usage: ./ensure-acr-binding.sh <app-name> <resource-group> <acr-name> <acr-domain> [acr-resource-group]
 #
 # Arguments:
-#   app-name: Name of the Container App (e.g., "dev-rap-fe")
-#   resource-group: Azure resource group name
-#   acr-name: Azure Container Registry name (e.g., "ngraptortest")
-#   acr-domain: Full ACR domain (e.g., "ngraptortest.azurecr.io")
+#   app-name:           Name of the Container App (e.g., "dev-rap-fe")
+#   resource-group:     Azure resource group of the Container App
+#   acr-name:           Azure Container Registry name (e.g., "ngraptortest")
+#   acr-domain:         Full ACR domain (e.g., "ngraptortest.azurecr.io")
+#   acr-resource-group: (Optional) Resource group where the ACR lives.
+#                       When omitted, falls back to subscription-wide lookup by ACR name.
+#                       Required when the ACR is in a different RG from the Container App.
 #
 # Returns:
 #   Exit 0: ACR binding successful or already configured
@@ -17,13 +20,14 @@
 #
 # Example:
 #   ./ensure-acr-binding.sh "dev-rap-fe" "rg-raptor-dev" "ngraptortest" "ngraptortest.azurecr.io"
+#   ./ensure-acr-binding.sh "train-rap-fe" "rg-raptor-train" "nexgenincacr" "nexgenincacr.azurecr.io" "rg-acr-shared"
 
 set -euo pipefail
 
 # Validate arguments
-if [ $# -ne 4 ]; then
+if [ $# -lt 4 ] || [ $# -gt 5 ]; then
   echo "Error: Invalid number of arguments" >&2
-  echo "Usage: $0 <app-name> <resource-group> <acr-name> <acr-domain>" >&2
+  echo "Usage: $0 <app-name> <resource-group> <acr-name> <acr-domain> [acr-resource-group]" >&2
   exit 1
 fi
 
@@ -31,6 +35,7 @@ APP_NAME="$1"
 RG="$2"
 ACR_NAME="$3"
 ACR_DOMAIN="$4"
+ACR_RG="${5:-}"  # Optional: resource group where the ACR lives (may differ from Container App RG)
 
 # Check if Container App exists
 if ! az containerapp show -n "$APP_NAME" -g "$RG" >/dev/null 2>&1; then
@@ -52,7 +57,17 @@ fi
 echo "ACR not configured for Container App, setting up registry binding..."
 
 # Resolve ACR resource ID
-ACR_ID=$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv 2>/dev/null || true)
+# Prefer the explicit ACR resource group when provided; fall back to the Container App's RG,
+# then to a subscription-wide name lookup (handles ACR in a different RG).
+if [ -n "$ACR_RG" ]; then
+  ACR_ID=$(az acr show -n "$ACR_NAME" -g "$ACR_RG" --query id -o tsv 2>/dev/null || true)
+else
+  ACR_ID=$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv 2>/dev/null || true)
+fi
+if [ -z "$ACR_ID" ]; then
+  # Last resort: subscription-wide lookup by name (no -g needed when ACR name is unique)
+  ACR_ID=$(az acr show -n "$ACR_NAME" --query id -o tsv 2>/dev/null || true)
+fi
 if [ -z "$ACR_ID" ]; then
   echo "Error: Could not resolve ACR resource ID for '$ACR_NAME'" >&2
   exit 1

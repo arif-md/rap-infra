@@ -6,14 +6,16 @@
 # old images may have been deleted from ACR.
 #
 # USAGE:
-#   ./update-containerapp-image.sh <app-name> <resource-group> <new-image> <acr-name> <acr-domain>
+#   ./update-containerapp-image.sh <app-name> <resource-group> <new-image> <acr-name> <acr-domain> [acr-resource-group]
 #
 # ARGUMENTS:
-#   app-name      Container App name (e.g., "test-rap-fe")
-#   resource-group Resource group name (e.g., "rg-raptor-test")
-#   new-image     New image with digest (e.g., "acr.azurecr.io/repo@sha256:...")
-#   acr-name      ACR registry name (e.g., "ngraptortest")
-#   acr-domain    ACR full domain (e.g., "ngraptortest.azurecr.io")
+#   app-name           Container App name (e.g., "test-rap-fe")
+#   resource-group     Resource group of the Container App (e.g., "rg-raptor-test")
+#   new-image          New image with digest (e.g., "acr.azurecr.io/repo@sha256:...")
+#   acr-name           ACR registry name (e.g., "ngraptortest")
+#   acr-domain         ACR full domain (e.g., "ngraptortest.azurecr.io")
+#   acr-resource-group (Optional) Resource group where the ACR lives.
+#                      Pass when the ACR is in a different RG from the Container App.
 #
 # REQUIREMENTS:
 #   - Container App must exist
@@ -52,9 +54,9 @@ set -euo pipefail
 # ARGUMENT VALIDATION
 # ============================================================================
 
-if [ $# -ne 5 ]; then
+if [ $# -lt 5 ] || [ $# -gt 6 ]; then
   echo "Error: Invalid number of arguments" >&2
-  echo "Usage: $0 <app-name> <resource-group> <new-image> <acr-name> <acr-domain>" >&2
+  echo "Usage: $0 <app-name> <resource-group> <new-image> <acr-name> <acr-domain> [acr-resource-group]" >&2
   exit 1
 fi
 
@@ -63,6 +65,7 @@ RG="$2"
 NEW_IMG="$3"
 ACR_NAME="$4"
 ACR_DOMAIN="$5"
+ACR_RG="${6:-}"  # Optional: resource group where the ACR lives (may differ from Container App RG)
 
 # ============================================================================
 # PREREQUISITE CHECKS
@@ -112,7 +115,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 DOMAIN="${NEW_IMG%%/*}"
 if [ "$DOMAIN" = "$ACR_DOMAIN" ]; then
   chmod +x "$(dirname "$0")/ensure-acr-binding.sh"
-  if ! "$(dirname "$0")/ensure-acr-binding.sh" "$APP_NAME" "$RG" "$ACR_NAME" "$ACR_DOMAIN"; then
+  if ! "$(dirname "$0")/ensure-acr-binding.sh" "$APP_NAME" "$RG" "$ACR_NAME" "$ACR_DOMAIN" ${ACR_RG:+"$ACR_RG"}; then
     echo "❌ Failed to ensure ACR binding" >&2
     exit 1
   fi
