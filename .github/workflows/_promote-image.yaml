@@ -377,7 +377,7 @@ jobs:
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           # Resolve digest from TARGET ACR — do not carry source digest forward
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
@@ -703,7 +703,7 @@ jobs:
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
             --query "digest" -o tsv 2>/dev/null || true)
@@ -1026,7 +1026,7 @@ jobs:
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --force
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
             --query "digest" -o tsv 2>/dev/null || true)
