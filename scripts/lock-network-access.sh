@@ -1,20 +1,18 @@
 #!/bin/bash
 
 # =============================================================================
-# Post-Provision: Lock public network access for App Config + Key Vault
+# Post-Provision: Lock public network access for Key Vault
 # =============================================================================
-# When VNet integration is enabled, both services are reachable via private
-# endpoints from within the VNet. Public access is kept open during the Bicep
-# deployment (so ARM can write App Config key-values), then locked down here.
+# When VNet integration is enabled, Key Vault is reachable via a private
+# endpoint from within the VNet. Public access can be safely disabled after
+# deployment — containers use private routing via the DNS zone.
 #
-# When VNet is disabled, this script is a no-op — public access stays open
-# and the free-tier App Config SKU is used (no private endpoint overhead).
+# App Config public access is intentionally NOT locked here. ARM (Bicep) writes
+# key-values over the public endpoint (App Config has no 'trusted Azure services'
+# bypass). Locking public access creates a Forbidden race condition on the next
+# deployment. RBAC (Managed Identity Data Reader) protects the data plane.
 #
-# IMPORTANT: The counterpart to this script is the [8/10] step in
-# run-preprovision-hooks.sh, which RE-ENABLES App Config public access before
-# the next Bicep deployment so ARM can write key-values again. If you add new
-# resources that are locked here, add a corresponding unlock in the preprovision
-# hook as well.
+# When VNet is disabled, this script is a no-op.
 # =============================================================================
 
 set -euo pipefail
@@ -32,26 +30,6 @@ if [ -z "$RG" ]; then
 fi
 
 echo "==> Locking public network access (VNet mode)..."
-
-# ── App Configuration ────────────────────────────────────────────────────────
-# App Config has no "trusted Azure services" bypass: ARM deployment engine
-# writes key-values over the public endpoint, so we keep public access open
-# during Bicep deployment and lock it down here in postprovision.
-APP_CONFIG_NAME=$(azd env get-value appConfigName 2>/dev/null || true)
-if [ -n "$APP_CONFIG_NAME" ]; then
-    echo "  Disabling App Config public access: $APP_CONFIG_NAME"
-    if az appconfig update \
-        --name "$APP_CONFIG_NAME" \
-        --resource-group "$RG" \
-        --enable-public-network false \
-        --output none 2>/dev/null; then
-        echo "  ✅ App Config public access disabled."
-    else
-        echo "  WARNING: Could not disable App Config public access (permission or SKU issue) — continuing."
-    fi
-else
-    echo "  WARNING: appConfigName not in azd env — skipping App Config lockdown."
-fi
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
 # Key Vault has a private endpoint (pe-kv-*) and a linked private DNS zone

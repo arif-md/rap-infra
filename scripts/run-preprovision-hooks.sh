@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 header "Running Pre-Provision Hooks"
 
 # Key Vault Setup
-step "[1/7] Setting up Key Vault..."
+step "[1/9] Setting up Key Vault..."
 if ! "${SCRIPT_DIR}/ensure-keyvault.sh"; then
     error "Key Vault setup failed!"
     exit 1
@@ -29,7 +29,7 @@ fi
 success "Key Vault setup completed"
 
 # Resolve container images
-step "[2/7] Resolving container images..."
+step "[2/9] Resolving container images..."
 if ! "${SCRIPT_DIR}/resolve-images.sh"; then
     error "Image resolution failed!"
     exit 1
@@ -37,7 +37,7 @@ fi
 success "Image resolution completed"
 
 # Validate ACR binding
-step "[3/7] Validating ACR binding..."
+step "[3/9] Validating ACR binding..."
 if ! "${SCRIPT_DIR}/validate-acr-binding.sh"; then
     error "ACR validation failed!"
     exit 1
@@ -45,7 +45,7 @@ fi
 success "ACR validation completed"
 
 # Ensure ACR exists
-step "[4/7] Ensuring ACR exists..."
+step "[4/9] Ensuring ACR exists..."
 if ! "${SCRIPT_DIR}/ensure-acr.sh"; then
     error "ACR setup failed!"
     exit 1
@@ -53,7 +53,7 @@ fi
 success "ACR setup completed"
 
 # Ensure DNS Zone exists (outside deployment stack)
-step "[5/7] Ensuring DNS Zone exists..."
+step "[5/9] Ensuring DNS Zone exists..."
 if ! "${SCRIPT_DIR}/ensure-dns-zone.sh"; then
     error "DNS Zone setup failed!"
     exit 1
@@ -61,7 +61,7 @@ fi
 success "DNS Zone setup completed"
 
 # Purge any soft-deleted App Config store (Standard SKU + VNet only)
-step "[6/7] Checking for soft-deleted App Config stores..."
+step "[6/9] Checking for soft-deleted App Config stores..."
 if ! "${SCRIPT_DIR}/recover-or-purge-appconfig.sh"; then
     error "App Config purge check failed!"
     exit 1
@@ -69,50 +69,18 @@ fi
 success "App Config purge check completed"
 
 # Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
-step "[7/8] Checking for stranded Container Apps Environment..."
+step "[7/9] Checking for stranded Container Apps Environment..."
 if ! "${SCRIPT_DIR}/ensure-cae-vnet.sh"; then
     error "CAE VNet guard failed!"
     exit 1
 fi
 success "CAE VNet guard completed"
 
-# Re-enable App Config public network access before Bicep runs.
-# When VNet is enabled, lock-network-access.sh disables public access after each
-# successful deployment. But ARM (Bicep) writes key-values via the public endpoint
-# (App Config has no 'trusted Azure services' bypass unlike Key Vault).
-# Bicep sets publicNetworkAccess: Enabled, but if the resource already exists
-# with it Disabled, the ARM key-value write fails with 'Forbidden' before Bicep
-# can update the property — so we must unlock it here first.
-step "[8/10] Unlocking App Config public access for Bicep deployment..."
-VNET_ENABLED=$(azd env get-value ENABLE_VNET_INTEGRATION 2>/dev/null || true)
-if [ "$VNET_ENABLED" = "true" ]; then
-    APP_CONFIG_NAME=$(azd env get-value appConfigName 2>/dev/null || true)
-    RG=$(azd env get-value AZURE_RESOURCE_GROUP 2>/dev/null || true)
-    if [ -n "$APP_CONFIG_NAME" ] && [ -n "$RG" ]; then
-        CURRENT_PNA=$(az appconfig show --name "$APP_CONFIG_NAME" --resource-group "$RG" \
-            --query properties.publicNetworkAccess -o tsv 2>/dev/null || true)
-        if [ "$CURRENT_PNA" = "Disabled" ]; then
-            info "App Config public access is Disabled — re-enabling for Bicep deployment..."
-            az appconfig update --name "$APP_CONFIG_NAME" --resource-group "$RG" \
-                --enable-public-network true --output none 2>/dev/null \
-                && success "App Config public access re-enabled" \
-                || warning "Could not re-enable App Config public access — Bicep key-value writes may fail"
-        else
-            success "App Config public access is already Enabled (or store does not exist yet)"
-        fi
-    else
-        info "App Config name or RG not yet in azd env (first deploy) — skipping unlock"
-    fi
-else
-    info "VNet not enabled — App Config public access unlock not needed"
-fi
-success "App Config public access check completed"
-
 # Pre-provision backend managed identity and grant KV access before Bicep runs.
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-step "[9/10] Pre-provisioning backend identity for Key Vault access..."
+step "[8/9] Pre-provisioning backend identity for Key Vault access..."
 if ! "${SCRIPT_DIR}/ensure-identities.sh"; then
     error "Identity pre-provisioning failed!"
     exit 1
@@ -122,7 +90,7 @@ success "Identity pre-provisioning completed"
 # Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
 # Prevents the sql-setup ACI from being a no-op when the DB was recreated but
 # managed identity clientIds did not change (content-based detection limitation).
-step "[10/10] Checking SQL setup state..."
+step "[9/9] Checking SQL setup state..."
 if ! "${SCRIPT_DIR}/ensure-sql-setup.sh"; then
     error "SQL setup check failed!"
     exit 1
