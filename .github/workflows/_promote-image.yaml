@@ -8,7 +8,8 @@ name: _Promote Image (reusable)
 # - To provision a new environment first, run promote-infrastructure.yaml or provision-infrastructure.yaml.
 #
 # Bug fixes applied vs the old per-service promote workflows:
-# 1. az acr import uses --platform linux/amd64: only the runnable image is imported (not attestation manifests).
+# 1. Source digest is pre-resolved to the linux/amd64 manifest via az acr manifest list-metadata before import.
+#    This avoids importing attestation manifests (os: unknown) which Container Apps cannot run.
 # 2. Digest is resolved from the TARGET ACR after import, not carried from the source.
 # 3. relnotes.sh receives SERVICE_REPO_READ_TOKEN derived from {SERVICE_KEY_UPPER}_REPO_READ_TOKEN.
 # 4. No azd in promote-to-* jobs (azd up never runs during image promotion).
@@ -371,12 +372,12 @@ jobs:
             IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
             echo "Using resolved amd64 source digest: $AMD64_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image with --platform filter"
+            echo "Could not resolve amd64 manifest from source; using source image as-is"
             IMPORT_SRC="$SRC_IMAGE"
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --platform linux/amd64
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
 
           # Resolve digest from TARGET ACR — do not carry source digest forward
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
@@ -697,12 +698,12 @@ jobs:
             IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
             echo "Using resolved amd64 source digest: $AMD64_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image with --platform filter"
+            echo "Could not resolve amd64 manifest from source; using source image as-is"
             IMPORT_SRC="$SRC_IMAGE"
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --platform linux/amd64
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
             --query "digest" -o tsv 2>/dev/null || true)
@@ -1020,12 +1021,12 @@ jobs:
             IMPORT_SRC="${SRC_DOMAIN}/${SRC_REPO}@${AMD64_DIGEST}"
             echo "Using resolved amd64 source digest: $AMD64_DIGEST"
           else
-            echo "Could not resolve amd64 manifest from source; using source image with --platform filter"
+            echo "Could not resolve amd64 manifest from source; using source image as-is"
             IMPORT_SRC="$SRC_IMAGE"
           fi
 
           echo "Importing ${IMPORT_SRC} -> ${ACR}/${TARGET_REPO}:${TAG} (linux/amd64)"
-          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG" --platform linux/amd64
+          az acr import -n "$ACR" --source "$IMPORT_SRC" --image "$TARGET_REPO:$TAG"
 
           DIGEST=$(az acr manifest show-metadata -r "$ACR" -n "$TARGET_REPO:$TAG" \
             --query "digest" -o tsv 2>/dev/null || true)
