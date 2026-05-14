@@ -63,10 +63,22 @@ resolve_service_image() {
     echo "   No current image configured for ${SERVICE_KEY}"
     # Will attempt to resolve from ACR below
   elif [[ "$CURRENT_IMAGE" == *"@sha256:"* ]]; then
-    # Image already has a digest - trust it (workflow-configured or previously resolved)
-    echo "   ✓ Image already configured with digest: $CURRENT_IMAGE"
-    echo "     Keeping existing image (no validation needed)"
-    return 0
+    # Image has a digest — validate it is a runnable linux/amd64 manifest, not an attestation.
+    # Attestation manifests (SLSA provenance) have os=unknown and cannot run on Container Apps.
+    DIGEST_PART="${CURRENT_IMAGE#*@}"
+    ACR_NAME_PART=$(echo "${CURRENT_IMAGE%%/*}" | sed 's/\.azurecr\.io$//')
+    REPO_PART="${CURRENT_IMAGE#*/}"; REPO_PART="${REPO_PART%@*}"
+    IMG_OS=$(az acr manifest show-metadata -r "$ACR_NAME_PART" -n "${REPO_PART}@${DIGEST_PART}" \
+      --query "os" -o tsv 2>/dev/null || echo "")
+    if [[ "$IMG_OS" == "unknown" || "$IMG_OS" == "" ]]; then
+      # Digest points to an attestation or index — resolve the correct linux/amd64 manifest below
+      echo "   ⚠️  Existing digest appears to be an attestation/index (os='${IMG_OS:-unknown}')"
+      echo "      Will re-resolve linux/amd64 manifest from ACR"
+    else
+      echo "   ✓ Image already configured with digest (os=$IMG_OS): $CURRENT_IMAGE"
+      echo "     Keeping existing image"
+      return 0
+    fi
   elif [ -n "$CURRENT_IMAGE" ]; then
     # Has an image but not a digest (e.g., tag-based)
     echo "   Current image is not a digest reference: $CURRENT_IMAGE"
@@ -74,9 +86,18 @@ resolve_service_image() {
     return 0
   fi
   
-  # Try to get latest image from ACR
-  echo "   Querying ACR for latest image in $REGISTRY/$REPO..."
-  DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+  # Try to get latest linux/amd64 image from ACR.
+  # Query by architecture+os to avoid selecting attestation manifests (os: unknown),
+  # which appear last in time order after az acr import and cannot run on Container Apps.
+  echo "   Querying ACR for latest linux/amd64 image in $REGISTRY/$REPO..."
+  DIGEST=$(az acr manifest list-metadata -r "$AZURE_ACR_NAME" -n "$REPO" \
+    --query "[?architecture=='amd64' && os=='linux'] | [-1].digest" -o tsv 2>/dev/null || true)
+  # Fallback: if manifest list-metadata is unavailable or returns nothing, use time-ordered query
+  if [ -z "$DIGEST" ]; then
+    echo "   Falling back to time-ordered manifest query..."
+    DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" \
+      --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+  fi
   
   if [ -n "$DIGEST" ]; then
     NEW_IMAGE="$REGISTRY/$REPO@$DIGEST"

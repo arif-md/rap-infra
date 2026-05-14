@@ -105,42 +105,66 @@ paths:
 
 ### Promotion Workflows
 
-#### Frontend Promotion (`promote-frontend.yaml`)
+All service promotion workflows are thin wrappers (~25 lines each) that delegate to the
+reusable workflow `_promote-image.yaml`. The full promotion logic lives in one place.
 
-**Triggers:**
-- Manual: workflow_dispatch with image parameter
-- Repository dispatch: `frontend-image-promote` event
+#### How promotion works
 
-**Configuration:**
-```yaml
-SERVICE_KEY: frontend
-SERVICE_SUFFIX: fe
-```
+1. A service's thin wrapper triggers on `workflow_dispatch` or `repository_dispatch`.
+2. It calls `_promote-image.yaml` via `uses: ./.github/workflows/_promote-image.yaml`.
+3. `_promote-image.yaml` executes: plan → prepare → promote for each environment.
+4. **No `azd up` is ever called** — promotion uses Azure CLI only (`az acr import` +
+   `az containerapp update`). This keeps promotion to ~2 minutes per environment.
+5. If a Container App does not exist in the target environment, promotion fails with a
+   clear error. Provision the environment first via `promote-infrastructure.yaml`.
 
-**Required Secrets:**
-- `FRONTEND_REPO_READ_TOKEN`: PAT for accessing frontend source repo
+#### Thin-wrapper promotion files
+
+| File | Service | Dispatch event |
+|------|---------|----------------|
+| `promote-frontend.yaml` | frontend | `frontend-image-promote` |
+| `promote-backend.yaml` | backend | `backend-image-promote` |
+| `promote-processes.yaml` | processes | `processes-image-promote` |
+
+Each wrapper passes `service-key`, `service-suffix`, `service-label`, `image`, and
+`source-repo` as inputs to `_promote-image.yaml`.
+
+#### Infrastructure Promotion (`promote-infrastructure.yaml`)
+
+Use this workflow to run `azd up` sequentially across environments when Bicep templates
+have changed and need to propagate beyond dev.
+
+**Triggers:** `workflow_dispatch` with boolean inputs `run-test`, `run-train`, `run-prod`.
 
 **Promotion Path:**
 ```
-dev → test → train → prod
+test → train → prod   (each environment waits for the previous to complete)
 ```
+
+**Note:** This workflow provisions infrastructure only. Container images are updated
+by the service promote workflows, not here.
 
 ---
 
-#### Backend Promotion (`promote-backend.yaml`)
+#### Reusable workflow (`_promote-image.yaml`)
 
-**Triggers:**
-- Manual: workflow_dispatch with image parameter
-- Repository dispatch: `backend-image-promote` event
+**Inputs:**
 
-**Configuration:**
-```yaml
-SERVICE_KEY: backend
-SERVICE_SUFFIX: be
+| Input | Description |
+|-------|-------------|
+| `service-key` | Lowercase key: `frontend`, `backend`, `processes` |
+| `service-suffix` | Container App suffix: `fe`, `be`, `proc` |
+| `service-label` | Human-readable label for notifications |
+| `image` | Full image reference with digest |
+| `source-repo` | Optional GitHub `owner/repo` of the source |
+
+**Secrets:** All service tokens are passed via `secrets: inherit` from the caller.
+The workflow derives the correct token at runtime using the service key:
+```bash
+SK_UPPER=$(echo '${{ inputs.service-key }}' | tr '[:lower:]' '[:upper:]')
+TOKEN_VAR="${SK_UPPER}_REPO_READ_TOKEN"
+export SERVICE_REPO_READ_TOKEN="${!TOKEN_VAR:-}"
 ```
-
-**Required Secrets:**
-- `BACKEND_REPO_READ_TOKEN`: PAT for accessing backend source repo
 
 **Promotion Path:**
 ```
@@ -426,39 +450,40 @@ cp .github/workflows/deploy-frontend.yaml .github/workflows/deploy-{service}.yam
 
 ### Step 2: Create Promotion Workflow
 
-```bash
-# Copy frontend promotion workflow
-cp .github/workflows/promote-frontend.yaml .github/workflows/promote-{service}.yaml
+Create a thin wrapper that calls the reusable `_promote-image.yaml` workflow.
+The entire file is ~25 lines — no bulk find/replace needed:
+
+```yaml
+# .github/workflows/promote-{service}.yaml
+name: Promote {Service} Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Full image with digest (e.g., myacr.azurecr.io/raptor/{service}-dev@sha256:...)"
+        required: true
+      sourceRepo:
+        description: "GitHub owner/repo of the {service} source (auto-detected if empty)"
+        required: false
+  repository_dispatch:
+    types: [ {service}-image-promote ]
+
+jobs:
+  promote:
+    uses: ./.github/workflows/_promote-image.yaml
+    secrets: inherit
+    with:
+      service-key:    {service}
+      service-suffix: {suffix}
+      service-label:  {Service}
+      image:       ${{ github.event.client_payload.image || inputs.image }}
+      source-repo: ${{ github.event.client_payload.sourceRepo || inputs.sourceRepo || '' }}
 ```
 
-**Use PowerShell to make bulk replacements:**
-
-```powershell
-$file = ".github/workflows/promote-{service}.yaml"
-$content = Get-Content $file -Raw
-
-# Update workflow name
-$content = $content -replace 'name: Promote Frontend Image', 'name: Promote {Service} Image'
-
-# Update service configuration
-$content = $content -replace '# Frontend service configuration', '# {Service} service configuration'
-$content = $content -replace 'SERVICE_KEY: frontend', 'SERVICE_KEY: {service}'
-$content = $content -replace 'SERVICE_SUFFIX: fe', 'SERVICE_SUFFIX: {suffix}'
-
-# Update repository dispatch type
-$content = $content -replace 'frontend-image-promote', '{service}-image-promote'
-
-# Update secrets/tokens (use uppercase SERVICE name)
-$content = $content -replace 'FRONTEND_REPO_READ_TOKEN', '{SERVICE}_REPO_READ_TOKEN'
-
-# Update FQDN references
-$content = $content -replace 'frontendFqdn', '{service}Fqdn'
-
-# Update input description
-$content = $content -replace 'raptor/frontend-dev', 'raptor/{service}-dev'
-
-# Save changes
-$content | Set-Content $file -NoNewline
+Set the git execute bit if you're creating the file on Windows:
+```bash
+git update-index --chmod=+x .github/workflows/promote-{service}.yaml
 ```
 
 ### Step 3: Create Bicep Infrastructure
@@ -525,8 +550,13 @@ In your application repository (`rap-{service}`), update the build workflow to d
 | `AZURE_TENANT_ID` | Repository | Azure tenant ID | `87654321-4321-...` |
 | `AZURE_SUBSCRIPTION_ID` | Repository | Azure subscription ID | `abcdef12-3456-...` |
 | `GH_PAT_REPO_DISPATCH` | Repository | PAT for cross-repo dispatch | `ghp_...` |
-| `FRONTEND_REPO_READ_TOKEN` | Repository | PAT for frontend source repo | `ghp_...` |
-| `BACKEND_REPO_READ_TOKEN` | Repository | PAT for backend source repo | `ghp_...` |
+| `FRONTEND_REPO_READ_TOKEN` | Repository | PAT for frontend source repo read | `ghp_...` |
+| `BACKEND_REPO_READ_TOKEN` | Repository | PAT for backend source repo read | `ghp_...` |
+| `PROCESSES_REPO_READ_TOKEN` | Repository | PAT for processes source repo read | `ghp_...` |
+
+> **Note:** In `_promote-image.yaml` the correct token is selected automatically from the
+> `{SERVICE}_REPO_READ_TOKEN` secret that matches the `service-key` input. You only need to
+> ensure the secret exists in the repository with the correct name.
 
 ### GitHub Environment Variables
 
@@ -581,16 +611,26 @@ AZURE_ACR_NAME: ngraptorprod
 
 ### Promotion Workflow Logic
 
-1. **Plan Job**: Determines promotion path based on source environment
-   - `dev` → `test`
-   - `test` → `train`
-   - `train` → `prod`
+1. **Plan Job**: Parses source environment from the ACR repo path embedded in the image digest.
+   Sets boolean flags (`run_test`, `run_train`, `run_prod`) to determine which environments
+   the image needs to reach from its origin.
 
-2. **Import Image**: Copy image manifest from source ACR to target ACR
+2. **Prepare Job** (per environment, runs in `preflight` GitHub Environment):
+   - Resolves release notes by calling `relnotes.sh` against the source repository.
+   - Sends email notification with commit diff and who approved.
+   - Derives the correct PAT using the service key: `{SERVICE_KEY_UPPER}_REPO_READ_TOKEN`.
 
-3. **Deploy**: Update Container App in target environment with promoted image
+3. **Promote Job** (per environment, runs in `test`/`train`/`prod` GitHub Environment):
+   - Imports the image from source ACR → target ACR using `az acr import --platform linux/amd64`.
+   - Resolves the imported digest **from the target ACR** (prevents attestation manifest selection).
+   - Calls `update-containerapp-image.sh` to update the Container App.
+   - **Hard-fails** (no fallback to `azd up`) if the Container App does not exist.
 
-4. **Notification**: Send email with release notes (extracted from OCI labels)
+4. **Sequential Barriers**: `after-test` and `after-train` jobs (with `if: always()`) ensure
+   each environment completes before the next begins.
+
+> **Key design principle:** Image promotion never calls `azd up`. Infrastructure provisioning
+> and image promotion are fully separated concerns.
 
 ---
 
@@ -607,8 +647,13 @@ The generic workflows (`infra-azd.yaml`, `promote-image.yaml`) have been **remov
 **What remains (active):**
 - ✅ `.github/workflows/deploy-frontend.yaml`
 - ✅ `.github/workflows/deploy-backend.yaml`
-- ✅ `.github/workflows/promote-frontend.yaml`
-- ✅ `.github/workflows/promote-backend.yaml`
+- ✅ `.github/workflows/deploy-processes.yaml`
+- ✅ `.github/workflows/promote-frontend.yaml` (thin wrapper → `_promote-image.yaml`)
+- ✅ `.github/workflows/promote-backend.yaml` (thin wrapper → `_promote-image.yaml`)
+- ✅ `.github/workflows/promote-processes.yaml` (thin wrapper → `_promote-image.yaml`)
+- ✅ `.github/workflows/_promote-image.yaml` (reusable promotion logic, ~500 lines)
+- ✅ `.github/workflows/promote-infrastructure.yaml` (sequential infra provisioning)
+- ✅ `.github/workflows/provision-infrastructure.yaml` (single-environment infra provision)
 
 ### Why We Migrated
 

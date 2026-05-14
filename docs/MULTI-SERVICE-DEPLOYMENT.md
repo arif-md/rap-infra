@@ -1,6 +1,16 @@
 # Generalized Service Deployment Scripts
 
-This document explains how to use the generalized scripts for deploying multiple services (frontend, backend, and future services) across environments.
+> **📅 Status — November 2025**
+>
+> The promotion side of this architecture has been superseded by the reusable
+> `_promote-image.yaml` workflow and thin per-service wrappers. The sections below
+> describing `promote-service-image.sh` as the promotion mechanism are kept for historical
+> reference; the current promotion path is through GitHub Actions workflows only.
+>
+> **For adding a new service** (deploy + promote), see [WORKFLOWS.md](./WORKFLOWS.md#adding-a-new-service).
+
+This document explains the generalized scripts for deploying services in the dev environment
+and covers the naming conventions shared by all scripts and workflows.
 
 ## Overview
 

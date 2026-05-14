@@ -11,7 +11,8 @@ set -euo pipefail
 # - PREV_IMAGE: previously deployed image (optional)
 # - PREV_DIGEST: previously deployed digest (optional)
 # - COMMITS_TABLE_LIMIT: max commits to render in the table (default 50)
-# - FRONTEND_REPO_READ_TOKEN: optional PAT for cross-repo read
+# - SERVICE_REPO_READ_TOKEN: optional PAT for cross-repo read (generic name; replaces FRONTEND_REPO_READ_TOKEN)
+# - FRONTEND_REPO_READ_TOKEN: accepted as a backward-compatible alias when SERVICE_REPO_READ_TOKEN is unset
 # - GITHUB_REPOSITORY/GITHUB_TOKEN/BUILD_URL are expected from workflow env
 
 COMMITS_TABLE_LIMIT=${COMMITS_TABLE_LIMIT:-50}
@@ -24,7 +25,8 @@ TGT_ACR=${TGT_ACR:-}
 PREV_IMAGE=${PREV_IMAGE:-}
 PREV_DIGEST=${PREV_DIGEST:-}
 BUILD_URL=${BUILD_URL:-}
-FRONTEND_REPO_READ_TOKEN=${FRONTEND_REPO_READ_TOKEN:-}
+# SERVICE_REPO_READ_TOKEN is the canonical name. Accept FRONTEND_REPO_READ_TOKEN as a backward-compat fallback.
+SERVICE_REPO_READ_TOKEN=${SERVICE_REPO_READ_TOKEN:-${FRONTEND_REPO_READ_TOKEN:-}}
 
 if [[ -z "$SRC_IMAGE" || -z "$SRC_REPO" || -z "$TARGET_ENV" ]]; then
   echo "[relnotes] Missing required inputs (SRC_IMAGE, SRC_REPO, TARGET_ENV)" >&2
@@ -233,7 +235,7 @@ fi
 OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1)
 REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
 GH_TOKEN_USE=""
-if [[ "${GITHUB_REPOSITORY:-}" == "$SRC_REPO" ]]; then GH_TOKEN_USE="${GITHUB_TOKEN:-}"; else GH_TOKEN_USE="$FRONTEND_REPO_READ_TOKEN"; fi
+if [[ "${GITHUB_REPOSITORY:-}" == "$SRC_REPO" ]]; then GH_TOKEN_USE="${GITHUB_TOKEN:-}"; else GH_TOKEN_USE="$SERVICE_REPO_READ_TOKEN"; fi
 
 resolve_full_sha() {
   local ref="$1"
@@ -298,7 +300,7 @@ if [[ -n "$PREV_DIGEST" ]]; then
       printf '<p>Compare commits: <a href="%s/compare/%s...%s">%s → %s</a></p>\n' "$REPO_URL" "${PREV_SHA:-$PREV_COMMIT_SHORT}" "${NEW_SHA:-$NEW_COMMIT_SHORT}" "${PREV_COMMIT_SHORT}" "${NEW_COMMIT_SHORT}" >> "$HTML_FILE"
       OWNER=$(echo "$SRC_REPO" | cut -d'/' -f1); REPO_NAME=$(echo "$SRC_REPO" | cut -d'/' -f2)
       API_URL="https://api.github.com/repos/${OWNER}/${REPO_NAME}/compare/${PREV_SHA:-$PREV_COMMIT_SHORT}...${NEW_SHA:-$NEW_COMMIT_SHORT}"
-      GH_TOKEN_USE=""; if [[ "${GITHUB_REPOSITORY:-}" == "$SRC_REPO" ]]; then GH_TOKEN_USE="${GITHUB_TOKEN:-}"; else GH_TOKEN_USE="$FRONTEND_REPO_READ_TOKEN"; fi
+      GH_TOKEN_USE=""; if [[ "${GITHUB_REPOSITORY:-}" == "$SRC_REPO" ]]; then GH_TOKEN_USE="${GITHUB_TOKEN:-}"; else GH_TOKEN_USE="$SERVICE_REPO_READ_TOKEN"; fi
       if [[ -n "$GH_TOKEN_USE" ]]; then
         echo "<details><summary>Commit log</summary>" >> "$HTML_FILE"
         echo '<table border="1" cellpadding="6" cellspacing="0"><thead><tr><th align="left">SHA</th><th align="left">Message</th><th align="left">Author</th><th align="left">Date</th></tr></thead><tbody>' >> "$HTML_FILE"

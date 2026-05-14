@@ -1,8 +1,11 @@
 # Service Deployment Generalization - Summary
 
-## What Was Done
+> **📅 Updated — November 2025**
+>
+> The promotion side of this architecture has been superseded by `_promote-image.yaml`.
+> See [WORKFLOWS.md](./WORKFLOWS.md#promotion-workflows) for the current architecture.
+> The dev-environment deploy scripts (`deploy-service-image.sh`) remain in use.
 
-Generalized the image deployment and promotion logic to support **multiple services** (frontend, backend, and future services) instead of hardcoded frontend-only implementation.
 
 ## New Scripts Created
 

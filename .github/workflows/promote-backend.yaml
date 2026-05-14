@@ -1,18 +1,27 @@
 ﻿name: Promote Backend Image
 
-# Backend service configuration
-env:
-  SERVICE_KEY: backend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
-  SERVICE_SUFFIX: be                 # Used for: {env}-rap-{suffix}
-
 on:
   workflow_dispatch:
     inputs:
       image:
         description: "Full image with digest (e.g., myacr.azurecr.io/raptor/backend-dev@sha256:...)"
         required: true
+      sourceRepo:
+        description: "GitHub owner/repo of the backend source (auto-detected if empty)"
+        required: false
   repository_dispatch:
     types: [ backend-image-promote ]
+
+jobs:
+  promote:
+    uses: ./.github/workflows/_promote-image.yaml
+    secrets: inherit
+    with:
+      service-key:    backend
+      service-suffix: be
+      service-label:  Backend
+      image:       ${{ github.event.client_payload.image || inputs.image }}
+      source-repo: ${{ github.event.client_payload.sourceRepo || inputs.sourceRepo || '' }}
 
 jobs:
   plan:

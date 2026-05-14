@@ -177,10 +177,14 @@ Dev → Test → Train → Prod
 
 ## Script Exit Codes
 
-| Exit Code | Meaning                                    | GitHub Output     |
-|-----------|--------------------------------------------| ------------------|
-| 0         | Success - fast-path update completed       | didFastPath=true  |
-| 1         | Failed or cannot fast-path (full provision needed) | didFastPath=false |
+| Exit Code | Meaning                                    | Context |
+|-----------|--------------------------------------------| --------|
+| 0         | Success — Container App image updated      | `update-containerapp-image.sh` |
+| 1         | Failed — Container App not found or update error | Promotion hard-fails; provision environment first |
+
+> **Note:** The old `didFastPath=true/false` GitHub Actions output pattern has been removed.
+> Promote workflows now use Azure CLI only (no `azd up` fallback). If a Container App does
+> not exist, the promotion job fails immediately with a clear error message.
 
 ## Required Permissions
 

@@ -1,0 +1,264 @@
+name: Promote Infrastructure
+
+# Provisions Azure infrastructure (azd up) sequentially across environments.
+# Use this when Bicep changes have been deployed to dev and need to propagate forward.
+# Image promotion (container image updates) is handled by promote-{service}.yaml, not this workflow.
+#
+# Environment order: dev → test → train → prod
+# Each environment requires its GitHub Environment to be configured with AZURE_ACR_NAME,
+# AZURE_RESOURCE_GROUP, AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_TENANT_ID.
+# Add required-reviewer protection rules to test/train/prod GitHub Environments for gated rollouts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run-test:
+        description: "Provision test environment"
+        type: boolean
+        default: true
+      run-train:
+        description: "Provision train environment"
+        type: boolean
+        default: true
+      run-prod:
+        description: "Provision prod environment"
+        type: boolean
+        default: false
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # TEST
+  # ────────────────────────────────────────────────────────────────────────────
+  provision-test:
+    name: Provision test
+    if: ${{ inputs.run-test }}
+    runs-on: ubuntu-latest
+    environment: test
+    concurrency:
+      group: azure-deployment-test
+      cancel-in-progress: false
+    env:
+      AZURE_ENV_NAME:          ${{ vars.AZURE_ENV_NAME || 'test' }}
+      AZURE_RESOURCE_GROUP:    ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_ACR_NAME:          ${{ vars.AZURE_ACR_NAME }}
+      AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP || '' }}
+      KEY_VAULT_NAME:          ${{ vars.KEY_VAULT_NAME || '' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Azure Developer CLI
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
+        run: |
+          if ! command -v azd >/dev/null 2>&1; then
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
+          azd version
+
+      - name: azd auth login (OIDC)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare azd environment
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name:        ${{ env.AZURE_ENV_NAME }}
+          azure-resource-group:  ${{ env.AZURE_RESOURCE_GROUP }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json:    ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Run preprovision hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-acr.sh scripts/resolve-images.sh scripts/validate-acr-binding.sh
+          ./scripts/ensure-acr.sh
+          ./scripts/resolve-images.sh
+          ./scripts/validate-acr-binding.sh
+
+      - name: Provision infrastructure
+        run: azd up --no-prompt
+
+  after-test:
+    name: Barrier after test
+    if: ${{ always() }}
+    needs: [provision-test]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Test provisioning complete — proceeding to train"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # TRAIN
+  # ────────────────────────────────────────────────────────────────────────────
+  provision-train:
+    name: Provision train
+    if: ${{ inputs.run-train }}
+    needs: [after-test]
+    runs-on: ubuntu-latest
+    environment: train
+    concurrency:
+      group: azure-deployment-train
+      cancel-in-progress: false
+    env:
+      AZURE_ENV_NAME:          ${{ vars.AZURE_ENV_NAME || 'train' }}
+      AZURE_RESOURCE_GROUP:    ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_ACR_NAME:          ${{ vars.AZURE_ACR_NAME }}
+      AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP || '' }}
+      KEY_VAULT_NAME:          ${{ vars.KEY_VAULT_NAME || '' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Azure Developer CLI
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
+        run: |
+          if ! command -v azd >/dev/null 2>&1; then
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
+          azd version
+
+      - name: azd auth login (OIDC)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare azd environment
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name:        ${{ env.AZURE_ENV_NAME }}
+          azure-resource-group:  ${{ env.AZURE_RESOURCE_GROUP }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json:    ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Run preprovision hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-acr.sh scripts/resolve-images.sh scripts/validate-acr-binding.sh
+          ./scripts/ensure-acr.sh
+          ./scripts/resolve-images.sh
+          ./scripts/validate-acr-binding.sh
+
+      - name: Provision infrastructure
+        run: azd up --no-prompt
+
+  after-train:
+    name: Barrier after train
+    if: ${{ always() }}
+    needs: [provision-train]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Train provisioning complete — proceeding to prod"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # PROD
+  # ────────────────────────────────────────────────────────────────────────────
+  provision-prod:
+    name: Provision prod
+    if: ${{ inputs.run-prod }}
+    needs: [after-train]
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency:
+      group: azure-deployment-prod
+      cancel-in-progress: false
+    env:
+      AZURE_ENV_NAME:          ${{ vars.AZURE_ENV_NAME || 'prod' }}
+      AZURE_RESOURCE_GROUP:    ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_ACR_NAME:          ${{ vars.AZURE_ACR_NAME }}
+      AZURE_ACR_RESOURCE_GROUP: ${{ vars.AZURE_ACR_RESOURCE_GROUP || '' }}
+      KEY_VAULT_NAME:          ${{ vars.KEY_VAULT_NAME || '' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Azure Developer CLI
+        uses: Azure/setup-azd@v2
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Ensure azd installed (fallback)
+        run: |
+          if ! command -v azd >/dev/null 2>&1; then
+            curl -fsSL https://aka.ms/install-azd.sh | bash
+            echo "$HOME/.azure-dev/bin" >> $GITHUB_PATH
+          fi
+          azd version
+
+      - name: azd auth login (OIDC)
+        run: |
+          azd auth login \
+            --client-id "${{ secrets.AZURE_CLIENT_ID }}" \
+            --tenant-id "${{ secrets.AZURE_TENANT_ID }}" \
+            --federated-credential-provider github
+
+      - name: Prepare azd environment
+        uses: ./.github/actions/setup-azd-env
+        with:
+          azure-env-name:        ${{ env.AZURE_ENV_NAME }}
+          azure-resource-group:  ${{ env.AZURE_RESOURCE_GROUP }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          all-vars-json:    ${{ toJson(vars) }}
+          all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Run preprovision hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ensure-acr.sh scripts/resolve-images.sh scripts/validate-acr-binding.sh
+          ./scripts/ensure-acr.sh
+          ./scripts/resolve-images.sh
+          ./scripts/validate-acr-binding.sh
+
+      - name: Provision infrastructure
+        run: azd up --no-prompt

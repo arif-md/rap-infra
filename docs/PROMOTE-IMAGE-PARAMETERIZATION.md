@@ -1,33 +1,30 @@
 # promote-image.yaml Parameterization Guide
 
-## Overview
+> **⚠️ SUPERSEDED — November 2025**
+>
+> The old monolithic `promote-frontend.yaml` / `promote-backend.yaml` / `promote-processes.yaml`
+> workflows (~1340 lines each with hardcoded frontend references) have been **replaced** by:
+>
+> - `_promote-image.yaml` — single reusable workflow (~500 lines) that handles all services
+> - `promote-frontend.yaml`, `promote-backend.yaml`, `promote-processes.yaml` — thin wrappers
+>   (~25 lines each) that call `_promote-image.yaml` via `uses:`
+>
+> **This document is kept for historical reference only.** For current guidance on adding a
+> new service promotion workflow, see [WORKFLOWS.md](./WORKFLOWS.md#step-2-create-promotion-workflow).
 
-The `promote-image.yaml` workflow has been **partially parameterized** to support multiple services. This document identifies all hardcoded frontend references and provides guidance for creating backend/other service workflows.
+---
 
-## ✅ What's Been Parameterized
+## Historical Context
 
-### 1. Workflow-Level Service Configuration (Lines 3-6)
-```yaml
-env:
-  SERVICE_KEY: frontend              # Used for: SERVICE_{KEY}_IMAGE_NAME, raptor/{key}-{env}
-  SERVICE_SUFFIX: fe                 # Used for: {env}-rap-{suffix}
-```
+This document tracked the partial parameterization of `promote-image.yaml` to support multiple
+services. The work revealed that copy-and-modify at ~1340 lines was unmaintainable — any bug
+fix required updating three identical files simultaneously.
 
-### 2. Resolve Inputs Step (Plan Job)
-**Before:**
-```yaml
-if [ -z "$SRC_REPO" ]; then SRC_REPO='${{ vars.FRONTEND_REPO }}'; fi
-```
+The final architecture instead extracts all promotion logic into one reusable workflow
+(`_promote-image.yaml`) and replaces per-service files with 25-line wrappers that only
+specify the service identity (`service-key`, `service-suffix`, `service-label`).
 
-**After:**
-```yaml
-SERVICE_KEY_UPPER=$(echo "${{ env.SERVICE_KEY }}" | tr '[:lower:]' '[:upper:]')
-REPO_VAR="${SERVICE_KEY_UPPER}_REPO"
-SRC_REPO=$(printf '%s' '${{ toJson(vars) }}' | jq -r ".[\"$REPO_VAR\"] // empty")
-```
-- Now dynamically looks for `FRONTEND_REPO`, `BACKEND_REPO`, etc.
 
-### 3. Parse Base Environment Step (Plan Job)
 **Before:**
 ```yaml
 if echo "$REPO_PART" | grep -qE 'frontend-(dev|test|train|prod)'; then

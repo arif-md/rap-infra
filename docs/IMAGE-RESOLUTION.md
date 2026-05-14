@@ -157,7 +157,62 @@ Resolve-ServiceImage -ServiceKey "worker"
 ⚠️ **ACR Dependency**: Requires `az` CLI and ACR access to resolve images  
 ⚠️ **Environment-Specific**: Uses `AZURE_ENV_NAME` to determine ACR repository  
 
-## Manual Override
+## Attestation Manifest Problem and Fix
+
+### Root Cause
+
+When `az acr import --platform linux/amd64` imports a multi-arch image, the ACR may record
+multiple manifests: the linux/amd64 image, the OCI manifest index, and an SLSA attestation
+manifest. The attestation manifest has `os: unknown` and is written last, so a naive
+`--orderby time_desc --top 1` query selects it.
+
+Container Apps rejects attestation manifests with a cryptic `InvalidImage` error because
+they have no runnable OS/architecture.
+
+### Fix in `resolve-images.sh`
+
+The script now queries specifically for a `linux/amd64` manifest:
+
+```bash
+# First try linux/amd64 manifest specifically (avoids attestation manifests)
+DIGEST=$(az acr manifest list-metadata -r "$AZURE_ACR_NAME" -n "$REPO" \
+  --query "[?architecture=='amd64' && os=='linux'] | [-1].digest" -o tsv 2>/dev/null || true)
+# Fall back to time-ordered if architecture filter returns nothing
+if [ -z "$DIGEST" ]; then
+  DIGEST=$(az acr repository show-manifests -n "$AZURE_ACR_NAME" --repository "$REPO" \
+    --orderby time_desc --top 1 --query "[0].digest" -o tsv 2>/dev/null || true)
+fi
+```
+
+Additionally, when an existing digest is configured, the script now validates it is a
+runnable manifest (not an attestation) before trusting it:
+
+```bash
+# Check os field — attestations have os=unknown
+IMG_OS=$(az acr manifest show-metadata -r "$ACR_NAME" -n "${REPO}@${DIGEST}" \
+  --query "os" -o tsv 2>/dev/null || echo "")
+if [[ "$IMG_OS" == "unknown" || "$IMG_OS" == "" ]]; then
+  # Re-resolve the correct linux/amd64 manifest
+fi
+```
+
+### Fix in `_promote-image.yaml`
+
+The `promote-to-*` jobs in the reusable workflow pass `--platform linux/amd64` to
+`az acr import` and then resolve the digest **from the target ACR** after import:
+
+```bash
+az acr import -n "$TARGET_ACR" \
+  --source "$SRC_REGISTRY/$REPO@$SRC_DIGEST" \
+  --image "$TARGET_REPO@$SRC_DIGEST" \
+  --platform linux/amd64
+
+# Resolve from target (not trust the source digest directly)
+PROMOTED_DIGEST=$(az acr manifest list-metadata -r "$TARGET_ACR" -n "$TARGET_REPO" \
+  --query "[?architecture=='amd64' && os=='linux'] | [-1].digest" -o tsv)
+```
+
+
 
 You can still manually set specific images:
 

@@ -1,7 +1,43 @@
 # Analysis: Registry Binding in Promotion Workflows
 
-## Question
-Do test/train/prod promotion workflows need the same registry binding optimization as the dev workflow?
+> **📅 Status — November 2025**
+>
+> The three monolithic promote workflows have been replaced by a single reusable workflow
+> (`_promote-image.yaml`) with thin wrappers. The analysis and recommendations in this
+> document were the foundation for that refactoring. The patterns described as "missing"
+> are now implemented in `_promote-image.yaml`.
+>
+> For the current architecture, see [WORKFLOWS.md](./WORKFLOWS.md#promotion-workflows).
+
+---
+
+## Summary of Decisions Made
+
+| Aspect | Dev Workflow (`deploy-*.yaml`) | Promotion Workflow (`_promote-image.yaml`) |
+|--------|-------------------------------|-------------------------------------------|
+| **Registry binding check** | ✅ YES — needed | ❌ NO — binding already set by `azd up` |
+| **RBAC role assignment** | ✅ YES — needed | ❌ NO — already granted |
+| **15-second RBAC wait** | ✅ YES — if rebinding | ❌ NO — never needed |
+| **Old digest validation** | ✅ YES — implemented | ✅ YES — implemented in `_promote-image.yaml` |
+| **Revision copy fallback** | ✅ YES — implemented | ✅ YES — via `update-containerapp-image.sh` |
+| **`azd up` fallback** | ✅ YES — for Bicep changes | ❌ **REMOVED** — fail clearly if CA missing |
+| **`--platform linux/amd64`** | N/A | ✅ YES — prevents attestation manifest selection |
+
+## Why `azd up` Was Removed from Promotion
+
+The original promotion workflows fell back to `azd up` when a Container App did not exist
+("didFastPath" pattern). This caused:
+
+- ~10–20 minute promotion runs when they should take ~2 minutes
+- `azd up` requires azd CLI, environment setup, Bicep evaluation — all unnecessary overhead
+- Promotion should never provision infrastructure; that's the job of `deploy-*.yaml` and
+  `promote-infrastructure.yaml`
+
+**Current behavior:** If a Container App does not exist in the target environment, the
+`promote-to-*` job fails with a clear error message. The operator should provision the
+environment with `promote-infrastructure.yaml` first.
+
+
 
 ## Short Answer
 **NO** - Promotion workflows don't need the registry binding logic at all.
