@@ -291,6 +291,35 @@ else
   echo "✅ Direct update completed successfully"
 fi
 
+# ============================================================================
+# ENSURE targetPort MATCHES SERVER_PORT (hello-world → real image transition)
+# ============================================================================
+# When provisioned with the hello-world placeholder, Bicep sets targetPort=80.
+# After promoting a real backend image (e.g. Spring Boot on 8080), the port
+# stays at 80 unless corrected here. A mismatch causes health probes to fail,
+# the backend revision becomes unhealthy, and the HTTP Route Config falls
+# through to the catch-all (frontend), returning the Angular SPA HTML instead
+# of JSON. Checking SERVER_PORT covers the backend; the frontend has no
+# SERVER_PORT env var, so its port is never touched.
+
+echo "📋 Step 4: Verify ingress targetPort"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+CONFIGURED_PORT=$(az containerapp show -n "$APP_NAME" -g "$RG" \
+  --query "properties.configuration.ingress.targetPort" -o tsv 2>/dev/null || true)
+SERVER_PORT_ENV=$(az containerapp show -n "$APP_NAME" -g "$RG" \
+  --query "properties.template.containers[0].env[?name=='SERVER_PORT'].value | [0]" \
+  -o tsv 2>/dev/null || true)
+
+if [ -n "$SERVER_PORT_ENV" ] && [ "${CONFIGURED_PORT:-}" != "$SERVER_PORT_ENV" ]; then
+  echo "⚠️  targetPort ($CONFIGURED_PORT) ≠ SERVER_PORT ($SERVER_PORT_ENV) — updating..."
+  az containerapp ingress update -n "$APP_NAME" -g "$RG" \
+    --target-port "$SERVER_PORT_ENV" >/dev/null
+  echo "✓ targetPort updated to $SERVER_PORT_ENV"
+else
+  echo "✓ targetPort (${CONFIGURED_PORT:-unknown}) is correct"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🎉 Container App image update complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
