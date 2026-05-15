@@ -112,6 +112,17 @@ jobs:
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
 
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # These role assignments already exist from the initial provision.
+          # Promote always re-provisions an existing environment, so we skip
+          # re-creating them to avoid RoleAssignmentExists (ARM 409) which
+          # Azure Deployment Stacks cannot handle idempotently for resources
+          # created outside the current stack.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
+
       - name: Run preprovision hooks
         shell: bash
         run: |
@@ -198,6 +209,17 @@ jobs:
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
 
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # These role assignments already exist from the initial provision.
+          # Promote always re-provisions an existing environment, so we skip
+          # re-creating them to avoid RoleAssignmentExists (ARM 409) which
+          # Azure Deployment Stacks cannot handle idempotently for resources
+          # created outside the current stack.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
+
       - name: Run preprovision hooks
         shell: bash
         run: |
@@ -280,6 +302,17 @@ jobs:
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # These role assignments already exist from the initial provision.
+          # Promote always re-provisions an existing environment, so we skip
+          # re-creating them to avoid RoleAssignmentExists (ARM 409) which
+          # Azure Deployment Stacks cannot handle idempotently for resources
+          # created outside the current stack.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
 
       - name: Run preprovision hooks
         shell: bash
