@@ -4,12 +4,33 @@ name: Promote Infrastructure
 # Use this when Bicep changes have been deployed to dev and need to propagate forward.
 # Image promotion (container image updates) is handled by promote-{service}.yaml, not this workflow.
 #
+# ── Trigger model ────────────────────────────────────────────────────────────
+# Automatic: fires when "Provision Infrastructure" completes successfully on main.
+#   dev is already done by that workflow; this promotes test → train.
+#   Prod is intentionally excluded from auto-trigger — it always requires explicit
+#   manual dispatch with run-prod=true.
+#
+# Manual (workflow_dispatch): select which environments to provision. Useful for
+#   re-running a single failed environment, force-provisioning prod, or targeted rollout.
+#
+# ── Approval gates (industry standard) ───────────────────────────────────────
+# The gate is NOT the trigger — it is the GitHub Environment protection rule.
+# Configure "Required reviewers" on the test, train, and prod GitHub Environments.
+# The workflow fires automatically but pauses at each environment waiting for a
+# human to approve. Reject the approval to discard the promotion. This matches the
+# Azure DevOps multi-stage pipeline model and how _promote-image.yaml works here.
+#
 # Environment order: dev → test → train → prod
-# Each environment requires its GitHub Environment to be configured with AZURE_ACR_NAME,
-# AZURE_RESOURCE_GROUP, AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_TENANT_ID.
-# Add required-reviewer protection rules to test/train/prod GitHub Environments for gated rollouts.
+# Each environment must have AZURE_ACR_NAME, AZURE_RESOURCE_GROUP,
+# AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_TENANT_ID configured.
 
 on:
+  # Auto-chain after dev provision succeeds
+  workflow_run:
+    workflows: ["Provision Infrastructure"]
+    types: [completed]
+    branches: [main]
+
   workflow_dispatch:
     inputs:
       run-test:
@@ -31,7 +52,11 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   provision-test:
     name: Provision test
-    if: ${{ inputs.run-test }}
+    # Auto-trigger: only when the dev provision succeeded.
+    # Manual: respect the run-test checkbox.
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.run-test == true)
     runs-on: ubuntu-latest
     environment: test
     concurrency:
@@ -112,7 +137,11 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   provision-train:
     name: Provision train
-    if: ${{ inputs.run-train }}
+    # Auto-trigger: only when the dev provision succeeded.
+    # Manual: respect the run-train checkbox.
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.run-train == true)
     needs: [after-test]
     runs-on: ubuntu-latest
     environment: train
@@ -194,7 +223,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   provision-prod:
     name: Provision prod
-    if: ${{ inputs.run-prod }}
+    # Prod is NEVER auto-triggered — always requires explicit manual dispatch with run-prod=true.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-prod == true }}
     needs: [after-train]
     runs-on: ubuntu-latest
     environment: prod
