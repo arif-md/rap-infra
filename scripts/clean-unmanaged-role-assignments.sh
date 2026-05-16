@@ -2,63 +2,46 @@
 # scripts/clean-unmanaged-role-assignments.sh
 #
 # PURPOSE:
-#   Detects role assignments that exist in Azure but are NOT managed by the
-#   current deployment stack, and removes them so the stack can recreate and
-#   own them cleanly. This prevents RoleAssignmentExists (ARM 409) failures
-#   that occur when an Azure Deployment Stack tries to manage a role assignment
-#   it doesn't own — for example, when an environment was first provisioned
-#   without deployment stacks enabled (locally or via pre-stacks CI), or when
-#   a conditional exclusion on a prior run caused the stack to lose ownership.
+#   Removes role assignments that would conflict with Azure Deployment Stack
+#   ownership, preventing RoleAssignmentExists (ARM 409) failures. Runs as a
+#   preprovision hook immediately before `azd up`.
 #
-# BEHAVIOR BY CASE:
-#   - No stack exists (fresh provision)      → exits without changes
-#   - Assignment is in the stack             → left untouched (stack manages it)
-#   - Assignment exists, NOT in the stack   → deleted so stack can recreate it
-#   - Assignment doesn't exist              → nothing to do (stack will create it)
-#   - azd down then up                      → stack deletes on down; no assignment
-#                                             to clean; stack recreates on up
+# APPROACH:
+#   For each role assignment that Bicep unconditionally creates, delete any
+#   existing assignment for that role on that resource before the deployment.
+#   The deployment stack then recreates the assignment under its ownership.
 #
-# ROLE ASSIGNMENTS CHECKED:
-#   - App Configuration Data Reader (scoped to App Config → backend identity)
-#   - SQL Server Contributor        (scoped to SQL Server → sql-admin identity)
+#   This is safe because:
+#   - This script runs in the preprovision hook, before Bicep provisions.
+#   - Bicep always recreates the assignment (conditional ones are only cleaned
+#     when the relevant resource exists in the RG, implying the condition is met).
+#   - If the assignment was already stack-managed, deleting it and recreating
+#     it has no net effect on permissions.
+#   - If the assignment was unmanaged (pre-stack or orphaned), this fixes the
+#     ownership so the stack can manage it going forward.
+#
+# ROLE ASSIGNMENTS CLEANED:
+#   - App Configuration Data Reader (scope: App Config store → backend identity)
+#   - SQL Server Contributor        (scope: SQL Server     → sql-admin identity)
 #
 # REQUIRED ENV VARS:
-#   AZURE_ENV_NAME          azd environment name (e.g. dev, test, train, prod)
 #   AZURE_RESOURCE_GROUP    Azure resource group name
 
 set -euo pipefail
 
 info()    { echo "  ℹ  $*"; }
 success() { echo "  ✅ $*"; }
-warning() { echo "  ⚠️  $*"; }
 removed() { echo "  🗑️  $*"; }
 
-AZURE_ENV_NAME="${AZURE_ENV_NAME:-}"
 AZURE_RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-}"
 
-if [ -z "$AZURE_ENV_NAME" ] || [ -z "$AZURE_RESOURCE_GROUP" ]; then
-  info "AZURE_ENV_NAME or AZURE_RESOURCE_GROUP not set — skipping."
+if [ -z "$AZURE_RESOURCE_GROUP" ]; then
+  info "AZURE_RESOURCE_GROUP not set — skipping."
   exit 0
 fi
-
-STACK_NAME="azd-${AZURE_ENV_NAME}"
 
 echo ""
-echo "Checking for unmanaged role assignments (stack: ${STACK_NAME}, RG: ${AZURE_RESOURCE_GROUP})..."
-
-# ── Get deployment stack's managed resource IDs ──────────────────────────────
-# Stack resource IDs are compared case-insensitively (ARM IDs are case-insensitive).
-STACK_RESOURCES=$(az stack group show \
-  --name        "$STACK_NAME" \
-  --resource-group "$AZURE_RESOURCE_GROUP" \
-  --query       "resources[*].id" \
-  --output      tsv 2>/dev/null \
-  | tr '[:upper:]' '[:lower:]' || echo "")
-
-if [ -z "$STACK_RESOURCES" ]; then
-  info "Stack '${STACK_NAME}' not found or has no managed resources — nothing to clean."
-  exit 0
-fi
+echo "Pre-deployment role assignment cleanup (RG: ${AZURE_RESOURCE_GROUP})..."
 
 # ── Role definition IDs ───────────────────────────────────────────────────────
 APP_CONFIG_DATA_READER_ROLE="516239f1-63e1-4d78-a4de-a74fb236a071"
@@ -66,10 +49,16 @@ SQL_SERVER_CONTRIBUTOR_ROLE="6d8ee4ec-f05a-4a1d-8b00-a9b17e38b437"
 
 DELETED_COUNT=0
 
-# check_and_clean <scope-resource-id> <role-definition-id> <label>
-# Lists role assignments for <role> scoped to <resource>.
-# Deletes any that are not in the current deployment stack's managed resources.
-check_and_clean() {
+# delete_if_exists <scope-resource-id> <role-definition-id> <label>
+#
+# Lists all assignments for <role> scoped exactly to <resource> and deletes them.
+# The deployment stack will recreate the correct assignment under its ownership.
+#
+# This handles two cases:
+#   - Assignment is unmanaged (pre-stack or orphaned) → delete → stack creates it
+#   - Assignment is stack-managed from a prior run    → delete → stack recreates it
+# Either way the stack ends up owning a fresh assignment with no ARM 409 conflict.
+delete_if_exists() {
   local SCOPE_ID="$1"
   local ROLE_ID="$2"
   local LABEL="$3"
@@ -79,7 +68,9 @@ check_and_clean() {
     return
   fi
 
-  # List assignments for this role scoped exactly to this resource
+  info "${LABEL}: checking for existing assignments on $(basename "$SCOPE_ID")..."
+
+  # List assignments for this exact role on this exact resource scope
   ASSIGNMENT_IDS=$(az role assignment list \
     --scope  "$SCOPE_ID" \
     --role   "$ROLE_ID" \
@@ -87,23 +78,16 @@ check_and_clean() {
     --output tsv 2>/dev/null || echo "")
 
   if [ -z "$ASSIGNMENT_IDS" ]; then
-    info "${LABEL}: no assignment found — stack will create it."
+    success "${LABEL}: no existing assignment — stack will create it fresh."
     return
   fi
 
   while IFS= read -r RA_ID; do
     [ -z "$RA_ID" ] && continue
-    RA_ID_LOWER=$(echo "$RA_ID" | tr '[:upper:]' '[:lower:]')
-
-    if echo "$STACK_RESOURCES" | grep -qF "$RA_ID_LOWER"; then
-      success "${LABEL}: assignment is stack-managed — leaving untouched."
-    else
-      warning "${LABEL}: assignment exists but is NOT managed by stack '${STACK_NAME}'."
-      info    "          Deleting so the deployment stack can recreate and own it..."
-      az role assignment delete --ids "$RA_ID" --output none
-      DELETED_COUNT=$((DELETED_COUNT + 1))
-      removed "${LABEL}: unmanaged assignment deleted."
-    fi
+    info "${LABEL}: deleting existing assignment so stack can own it: ${RA_ID##*/}"
+    az role assignment delete --ids "$RA_ID" --output none
+    DELETED_COUNT=$((DELETED_COUNT + 1))
+    removed "${LABEL}: deleted — stack will recreate under its ownership."
   done <<< "$ASSIGNMENT_IDS"
 }
 
@@ -113,7 +97,7 @@ APP_CONFIG_ID=$(az appconfig list \
   --query "[0].id" \
   --output tsv 2>/dev/null || echo "")
 
-check_and_clean "$APP_CONFIG_ID" "$APP_CONFIG_DATA_READER_ROLE" "App Config Data Reader"
+delete_if_exists "$APP_CONFIG_ID" "$APP_CONFIG_DATA_READER_ROLE" "App Config Data Reader"
 
 # ── SQL Server Contributor ────────────────────────────────────────────────────
 SQL_SERVER_ID=$(az sql server list \
@@ -121,12 +105,12 @@ SQL_SERVER_ID=$(az sql server list \
   --query "[0].id" \
   --output tsv 2>/dev/null || echo "")
 
-check_and_clean "$SQL_SERVER_ID" "$SQL_SERVER_CONTRIBUTOR_ROLE" "SQL Server Contributor"
+delete_if_exists "$SQL_SERVER_ID" "$SQL_SERVER_CONTRIBUTOR_ROLE" "SQL Server Contributor"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 if [ "$DELETED_COUNT" -gt 0 ]; then
-  echo "Cleaned ${DELETED_COUNT} unmanaged role assignment(s) — deployment stack will recreate and own them."
+  echo "Removed ${DELETED_COUNT} role assignment(s) — deployment stack will recreate and own them."
 else
-  echo "All role assignments are either stack-managed or absent — no action needed."
+  echo "No conflicting role assignments found — deployment stack will create them fresh."
 fi
