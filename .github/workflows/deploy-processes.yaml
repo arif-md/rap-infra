@@ -157,7 +157,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/ensure-acr.sh
           ./scripts/ensure-acr.sh
 
       - name: Ensure DNS Zone exists (preprovision)
@@ -170,14 +169,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/resolve-images.sh
           ./scripts/resolve-images.sh processes
 
       - name: Validate image vs ACR binding (guard)
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/validate-acr-binding.sh
           ./scripts/validate-acr-binding.sh processes
 
       - name: Fast image-only update (skip provision when possible)
@@ -189,7 +186,6 @@ jobs:
           set -euo pipefail
           
           # Use generalized deployment script
-          chmod +x scripts/deploy-service-image.sh
           ./scripts/deploy-service-image.sh "$SERVICE_KEY" "${AZURE_ENV_NAME}"
 
       - name: azd up (provision + deploy)

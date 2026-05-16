@@ -46,9 +46,6 @@ param privateDnsZoneId string = ''
 @description('Principal ID to grant App Configuration Data Reader role (backend managed identity)')
 param readerPrincipalId string
 
-@description('Skip creating the App Configuration Data Reader role assignment. Set to true on re-provisions where the assignment already exists (avoids RoleAssignmentExists deployment stack conflict).')
-param skipAppConfigRoleAssignment bool = false
-
 @description('Label applied to all key-value entries. Must match the Spring Boot profile name (e.g. dev, test, train, prod). bootstrap-{profile}.properties sets label-filter to this value.')
 param environmentLabel string
 
@@ -241,7 +238,7 @@ resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2
 // Role ID: 516239f1-63e1-4d78-a4de-a74fb236a071 (App Configuration Data Reader)
 var appConfigDataReaderRoleId = '516239f1-63e1-4d78-a4de-a74fb236a071'
 
-resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipAppConfigRoleAssignment) {
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(configStore.id, readerPrincipalId, appConfigDataReaderRoleId)
   scope: configStore
   properties: {

@@ -119,7 +119,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/ensure-acr.sh
           ./scripts/ensure-acr.sh
 
       - name: Ensure DNS Zone exists (preprovision)
@@ -132,14 +131,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/resolve-images.sh
           ./scripts/resolve-images.sh
 
       - name: Validate image vs ACR binding (guard)
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x scripts/validate-acr-binding.sh
           ./scripts/validate-acr-binding.sh
 
       - name: Provision infrastructure (azd provision)
@@ -181,7 +178,6 @@ jobs:
             exit 0
           fi
           echo "Running bind-custom-domain-tls.sh for $CUSTOM_DOMAIN ..."
-          chmod +x scripts/bind-custom-domain-tls.sh
           ./scripts/bind-custom-domain-tls.sh
 
       # SQL permissions are now granted automatically by the Bicep deployment script

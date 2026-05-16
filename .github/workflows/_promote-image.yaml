@@ -174,9 +174,6 @@ jobs:
           echo "image=$CURR_IMG"     >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Make utility scripts executable
-        shell: bash
-        run: chmod +x scripts/*.sh || true
 
       - name: Generate release notes
         id: relnotes
@@ -429,7 +426,6 @@ jobs:
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
           ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
-          chmod +x scripts/update-containerapp-image.sh
           ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL
@@ -547,9 +543,6 @@ jobs:
           echo "image=$CURR_IMG"     >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Make utility scripts executable
-        shell: bash
-        run: chmod +x scripts/*.sh || true
 
       - name: Generate release notes
         id: relnotes
@@ -768,7 +761,6 @@ jobs:
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
           ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
-          chmod +x scripts/update-containerapp-image.sh
           ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL
@@ -886,9 +878,6 @@ jobs:
           echo "image=$CURR_IMG"     >> $GITHUB_OUTPUT
           echo "digest=$CURR_DIGEST" >> $GITHUB_OUTPUT
 
-      - name: Make utility scripts executable
-        shell: bash
-        run: chmod +x scripts/*.sh || true
 
       - name: Generate release notes
         id: relnotes
@@ -1107,7 +1096,6 @@ jobs:
           RG='${{ steps.prep.outputs.rg }}'
           ACR_NAME='${{ steps.prep.outputs.acr }}'
           ACR_RG='${{ vars.AZURE_ACR_RESOURCE_GROUP }}'
-          chmod +x scripts/update-containerapp-image.sh
           ./scripts/update-containerapp-image.sh "${{ env.appName }}" "$RG" "$IMG" "$ACR_NAME" "${ACR_NAME}.azurecr.io" ${ACR_RG:+"$ACR_RG"}
 
       - name: Show deployment URL

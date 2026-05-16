@@ -17,12 +17,6 @@
       "skipBackendAcrPullRoleAssignment": {
         "value": "${SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true}"
       },
-      "skipAppConfigRoleAssignment": {
-        "value": "${SKIP_APP_CONFIG_ROLE_ASSIGNMENT=false}"
-      },
-      "skipSqlServerRoleAssignment": {
-        "value": "${SKIP_SQL_SERVER_ROLE_ASSIGNMENT=false}"
-      },
       "frontendImage": {
         "value": "${SERVICE_FRONTEND_IMAGE_NAME}"
       },
