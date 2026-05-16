@@ -39,56 +39,86 @@ fi
 echo ""
 echo "Pre-deployment role assignment cleanup (RG: ${AZURE_RESOURCE_GROUP})"
 
-# ── Role definition GUIDs to remove before deploying ─────────────────────────
+# ── Role definition GUIDs ─────────────────────────────────────────────────────
 APP_CONFIG_DATA_READER_ROLE="516239f1-63e1-4d78-a4de-a74fb236a071"
 SQL_SERVER_CONTRIBUTOR_ROLE="6d8ee4ec-f05a-4a1d-8b00-a9b17e38b437"
 
-# ── Fetch ALL role assignments in the resource group ─────────────────────────
-# We deliberately do NOT pass --role here. The --role flag adds an OData
-# $filter on roleDefinitionId using a subscription-specific path that silently
-# returns empty when Azure stored the assignment's roleDefinitionId with a
-# different path format (e.g. uppercase GUID, different subscription prefix).
-# By fetching all assignments and filtering locally with python3 we avoid the
-# case-sensitivity and path-format mismatches entirely.
-echo "  Fetching all role assignments in RG..."
-ALL_JSON=$(az role assignment list \
-  --resource-group "$AZURE_RESOURCE_GROUP" \
-  --include-inherited \
-  --output json 2>/dev/null || echo "[]")
+DELETED_COUNT=0
 
-# ── Find IDs matching our target roles (case-insensitive, python3) ───────────
-# roleDefinitionId in Azure responses often has uppercase GUIDs, e.g.
-#   /subscriptions/.../roleDefinitions/516239F1-63E1-4D78-A4DE-A74FB236A071
-# JMESPath contains() is case-sensitive so we use python3 .lower() instead.
-# Stderr (diagnostic lines) flows to the terminal; stdout (IDs) is captured.
-TARGETS="${APP_CONFIG_DATA_READER_ROLE} ${SQL_SERVER_CONTRIBUTOR_ROLE}"
-CONFLICTING_IDS=$(echo "$ALL_JSON" | python3 -c "
+# delete_at_scope <resource-id> <role-guid> <label>
+#
+# Lists role assignments scoped EXACTLY to <resource-id> (no --include-inherited,
+# no --resource-group). Filters by role GUID using python3 .lower() to avoid the
+# case-sensitivity issue with OData $filter and JMESPath contains().
+# Deletes any found so the deployment stack can recreate and own them.
+#
+# WHY query per resource scope (not --resource-group):
+#   `az role assignment list --resource-group X` only returns assignments whose
+#   scope IS the RG (or above). Assignments scoped to child resources within the
+#   RG (App Config store, SQL Server) are NOT returned — they live at the resource
+#   scope, not the RG scope. This was causing every previous version to scan 0
+#   matching assignments while the conflicting assignments still existed.
+delete_at_scope() {
+  local SCOPE_ID="$1"
+  local ROLE_GUID="$2"
+  local LABEL="$3"
+
+  if [ -z "$SCOPE_ID" ]; then
+    echo "  ℹ  ${LABEL}: resource not found in RG — skipping."
+    return
+  fi
+
+  local RESOURCE_NAME="${SCOPE_ID##*/}"
+  echo "  Querying assignments scoped to ${RESOURCE_NAME}..."
+
+  # --scope without --include-inherited returns ONLY assignments at exactly this scope
+  local ALL_AT_SCOPE
+  ALL_AT_SCOPE=$(az role assignment list \
+    --scope "$SCOPE_ID" \
+    --output json 2>/dev/null || echo "[]")
+
+  local IDS
+  IDS=$(echo "$ALL_AT_SCOPE" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-targets = {t.lower() for t in '${TARGETS}'.split()}
-print(f'  Scanning {len(data)} assignment(s) for target roles...', file=sys.stderr)
+target = '${ROLE_GUID}'.lower()
 for ra in data:
-    rd_id = ra.get('roleDefinitionId', '').lower()
-    ra_id  = ra.get('id', '')
-    if any(t in rd_id for t in targets):
-        print(f'  MATCH: {ra_id.split(\"/\")[-1]}  scope={ra.get(\"scope\",\"?\")}', file=sys.stderr)
-        print(ra_id)
+    if target in ra.get('roleDefinitionId', '').lower():
+        print(ra['id'])
 ")
 
-if [ -z "$CONFLICTING_IDS" ]; then
-  echo "  ✅ No conflicting role assignments found — deployment stack will create them fresh."
-  exit 0
-fi
+  if [ -z "$IDS" ]; then
+    echo "  ✅ ${LABEL}: no existing assignment at ${RESOURCE_NAME} — stack will create it."
+    return
+  fi
 
-# ── Delete each conflicting assignment ───────────────────────────────────────
-DELETED_COUNT=0
-while IFS= read -r RA_ID; do
-  [ -z "$RA_ID" ] && continue
-  echo "  🗑  Deleting ${RA_ID##*/}..."
-  az role assignment delete --ids "$RA_ID"
-  DELETED_COUNT=$((DELETED_COUNT + 1))
-  echo "  ✅  Deleted — stack will recreate under its ownership."
-done <<< "$CONFLICTING_IDS"
+  while IFS= read -r RA_ID; do
+    [ -z "$RA_ID" ] && continue
+    echo "  🗑  ${LABEL}: deleting ${RA_ID##*/}..."
+    az role assignment delete --ids "$RA_ID"
+    DELETED_COUNT=$((DELETED_COUNT + 1))
+    echo "  ✅ ${LABEL}: deleted — stack will recreate under its ownership."
+  done <<< "$IDS"
+}
 
+# ── App Configuration Data Reader (scoped to App Config store) ───────────────
+APP_CONFIG_ID=$(az appconfig list \
+  --resource-group "$AZURE_RESOURCE_GROUP" \
+  --query "[0].id" --output tsv 2>/dev/null || echo "")
+
+delete_at_scope "$APP_CONFIG_ID" "$APP_CONFIG_DATA_READER_ROLE" "App Config Data Reader"
+
+# ── SQL Server Contributor (scoped to SQL Server) ────────────────────────────
+SQL_SERVER_ID=$(az sql server list \
+  --resource-group "$AZURE_RESOURCE_GROUP" \
+  --query "[0].id" --output tsv 2>/dev/null || echo "")
+
+delete_at_scope "$SQL_SERVER_ID" "$SQL_SERVER_CONTRIBUTOR_ROLE" "SQL Server Contributor"
+
+# ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-echo "Removed ${DELETED_COUNT} role assignment(s) — deployment stack will recreate and own them."
+if [ "$DELETED_COUNT" -gt 0 ]; then
+  echo "Removed ${DELETED_COUNT} role assignment(s) — deployment stack will recreate and own them."
+else
+  echo "No conflicting role assignments found — deployment stack will create them fresh."
+fi
