@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Running Pre-Provision Hooks ===" -ForegroundColor Cyan
 
 # Key Vault Setup - ensures Key Vault exists before deployment
-Write-Host "`n[1/9] Setting up Key Vault..." -ForegroundColor Yellow
+Write-Host "`n[1/10] Setting up Key Vault..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-keyvault.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Key Vault setup failed!" -ForegroundColor Red
@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ Key Vault setup completed" -ForegroundColor Green
 
 # Resolve container images
-Write-Host "`n[2/9] Resolving container images..." -ForegroundColor Yellow
+Write-Host "`n[2/10] Resolving container images..." -ForegroundColor Yellow
 & "$PSScriptRoot\resolve-images.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Image resolution failed!" -ForegroundColor Red
@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ Image resolution completed" -ForegroundColor Green
 
 # Validate ACR binding
-Write-Host "`n[3/9] Validating ACR binding..." -ForegroundColor Yellow
+Write-Host "`n[3/10] Validating ACR binding..." -ForegroundColor Yellow
 & "$PSScriptRoot\validate-acr-binding.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ ACR validation failed!" -ForegroundColor Red
@@ -43,7 +43,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ ACR validation completed" -ForegroundColor Green
 
 # Ensure ACR exists
-Write-Host "`n[4/9] Ensuring ACR exists..." -ForegroundColor Yellow
+Write-Host "`n[4/10] Ensuring ACR exists..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-acr.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ ACR setup failed!" -ForegroundColor Red
@@ -52,7 +52,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ ACR setup completed" -ForegroundColor Green
 
 # Ensure DNS Zone exists (survives azd down/up — not in deployment stack)
-Write-Host "`n[5/9] Ensuring DNS Zone exists..." -ForegroundColor Yellow
+Write-Host "`n[5/10] Ensuring DNS Zone exists..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-dns-zone.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ DNS Zone setup failed!" -ForegroundColor Red
@@ -61,7 +61,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ DNS Zone setup completed" -ForegroundColor Green
 
 # Purge any soft-deleted App Config store (Standard SKU + VNet only)
-Write-Host "`n[6/9] Checking for soft-deleted App Config stores..." -ForegroundColor Yellow
+Write-Host "`n[6/10] Checking for soft-deleted App Config stores..." -ForegroundColor Yellow
 & "$PSScriptRoot\recover-or-purge-appconfig.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ App Config purge check failed!" -ForegroundColor Red
@@ -70,7 +70,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "✓ App Config purge check completed" -ForegroundColor Green
 
 # Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
-Write-Host "`n[7/9] Checking for stranded Container Apps Environment..." -ForegroundColor Yellow
+Write-Host "`n[7/10] Checking for stranded Container Apps Environment..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-cae-vnet.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ CAE VNet guard failed!" -ForegroundColor Red
@@ -82,7 +82,7 @@ Write-Host "✓ CAE VNet guard completed" -ForegroundColor Green
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-Write-Host "`n[8/9] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
+Write-Host "`n[8/10] Pre-provisioning backend identity for Key Vault access..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-identities.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ Identity pre-provisioning failed!" -ForegroundColor Red
@@ -93,13 +93,25 @@ Write-Host "✓ Identity pre-provisioning completed" -ForegroundColor Green
 # Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
 # Prevents the sql-setup ACI from being a no-op when the DB was recreated but
 # managed identity clientIds did not change (content-based detection limitation).
-Write-Host "`n[9/9] Checking SQL setup state..." -ForegroundColor Yellow
+Write-Host "`n[9/10] Checking SQL setup state..." -ForegroundColor Yellow
 & "$PSScriptRoot\ensure-sql-setup.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ SQL setup check failed!" -ForegroundColor Red
     exit 1
 }
 Write-Host "✓ SQL setup check completed" -ForegroundColor Green
+
+# Detect role assignments that exist in Azure but are NOT owned by the current
+# deployment stack. Deletes them so the stack can recreate and own them.
+# Prevents RoleAssignmentExists (ARM 409) on environments provisioned without
+# stacks or where stack ownership was lost via a prior conditional exclusion.
+Write-Host "`n[10/10] Cleaning unmanaged role assignments..." -ForegroundColor Yellow
+& "$PSScriptRoot\clean-unmanaged-role-assignments.ps1"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "✗ Role assignment cleanup failed!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ Role assignment cleanup completed" -ForegroundColor Green
 
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0

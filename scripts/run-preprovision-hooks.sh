@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 header "Running Pre-Provision Hooks"
 
 # Key Vault Setup
-step "[1/9] Setting up Key Vault..."
+step "[1/10] Setting up Key Vault..."
 if ! "${SCRIPT_DIR}/ensure-keyvault.sh"; then
     error "Key Vault setup failed!"
     exit 1
@@ -29,7 +29,7 @@ fi
 success "Key Vault setup completed"
 
 # Resolve container images
-step "[2/9] Resolving container images..."
+step "[2/10] Resolving container images..."
 if ! "${SCRIPT_DIR}/resolve-images.sh"; then
     error "Image resolution failed!"
     exit 1
@@ -37,7 +37,7 @@ fi
 success "Image resolution completed"
 
 # Validate ACR binding
-step "[3/9] Validating ACR binding..."
+step "[3/10] Validating ACR binding..."
 if ! "${SCRIPT_DIR}/validate-acr-binding.sh"; then
     error "ACR validation failed!"
     exit 1
@@ -45,7 +45,7 @@ fi
 success "ACR validation completed"
 
 # Ensure ACR exists
-step "[4/9] Ensuring ACR exists..."
+step "[4/10] Ensuring ACR exists..."
 if ! "${SCRIPT_DIR}/ensure-acr.sh"; then
     error "ACR setup failed!"
     exit 1
@@ -53,7 +53,7 @@ fi
 success "ACR setup completed"
 
 # Ensure DNS Zone exists (outside deployment stack)
-step "[5/9] Ensuring DNS Zone exists..."
+step "[5/10] Ensuring DNS Zone exists..."
 if ! "${SCRIPT_DIR}/ensure-dns-zone.sh"; then
     error "DNS Zone setup failed!"
     exit 1
@@ -61,7 +61,7 @@ fi
 success "DNS Zone setup completed"
 
 # Purge any soft-deleted App Config store (Standard SKU + VNet only)
-step "[6/9] Checking for soft-deleted App Config stores..."
+step "[6/10] Checking for soft-deleted App Config stores..."
 if ! "${SCRIPT_DIR}/recover-or-purge-appconfig.sh"; then
     error "App Config purge check failed!"
     exit 1
@@ -69,7 +69,7 @@ fi
 success "App Config purge check completed"
 
 # Remove stranded CAE that exists without VNet config (prevents ManagedEnvironmentCannotAddVnetToExistingEnv)
-step "[7/9] Checking for stranded Container Apps Environment..."
+step "[7/10] Checking for stranded Container Apps Environment..."
 if ! "${SCRIPT_DIR}/ensure-cae-vnet.sh"; then
     error "CAE VNet guard failed!"
     exit 1
@@ -80,7 +80,7 @@ success "CAE VNet guard completed"
 # Eliminates the KV access-policy propagation race condition that causes:
 #   "unable to fetch secret using Managed identity"
 # when the identity is freshly created in the same deployment as the Container App.
-step "[8/9] Pre-provisioning backend identity for Key Vault access..."
+step "[8/10] Pre-provisioning backend identity for Key Vault access..."
 if ! "${SCRIPT_DIR}/ensure-identities.sh"; then
     error "Identity pre-provisioning failed!"
     exit 1
@@ -90,12 +90,23 @@ success "Identity pre-provisioning completed"
 # Detect "azd down/up on retained-MI environment" and auto-set FORCE_SQL_SETUP_TAG.
 # Prevents the sql-setup ACI from being a no-op when the DB was recreated but
 # managed identity clientIds did not change (content-based detection limitation).
-step "[9/9] Checking SQL setup state..."
+step "[9/10] Checking SQL setup state..."
 if ! "${SCRIPT_DIR}/ensure-sql-setup.sh"; then
     error "SQL setup check failed!"
     exit 1
 fi
 success "SQL setup check completed"
+
+# Detect role assignments that exist in Azure but are NOT owned by the current
+# deployment stack. Deletes them so the stack can recreate and own them.
+# Prevents RoleAssignmentExists (ARM 409) on environments provisioned without
+# stacks or where stack ownership was lost via a prior conditional exclusion.
+step "[10/10] Cleaning unmanaged role assignments..."
+if ! "${SCRIPT_DIR}/clean-unmanaged-role-assignments.sh"; then
+    error "Role assignment cleanup failed!"
+    exit 1
+fi
+success "Role assignment cleanup completed"
 
 header "Pre-Provision Hooks Completed Successfully"
 exit 0
