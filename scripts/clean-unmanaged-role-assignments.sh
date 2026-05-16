@@ -51,13 +51,20 @@ DELETED_COUNT=0
 
 # delete_if_exists <scope-resource-id> <role-definition-id> <label>
 #
-# Lists all assignments for <role> scoped exactly to <resource> and deletes them.
-# The deployment stack will recreate the correct assignment under its ownership.
+# Queries role assignments AT EXACTLY the given resource scope via the Azure REST
+# API (atScope() filter) and deletes any that match the role definition GUID.
 #
-# This handles two cases:
-#   - Assignment is unmanaged (pre-stack or orphaned) → delete → stack creates it
-#   - Assignment is stack-managed from a prior run    → delete → stack recreates it
-# Either way the stack ends up owning a fresh assignment with no ARM 409 conflict.
+# WHY REST API instead of 'az role assignment list --scope --role':
+#   The CLI's --role filter constructs a subscription-specific role definition ID
+#   path (/subscriptions/{current-sub}/providers/Microsoft.Authorization/roleDefinitions/{guid})
+#   for its OData $filter. If the existing assignment was created under a different
+#   subscription context (or using a canonical path), the filter produces no results
+#   even though the assignment exists — hence the silent empty return and the
+#   subsequent RoleAssignmentExists (ARM 409) during 'azd up'.
+#
+#   The REST API approach queries all assignments at the scope then filters in
+#   JMESPath using 'contains(roleDefinitionId, guid)' — a substring match on the
+#   GUID portion that is stable regardless of subscription path prefix.
 delete_if_exists() {
   local SCOPE_ID="$1"
   local ROLE_ID="$2"
@@ -68,13 +75,15 @@ delete_if_exists() {
     return
   fi
 
-  info "${LABEL}: checking for existing assignments on $(basename "$SCOPE_ID")..."
+  info "${LABEL}: checking assignments on ${SCOPE_ID##*/}..."
 
-  # List assignments for this exact role on this exact resource scope
-  ASSIGNMENT_IDS=$(az role assignment list \
-    --scope  "$SCOPE_ID" \
-    --role   "$ROLE_ID" \
-    --query  "[].id" \
+  # Query assignments AT exactly this resource scope using REST API + atScope() filter.
+  # atScope() returns only assignments scoped to this exact resource (not inherited).
+  local ASSIGNMENT_IDS
+  ASSIGNMENT_IDS=$(az rest \
+    --method GET \
+    --url "https://management.azure.com${SCOPE_ID}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&\$filter=atScope()" \
+    --query "value[?contains(properties.roleDefinitionId, '${ROLE_ID}')].id" \
     --output tsv 2>/dev/null || echo "")
 
   if [ -z "$ASSIGNMENT_IDS" ]; then
@@ -84,7 +93,7 @@ delete_if_exists() {
 
   while IFS= read -r RA_ID; do
     [ -z "$RA_ID" ] && continue
-    info "${LABEL}: deleting existing assignment so stack can own it: ${RA_ID##*/}"
+    info "${LABEL}: deleting: ${RA_ID##*/}"
     az role assignment delete --ids "$RA_ID" --output none
     DELETED_COUNT=$((DELETED_COUNT + 1))
     removed "${LABEL}: deleted — stack will recreate under its ownership."

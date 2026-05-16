@@ -40,6 +40,18 @@ $sqlServerContributorRole = "6d8ee4ec-f05a-4a1d-8b00-a9b17e38b437"
 
 $deletedCount = 0
 
+# Invoke-DeleteIfExists <scope-resource-id> <role-definition-id> <label>
+#
+# Queries role assignments AT EXACTLY the given resource scope via the Azure REST
+# API (atScope() filter) and deletes any that match the role definition GUID.
+#
+# WHY REST API instead of 'az role assignment list --scope --role':
+#   The CLI's --role filter constructs a subscription-specific role definition ID
+#   path (/subscriptions/{current-sub}/providers/Microsoft.Authorization/roleDefinitions/{guid})
+#   for its OData $filter. If the existing assignment was created under a different
+#   subscription context (or using a canonical path), the filter produces no results
+#   even though the assignment exists — hence the silent empty return and the
+#   subsequent RoleAssignmentExists (ARM 409) during 'azd up'.
 function Invoke-DeleteIfExists {
     param(
         [string]$ScopeId,
@@ -53,14 +65,18 @@ function Invoke-DeleteIfExists {
     }
 
     $resourceName = $ScopeId.Split('/')[-1]
-    Write-Host "  i  ${Label}: checking for existing assignments on $resourceName..." -ForegroundColor Gray
+    Write-Host "  i  ${Label}: checking assignments on $resourceName..." -ForegroundColor Gray
 
+    # Query assignments AT exactly this resource scope using REST API + atScope() filter.
+    # Use JMESPath contains() on roleDefinitionId — stable substring match on the GUID
+    # regardless of the subscription path prefix.
     $assignmentIds = @()
     try {
-        $json = az role assignment list `
-            --scope  $ScopeId `
-            --role   $RoleId `
-            --query  "[].id" `
+        $url = "https://management.azure.com${ScopeId}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&`$filter=atScope()"
+        $json = az rest `
+            --method GET `
+            --url $url `
+            --query "value[?contains(properties.roleDefinitionId, '${RoleId}')].id" `
             --output json 2>$null
         if ($LASTEXITCODE -eq 0 -and $json) {
             $assignmentIds = $json | ConvertFrom-Json
@@ -74,7 +90,7 @@ function Invoke-DeleteIfExists {
 
     foreach ($raId in $assignmentIds) {
         $raShortId = $raId.Split('/')[-1]
-        Write-Host "  i  ${Label}: deleting existing assignment so stack can own it: $raShortId" -ForegroundColor Gray
+        Write-Host "  i  ${Label}: deleting: $raShortId" -ForegroundColor Gray
         az role assignment delete --ids $raId --output none
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  ✗  Failed to delete assignment: $raId" -ForegroundColor Red

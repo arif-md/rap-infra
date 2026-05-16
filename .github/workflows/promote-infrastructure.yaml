@@ -119,6 +119,7 @@ jobs:
           ./scripts/ensure-acr.sh
           ./scripts/resolve-images.sh
           ./scripts/validate-acr-binding.sh
+          ./scripts/clean-unmanaged-role-assignments.sh
 
       - name: Provision infrastructure
         run: azd up --no-prompt
@@ -204,6 +205,7 @@ jobs:
           ./scripts/ensure-acr.sh
           ./scripts/resolve-images.sh
           ./scripts/validate-acr-binding.sh
+          ./scripts/clean-unmanaged-role-assignments.sh
 
       - name: Provision infrastructure
         run: azd up --no-prompt
@@ -286,6 +288,7 @@ jobs:
           ./scripts/ensure-acr.sh
           ./scripts/resolve-images.sh
           ./scripts/validate-acr-binding.sh
+          ./scripts/clean-unmanaged-role-assignments.sh
 
       - name: Provision infrastructure
         run: azd up --no-prompt
