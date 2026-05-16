@@ -32,104 +32,56 @@ if (-not $azureResourceGroup) {
 }
 
 Write-Host ""
-Write-Host "Pre-deployment role assignment cleanup (RG: $azureResourceGroup)..."
+Write-Host "Pre-deployment role assignment cleanup (RG: $azureResourceGroup)"
 
-# ── Role definition IDs ───────────────────────────────────────────────────────
+# ── Role definition GUIDs to remove before deploying ─────────────────────────
 $appConfigDataReaderRole  = "516239f1-63e1-4d78-a4de-a74fb236a071"
 $sqlServerContributorRole = "6d8ee4ec-f05a-4a1d-8b00-a9b17e38b437"
+$targetRoles = @($appConfigDataReaderRole, $sqlServerContributorRole)
 
+# ── Fetch ALL role assignments in the resource group ─────────────────────────
+# We deliberately do NOT pass --role. The --role flag adds an OData $filter on
+# roleDefinitionId using a subscription-specific path that silently returns empty
+# when Azure stored the assignment's roleDefinitionId with a different path format
+# (e.g. uppercase GUID, different subscription prefix). Fetching all and filtering
+# locally in PowerShell avoids the case-sensitivity and path-format mismatches.
+Write-Host "  Fetching all role assignments in RG..." -ForegroundColor Gray
+$allJson = az role assignment list `
+    --resource-group $azureResourceGroup `
+    --include-inherited `
+    --output json 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $allJson) { $allJson = "[]" }
+$allAssignments = $allJson | ConvertFrom-Json
+Write-Host "  Scanning $($allAssignments.Count) assignment(s) for target roles..." -ForegroundColor Gray
+
+# ── Filter assignments whose roleDefinitionId GUID matches our targets ────────
+# roleDefinitionId in Azure responses often uses uppercase GUIDs, e.g.
+#   /subscriptions/.../roleDefinitions/516239F1-63E1-4D78-A4DE-A74FB236A071
+# PowerShell -match is case-insensitive so we can safely match against our lowercase GUIDs.
+$conflicting = $allAssignments | Where-Object {
+    $rdId = $_.roleDefinitionId
+    $targetRoles | Where-Object { $rdId -match $_ }
+}
+
+if ($conflicting.Count -eq 0) {
+    Write-Host "  ✅ No conflicting role assignments found — deployment stack will create them fresh." -ForegroundColor Green
+    exit 0
+}
+
+# ── Delete each conflicting assignment ───────────────────────────────────────
 $deletedCount = 0
-
-# Invoke-DeleteIfExists <scope-resource-id> <role-definition-id> <label>
-#
-# Queries role assignments AT EXACTLY the given resource scope via the Azure REST
-# API (atScope() filter) and deletes any that match the role definition GUID.
-#
-# WHY REST API instead of 'az role assignment list --scope --role':
-#   The CLI's --role filter constructs a subscription-specific role definition ID
-#   path (/subscriptions/{current-sub}/providers/Microsoft.Authorization/roleDefinitions/{guid})
-#   for its OData $filter. If the existing assignment was created under a different
-#   subscription context (or using a canonical path), the filter produces no results
-#   even though the assignment exists — hence the silent empty return and the
-#   subsequent RoleAssignmentExists (ARM 409) during 'azd up'.
-function Invoke-DeleteIfExists {
-    param(
-        [string]$ScopeId,
-        [string]$RoleId,
-        [string]$Label
-    )
-
-    if (-not $ScopeId) {
-        Write-Host "  i  ${Label}: resource not found in RG — skipping." -ForegroundColor Gray
-        return
+foreach ($ra in $conflicting) {
+    $shortId = $ra.id.Split('/')[-1]
+    Write-Host "  🗑  Deleting $shortId  (scope: $($ra.scope))..." -ForegroundColor Cyan
+    az role assignment delete --ids $ra.id
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ✗  Failed to delete $($ra.id)" -ForegroundColor Red
+        exit 1
     }
-
-    $resourceName = $ScopeId.Split('/')[-1]
-    Write-Host "  i  ${Label}: checking assignments on $resourceName..." -ForegroundColor Gray
-
-    # Query assignments AT exactly this resource scope using REST API + atScope() filter.
-    # Use JMESPath contains() on roleDefinitionId — stable substring match on the GUID
-    # regardless of the subscription path prefix.
-    $assignmentIds = @()
-    try {
-        $url = "https://management.azure.com${ScopeId}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&`$filter=atScope()"
-        $json = az rest `
-            --method GET `
-            --url $url `
-            --query "value[?contains(properties.roleDefinitionId, '${RoleId}')].id" `
-            --output json 2>$null
-        if ($LASTEXITCODE -eq 0 -and $json) {
-            $assignmentIds = $json | ConvertFrom-Json
-        }
-    } catch {}
-
-    if ($assignmentIds.Count -eq 0) {
-        Write-Host "  ✅ ${Label}: no existing assignment — stack will create it fresh." -ForegroundColor Green
-        return
-    }
-
-    foreach ($raId in $assignmentIds) {
-        $raShortId = $raId.Split('/')[-1]
-        Write-Host "  i  ${Label}: deleting: $raShortId" -ForegroundColor Gray
-        az role assignment delete --ids $raId --output none
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ✗  Failed to delete assignment: $raId" -ForegroundColor Red
-            exit 1
-        }
-        $script:deletedCount++
-        Write-Host "  🗑️  ${Label}: deleted — stack will recreate under its ownership." -ForegroundColor Cyan
-    }
+    $deletedCount++
+    Write-Host "  ✅  Deleted — stack will recreate under its ownership." -ForegroundColor Green
 }
 
-# ── App Configuration Data Reader ────────────────────────────────────────────
-$appConfigId = $null
-try {
-    $appConfigId = az appconfig list `
-        --resource-group $azureResourceGroup `
-        --query "[0].id" `
-        --output tsv 2>$null
-    if ($LASTEXITCODE -ne 0) { $appConfigId = $null }
-} catch {}
-
-Invoke-DeleteIfExists -ScopeId $appConfigId -RoleId $appConfigDataReaderRole -Label "App Config Data Reader"
-
-# ── SQL Server Contributor ────────────────────────────────────────────────────
-$sqlServerId = $null
-try {
-    $sqlServerId = az sql server list `
-        --resource-group $azureResourceGroup `
-        --query "[0].id" `
-        --output tsv 2>$null
-    if ($LASTEXITCODE -ne 0) { $sqlServerId = $null }
-} catch {}
-
-Invoke-DeleteIfExists -ScopeId $sqlServerId -RoleId $sqlServerContributorRole -Label "SQL Server Contributor"
-
-# ── Summary ───────────────────────────────────────────────────────────────────
 Write-Host ""
-if ($deletedCount -gt 0) {
-    Write-Host "Removed $deletedCount role assignment(s) — deployment stack will recreate and own them." -ForegroundColor Cyan
-} else {
-    Write-Host "No conflicting role assignments found — deployment stack will create them fresh." -ForegroundColor Green
-}
+Write-Host "Removed $deletedCount role assignment(s) — deployment stack will recreate and own them." -ForegroundColor Cyan
 exit 0
