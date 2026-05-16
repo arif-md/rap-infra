@@ -60,6 +60,7 @@ ALL_JSON=$(az role assignment list \
 # roleDefinitionId in Azure responses often has uppercase GUIDs, e.g.
 #   /subscriptions/.../roleDefinitions/516239F1-63E1-4D78-A4DE-A74FB236A071
 # JMESPath contains() is case-sensitive so we use python3 .lower() instead.
+# Stderr (diagnostic lines) flows to the terminal; stdout (IDs) is captured.
 TARGETS="${APP_CONFIG_DATA_READER_ROLE} ${SQL_SERVER_CONTRIBUTOR_ROLE}"
 CONFLICTING_IDS=$(echo "$ALL_JSON" | python3 -c "
 import json, sys
@@ -72,7 +73,7 @@ for ra in data:
     if any(t in rd_id for t in targets):
         print(f'  MATCH: {ra_id.split(\"/\")[-1]}  scope={ra.get(\"scope\",\"?\")}', file=sys.stderr)
         print(ra_id)
-" 2>&1 >/tmp/_ra_ids.txt; cat /tmp/_ra_ids.txt)
+")
 
 if [ -z "$CONFLICTING_IDS" ]; then
   echo "  ✅ No conflicting role assignments found — deployment stack will create them fresh."
