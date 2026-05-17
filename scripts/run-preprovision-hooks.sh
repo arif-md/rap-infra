@@ -97,5 +97,15 @@ if ! "${SCRIPT_DIR}/ensure-sql-setup.sh"; then
 fi
 success "SQL setup check completed"
 
+# Delete AcrPull assignments for this environment's identities that are NOT
+# owned by the deployment stack. Prevents ARM 409 RoleAssignmentExists errors
+# when the stack tries to create assignments that already exist outside it.
+step "[10/10] Cleaning up unowned AcrPull assignment conflicts..."
+if ! "${SCRIPT_DIR}/clean-acr-pull-conflicts.sh"; then
+    error "AcrPull conflict cleanup failed!"
+    exit 1
+fi
+success "AcrPull conflict cleanup completed"
+
 header "Pre-Provision Hooks Completed Successfully"
 exit 0

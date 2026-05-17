@@ -13,7 +13,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
 
 // Grant AcrPull role at the ACR scope
 resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, 'AcrPull', principalId, 'stack')
+  name: guid(acr.id, 'AcrPull', principalId)
   scope: acr
   properties: {
     principalId: principalId
