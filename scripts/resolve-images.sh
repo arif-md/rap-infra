@@ -133,33 +133,48 @@ FRONTEND_IMG=$(azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>/dev/null || echo
 BACKEND_IMG=$(azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>/dev/null || echo "")
 PROCESSES_IMG=$(azd env get-value SERVICE_PROCESSES_IMAGE_NAME 2>/dev/null || echo "")
 
-# Frontend: SKIP if image doesn't use ACR
+# Frontend: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "frontend" ]; then
   if [[ "$FRONTEND_IMG" == *"$REGISTRY"* ]]; then
-    echo "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false"
-    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+    _current=$(azd env get-value SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT 2>/dev/null || echo "")
+    if [ "$_current" = "true" ]; then
+      echo "   Frontend uses ACR but SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving"
+    else
+      echo "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+      azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+    fi
   else
     echo "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true"
     azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
   fi
 fi
 
-# Backend: SKIP if image doesn't use ACR
+# Backend: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "backend" ]; then
   if [[ "$BACKEND_IMG" == *"$REGISTRY"* ]]; then
-    echo "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false"
-    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+    _current=$(azd env get-value SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT 2>/dev/null || echo "")
+    if [ "$_current" = "true" ]; then
+      echo "   Backend uses ACR but SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving"
+    else
+      echo "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false"
+      azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+    fi
   else
     echo "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true"
     azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
   fi
 fi
 
-# Processes: SKIP if image doesn't use ACR
+# Processes: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if [ -z "$TARGET_SERVICE" ] || [ "$TARGET_SERVICE" = "processes" ]; then
   if [[ "$PROCESSES_IMG" == *"$REGISTRY"* ]]; then
-    echo "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false"
-    azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+    _current=$(azd env get-value SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT 2>/dev/null || echo "")
+    if [ "$_current" = "true" ]; then
+      echo "   Processes uses ACR but SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving"
+    else
+      echo "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false"
+      azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+    fi
   else
     echo "   Processes uses public/external image - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true"
     azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true

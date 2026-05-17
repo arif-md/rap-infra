@@ -135,33 +135,48 @@ $frontendImg = azd env get-value SERVICE_FRONTEND_IMAGE_NAME 2>$null
 $backendImg = azd env get-value SERVICE_BACKEND_IMAGE_NAME 2>$null
 $processesImg = azd env get-value SERVICE_PROCESSES_IMAGE_NAME 2>$null
 
-# Frontend: SKIP if image doesn't use ACR
+# Frontend: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "frontend") {
     if (-not [string]::IsNullOrEmpty($frontendImg) -and $frontendImg -match "$REGISTRY") {
-        Write-Host "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
-        azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+        $currentSkip = azd env get-value SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT 2>$null
+        if ($currentSkip -eq "true") {
+            Write-Host "   Frontend uses ACR but SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving" -ForegroundColor Yellow
+        } else {
+            Write-Host "   Frontend uses ACR - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+            azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT false
+        }
     } else {
         Write-Host "   Frontend uses public/external image - SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
         azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
     }
 }
 
-# Backend: SKIP if image doesn't use ACR
+# Backend: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "backend") {
     if (-not [string]::IsNullOrEmpty($backendImg) -and $backendImg -match "$REGISTRY") {
-        Write-Host "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
-        azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+        $currentSkip = azd env get-value SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT 2>$null
+        if ($currentSkip -eq "true") {
+            Write-Host "   Backend uses ACR but SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving" -ForegroundColor Yellow
+        } else {
+            Write-Host "   Backend uses ACR - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+            azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT false
+        }
     } else {
         Write-Host "   Backend uses public/external image - SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
         azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
     }
 }
 
-# Processes: SKIP if image doesn't use ACR
+# Processes: SKIP if image doesn't use ACR, or if already explicitly set to skip
 if ([string]::IsNullOrEmpty($TargetService) -or $TargetService -eq "processes") {
     if (-not [string]::IsNullOrEmpty($processesImg) -and $processesImg -match "$REGISTRY") {
-        Write-Host "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
-        azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+        $currentSkip = azd env get-value SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT 2>$null
+        if ($currentSkip -eq "true") {
+            Write-Host "   Processes uses ACR but SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT already set to true — preserving" -ForegroundColor Yellow
+        } else {
+            Write-Host "   Processes uses ACR - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=false" -ForegroundColor Green
+            azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT false
+        }
     } else {
         Write-Host "   Processes uses public/external image - SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT=true" -ForegroundColor Yellow
         azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
