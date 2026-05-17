@@ -35,6 +35,12 @@ param skipBackendAcrPullRoleAssignment bool = true
 @description('Skip creating AcrPull role assignment for processes (useful for local runs without RBAC)')
 param skipProcessesAcrPullRoleAssignment bool = true
 
+@description('Skip creating App Configuration Data Reader role assignment. Set true on re-provisions to avoid RoleAssignmentExists deployment stack conflict.')
+param skipAppConfigRoleAssignment bool = false
+
+@description('Skip creating SQL Server Contributor role assignment for the SQL admin identity. Set true on re-provisions to avoid RoleAssignmentExists deployment stack conflict.')
+param skipSqlServerRoleAssignment bool = false
+
 @description('vCPU allocation for frontend container app (integer, default 1)')
 param frontendCpu int = 1
 
@@ -296,6 +302,7 @@ module appConfiguration 'shared/app-configuration.bicep' = {
     // after azd down + up (Container App Environment domain suffix changes each time)
     corsAllowedOrigins: !empty(corsAllowedOrigins) ? corsAllowedOrigins : computedFrontendUrl
     frontendUrl: !empty(frontendUrl) ? frontendUrl : computedFrontendUrl
+    skipAppConfigRoleAssignment: skipAppConfigRoleAssignment
   }
 }
 
@@ -635,7 +642,7 @@ module processes 'app/processes-springboot.bicep' = {
 // ACI container's outbound IP (AllowAzureServices rule doesn't always cover ACI).
 // Deployed as a sub-module so it can dependsOn the sqlDatabase module (existing
 // resources in Bicep don't support dependsOn, causing ResourceNotFound on fresh deploys).
-module sqlAdminServerContributor 'modules/sql-server-role.bicep' = if (enableSqlDatabase && !skipSqlSetup) {
+module sqlAdminServerContributor 'modules/sql-server-role.bicep' = if (enableSqlDatabase && !skipSqlSetup && !skipSqlServerRoleAssignment) {
   name: 'sql-admin-server-contributor'
   dependsOn: [
     sqlDatabase

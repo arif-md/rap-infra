@@ -112,6 +112,19 @@ jobs:
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
 
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # Promote always runs against existing environments where role assignments
+          # were already created by the initial provision. Skipping avoids ARM 409
+          # (RoleAssignmentExists) — the deployment stack cannot adopt pre-existing
+          # assignments it did not create.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
+
       - name: Run preprovision hooks
         shell: bash
         run: |
@@ -197,6 +210,19 @@ jobs:
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
 
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # Promote always runs against existing environments where role assignments
+          # were already created by the initial provision. Skipping avoids ARM 409
+          # (RoleAssignmentExists) — the deployment stack cannot adopt pre-existing
+          # assignments it did not create.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
+
       - name: Run preprovision hooks
         shell: bash
         run: |
@@ -278,6 +304,19 @@ jobs:
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           all-vars-json:    ${{ toJson(vars) }}
           all-secrets-json: ${{ toJson(secrets) }}
+
+      - name: Skip role assignments on re-provision
+        shell: bash
+        run: |
+          # Promote always runs against existing environments where role assignments
+          # were already created by the initial provision. Skipping avoids ARM 409
+          # (RoleAssignmentExists) — the deployment stack cannot adopt pre-existing
+          # assignments it did not create.
+          azd env set SKIP_APP_CONFIG_ROLE_ASSIGNMENT true
+          azd env set SKIP_SQL_SERVER_ROLE_ASSIGNMENT true
+          azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT true
+          azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true
 
       - name: Run preprovision hooks
         shell: bash

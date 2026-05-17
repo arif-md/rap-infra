@@ -101,16 +101,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "✓ SQL setup check completed" -ForegroundColor Green
 
-# Delete AcrPull assignments for this environment's identities that are NOT
-# owned by the deployment stack. Prevents ARM 409 RoleAssignmentExists errors
-# when the stack tries to create assignments that already exist outside it.
-Write-Host "`n[10/10] Cleaning up unowned AcrPull assignment conflicts..." -ForegroundColor Yellow
-bash "$PSScriptRoot/clean-acr-pull-conflicts.sh"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "✗ AcrPull conflict cleanup failed!" -ForegroundColor Red
-    exit 1
-}
-Write-Host "✓ AcrPull conflict cleanup completed" -ForegroundColor Green
-
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0
