@@ -97,16 +97,5 @@ if ! "${SCRIPT_DIR}/ensure-sql-setup.sh"; then
 fi
 success "SQL setup check completed"
 
-# Detect role assignments that exist in Azure but are NOT owned by the current
-# deployment stack. Deletes them so the stack can recreate and own them.
-# Prevents RoleAssignmentExists (ARM 409) on environments provisioned without
-# stacks or where stack ownership was lost via a prior conditional exclusion.
-step "[10/10] Cleaning unmanaged role assignments..."
-if ! "${SCRIPT_DIR}/clean-unmanaged-role-assignments.sh"; then
-    error "Role assignment cleanup failed!"
-    exit 1
-fi
-success "Role assignment cleanup completed"
-
 header "Pre-Provision Hooks Completed Successfully"
 exit 0

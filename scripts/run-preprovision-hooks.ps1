@@ -101,17 +101,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "✓ SQL setup check completed" -ForegroundColor Green
 
-# Detect role assignments that exist in Azure but are NOT owned by the current
-# deployment stack. Deletes them so the stack can recreate and own them.
-# Prevents RoleAssignmentExists (ARM 409) on environments provisioned without
-# stacks or where stack ownership was lost via a prior conditional exclusion.
-Write-Host "`n[10/10] Cleaning unmanaged role assignments..." -ForegroundColor Yellow
-& "$PSScriptRoot\clean-unmanaged-role-assignments.ps1"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "✗ Role assignment cleanup failed!" -ForegroundColor Red
-    exit 1
-}
-Write-Host "✓ Role assignment cleanup completed" -ForegroundColor Green
-
 Write-Host "`n=== Pre-Provision Hooks Completed Successfully ===" -ForegroundColor Cyan
 exit 0
