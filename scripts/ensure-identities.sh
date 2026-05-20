@@ -254,4 +254,71 @@ fi
 # ---------------------------------------------------------------------------
 info "Waiting 15 seconds for KV data plane to sync after ARM confirmation..."
 sleep 15
+
+# ---------------------------------------------------------------------------
+# Grant AcrPull role to all identities on the ACR (idempotent).
+#
+# WHY HERE (not in Bicep)
+# -----------------------
+# AcrPull role assignments target the ACR in a shared resource group (e.g.
+# rg-raptor-common). Azure Deployment Stacks are scoped to the environment
+# resource group and do NOT track cross-RG resources. Consequently:
+#   - azd down does NOT delete these AcrPull assignments
+#   - Managed identities also survive azd down (see script header)
+#   - On every re-provision the same principalId + same ACR produces the
+#     same deterministic GUID → Bicep tries to CREATE an already-existing
+#     assignment → ARM 409 (RoleAssignmentExists)
+#
+# By creating AcrPull here (idempotent: `|| true` absorbs 409/conflict) and
+# exporting SKIP_*_ACR_PULL_ROLE_ASSIGNMENT=true, Bicep skips the creation
+# entirely. resolve-images.sh is already patched to preserve true values.
+# ---------------------------------------------------------------------------
+ACR_NAME="${AZURE_ACR_NAME:-}"
+ACR_RG="${AZURE_ACR_RESOURCE_GROUP:-}"
+ACRPULL_ROLE_ID="7f951dda-4ed3-4680-a7ca-43fe172d538d"  # AcrPull built-in RBAC role
+
+if [ -n "$ACR_NAME" ]; then
+  info "Ensuring AcrPull role assignments on ACR '$ACR_NAME'..."
+
+  # Resolve ACR resource ID — prefer explicit RG, fall back to subscription-wide lookup
+  ACR_SCOPE=""
+  if [ -n "$ACR_RG" ]; then
+    ACR_SCOPE=$(az acr show -n "$ACR_NAME" -g "$ACR_RG" --query id -o tsv 2>/dev/null || true)
+  fi
+  if [ -z "$ACR_SCOPE" ]; then
+    ACR_SCOPE=$(az acr show -n "$ACR_NAME" --query id -o tsv 2>/dev/null || true)
+  fi
+
+  if [ -z "$ACR_SCOPE" ]; then
+    warning "Could not resolve ACR '$ACR_NAME' — skipping AcrPull role assignment"
+    warning "If the ACR exists, set AZURE_ACR_RESOURCE_GROUP and re-run"
+  else
+    _ensure_acrpull() {
+      local principal_id="$1"
+      local label="$2"
+      # Idempotent: ARM returns 409 if the assignment already exists; || true absorbs it.
+      az role assignment create \
+        --assignee-object-id  "$principal_id" \
+        --assignee-principal-type ServicePrincipal \
+        --role "$ACRPULL_ROLE_ID" \
+        --scope "$ACR_SCOPE" \
+        --output none 2>/dev/null || true
+      success "AcrPull ensured for $label identity (principalId=$principal_id)"
+    }
+
+    _ensure_acrpull "$FRONTEND_PRINCIPAL_ID"  "Frontend"
+    _ensure_acrpull "$BACKEND_PRINCIPAL_ID"   "Backend"
+    _ensure_acrpull "$PROCESSES_PRINCIPAL_ID" "Processes"
+
+    # Tell Bicep to skip AcrPull creation — assignments are managed by this script.
+    # resolve-images.sh will preserve these true values (not overwrite on ACR images).
+    azd env set SKIP_FRONTEND_ACR_PULL_ROLE_ASSIGNMENT  true >/dev/null
+    azd env set SKIP_BACKEND_ACR_PULL_ROLE_ASSIGNMENT   true >/dev/null
+    azd env set SKIP_PROCESSES_ACR_PULL_ROLE_ASSIGNMENT true >/dev/null
+    success "SKIP_*_ACR_PULL_ROLE_ASSIGNMENT flags set — Bicep will not attempt AcrPull creation"
+  fi
+else
+  info "AZURE_ACR_NAME not set — skipping AcrPull role assignments"
+fi
+
 success "Identity pre-provisioning complete"
